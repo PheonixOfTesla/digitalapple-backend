@@ -1,19 +1,38 @@
 const nodemailer = require('nodemailer');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
+// Check if email is configured
+const isEmailConfigured = !!(
+  process.env.SMTP_HOST &&
+  process.env.SMTP_USER &&
+  process.env.SMTP_PASS
+);
+
+let transporter = null;
+
+if (isEmailConfigured) {
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT || 587,
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  });
+  console.log('Email transporter configured');
+} else {
+  console.log('SMTP not configured - emails will be logged only');
+}
 
 async function sendEmail({ to, subject, html }) {
+  if (!transporter) {
+    console.log(`[Email Mock] To: ${to}, Subject: ${subject}`);
+    return true; // Simulate success for testing
+  }
+
   try {
     await transporter.sendMail({
-      from: process.env.FROM_EMAIL,
+      from: process.env.FROM_EMAIL || 'noreply@digitalapple.com',
       to,
       subject,
       html
