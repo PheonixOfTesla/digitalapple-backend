@@ -520,28 +520,28 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
       Edge.find({ projectId: project._id }).lean()
     ]);
 
-    // Build context for LLM
-    const canvasContext = {
-      projectName: project.name,
-      nodes: nodes.map(n => ({
-        id: n._id.toString(),
-        kind: n.kind,
-        title: n.title,
-        body: n.body,
-        scores: n.scores,
-        kept: n.kept
-      })),
-      edges: edges.map(e => ({
-        fromNodeId: e.fromNodeId.toString(),
-        toNodeId: e.toNodeId.toString(),
-        type: e.type
-      }))
-    };
+    // Format nodes and edges for LLM context
+    const formattedNodes = nodes.map(n => ({
+      _id: n._id.toString(),
+      kind: n.kind,
+      title: n.title,
+      body: n.body,
+      scores: n.scores,
+      confidence: n.confidence,
+      constellation: n.constellation,
+      kept: n.kept
+    }));
 
-    // Generate response with operations
-    // For now, use pattern matching for common commands
-    // In production, replace with actual LLM API call
-    const response = generateCanvasOperations(message, canvasContext, nodes);
+    const formattedEdges = edges.map(e => ({
+      _id: e._id.toString(),
+      fromNodeId: e.fromNodeId.toString(),
+      toNodeId: e.toNodeId.toString(),
+      type: e.type
+    }));
+
+    // Generate response with operations via LLM
+    const llm = getLLM();
+    const response = await llm.processChat(message, formattedNodes, formattedEdges);
 
     // Save to chat history
     project.chatHistory.push(
@@ -564,182 +564,6 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to process chat' });
   }
 });
-
-// Pattern-based operation generator (placeholder for LLM)
-function generateCanvasOperations(message, context, nodes) {
-  const msg = message.toLowerCase();
-  const ops = [];
-  let reply = '';
-
-  // "branch" / "expand" pattern - create connected node
-  if (msg.includes('branch') || msg.includes('expand')) {
-    const topic = message.replace(/branch|expand|the|from|into|a|an/gi, '').trim();
-    const lastNode = nodes[nodes.length - 1];
-
-    ops.push({
-      op: 'createNode',
-      data: {
-        kind: 'idea',
-        title: topic || 'New branch',
-        body: '',
-        x: lastNode ? lastNode.x + 220 : 320,
-        y: lastNode ? lastNode.y + 50 : 150
-      }
-    });
-
-    if (lastNode) {
-      ops.push({
-        op: 'createEdge',
-        data: {
-          fromNodeId: lastNode._id.toString(),
-          toNodeId: '__NEW_0__', // Placeholder, resolved during execution
-          type: 'expansion'
-        }
-      });
-    }
-
-    reply = `Created a new branch for "${topic || 'your idea'}". I've connected it to your last node.`;
-  }
-  // "add" / "create" pattern
-  else if (msg.includes('add') || msg.includes('create') || msg.includes('new')) {
-    const kindMatch = msg.match(/(goal|idea|constraint|orchestration)/);
-    const kind = kindMatch ? kindMatch[1] : 'idea';
-    const title = message.replace(/add|create|new|a|an|goal|idea|constraint|orchestration/gi, '').trim();
-
-    const lastNode = nodes[nodes.length - 1];
-    ops.push({
-      op: 'createNode',
-      data: {
-        kind,
-        title: title || `New ${kind}`,
-        body: '',
-        x: lastNode ? lastNode.x + 220 : 100,
-        y: lastNode ? lastNode.y : 100
-      }
-    });
-
-    reply = `Added a new ${kind} node: "${title || `New ${kind}`}"`;
-  }
-  // "score" / "rate" pattern
-  else if (msg.includes('score') || msg.includes('rate')) {
-    const nodeRef = nodes.find(n =>
-      msg.includes(n.title.toLowerCase().substring(0, 20))
-    );
-
-    if (nodeRef) {
-      const scores = {};
-      if (msg.includes('economy')) scores.economy = extractScore(msg);
-      if (msg.includes('orchestration')) scores.orchestration = extractScore(msg);
-      if (msg.includes('demand')) scores.demand = extractScore(msg);
-
-      if (Object.keys(scores).length === 0) {
-        // Default: set all to moderate
-        scores.economy = 5;
-        scores.orchestration = 5;
-        scores.demand = 5;
-      }
-
-      ops.push({
-        op: 'updateScores',
-        nodeId: nodeRef._id.toString(),
-        scores
-      });
-
-      reply = `Updated scores for "${nodeRef.title}"`;
-    } else {
-      reply = `I couldn't find which node to score. Try mentioning the node title.`;
-    }
-  }
-  // "keep" / "favorite" pattern
-  else if (msg.includes('keep') || msg.includes('favorite') || msg.includes('star')) {
-    const nodeRef = nodes.find(n =>
-      msg.includes(n.title.toLowerCase().substring(0, 20))
-    );
-
-    if (nodeRef) {
-      ops.push({
-        op: 'updateNode',
-        nodeId: nodeRef._id.toString(),
-        data: { kept: true }
-      });
-      reply = `Marked "${nodeRef.title}" as kept.`;
-    } else if (nodes.length > 0) {
-      const lastNode = nodes[nodes.length - 1];
-      ops.push({
-        op: 'updateNode',
-        nodeId: lastNode._id.toString(),
-        data: { kept: true }
-      });
-      reply = `Marked "${lastNode.title}" as kept.`;
-    } else {
-      reply = `No nodes to keep yet. Create some first!`;
-    }
-  }
-  // "reject" / "discard" pattern
-  else if (msg.includes('reject') || msg.includes('discard')) {
-    const nodeRef = nodes.find(n =>
-      msg.includes(n.title.toLowerCase().substring(0, 20))
-    );
-
-    if (nodeRef) {
-      ops.push({
-        op: 'updateNode',
-        nodeId: nodeRef._id.toString(),
-        data: { kind: 'rejected' }
-      });
-      reply = `Moved "${nodeRef.title}" to rejected.`;
-    } else {
-      reply = `I couldn't find which node to reject. Try mentioning the node title.`;
-    }
-  }
-  // "connect" / "wire" / "link" pattern
-  else if (msg.includes('connect') || msg.includes('wire') || msg.includes('link')) {
-    if (nodes.length >= 2) {
-      const lastTwo = nodes.slice(-2);
-      ops.push({
-        op: 'createEdge',
-        data: {
-          fromNodeId: lastTwo[0]._id.toString(),
-          toNodeId: lastTwo[1]._id.toString(),
-          type: 'dependency'
-        }
-      });
-      reply = `Connected "${lastTwo[0].title}" to "${lastTwo[1].title}"`;
-    } else {
-      reply = `Need at least two nodes to create a connection.`;
-    }
-  }
-  // "delete" / "remove" pattern
-  else if (msg.includes('delete') || msg.includes('remove')) {
-    const nodeRef = nodes.find(n =>
-      msg.includes(n.title.toLowerCase().substring(0, 20))
-    );
-
-    if (nodeRef) {
-      ops.push({
-        op: 'deleteNode',
-        nodeId: nodeRef._id.toString()
-      });
-      reply = `Deleted "${nodeRef.title}" and its connections.`;
-    } else {
-      reply = `I couldn't find which node to delete. Try mentioning the node title.`;
-    }
-  }
-  // Default: just acknowledge
-  else {
-    reply = `I understand you want to work on: "${message}". Try commands like "add a goal for X", "branch the compliance angle", "score the last node", or "connect the nodes".`;
-  }
-
-  return { reply, ops };
-}
-
-function extractScore(msg) {
-  const match = msg.match(/(\d+)/);
-  if (match) {
-    return Math.min(10, Math.max(0, parseInt(match[1])));
-  }
-  return 5;
-}
 
 // Execute operations and return results with created IDs
 async function executeOperations(projectId, ops, existingNodes) {
