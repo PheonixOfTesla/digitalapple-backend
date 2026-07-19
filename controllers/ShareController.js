@@ -111,6 +111,94 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
   };
 }
 
+// Helper: Generate SVG preview of the graph
+function generatePreviewSvg(snapshot) {
+  const viewWidth = 420;
+  const viewHeight = 112;
+  const padding = 12;
+  const nodeRadius = 5.5;
+  const coreRadius = 9;
+
+  // Collect all nodes
+  const allNodes = [];
+  if (snapshot.core) {
+    allNodes.push({ ...snapshot.core, isCore: true });
+  }
+  (snapshot.nodes || []).forEach(n => allNodes.push(n));
+
+  if (allNodes.length === 0) {
+    return `<svg viewBox="0 0 ${viewWidth} ${viewHeight}" xmlns="http://www.w3.org/2000/svg"></svg>`;
+  }
+
+  // Calculate bounds
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  allNodes.forEach(n => {
+    const x = n.x || 0;
+    const y = n.y || 0;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  });
+
+  // Handle single node
+  if (minX === maxX) { minX -= 50; maxX += 50; }
+  if (minY === maxY) { minY -= 50; maxY += 50; }
+
+  const graphWidth = maxX - minX;
+  const graphHeight = maxY - minY;
+
+  // Scale to fit viewBox with padding
+  const scaleX = (viewWidth - padding * 2) / graphWidth;
+  const scaleY = (viewHeight - padding * 2) / graphHeight;
+  const scale = Math.min(scaleX, scaleY, 1); // Never scale up
+
+  const offsetX = padding + ((viewWidth - padding * 2) - graphWidth * scale) / 2;
+  const offsetY = padding + ((viewHeight - padding * 2) - graphHeight * scale) / 2;
+
+  const transform = (x, y) => ({
+    x: (x - minX) * scale + offsetX,
+    y: (y - minY) * scale + offsetY
+  });
+
+  // Build node position map
+  const nodePos = {};
+  allNodes.forEach(n => {
+    const pos = transform(n.x || 0, n.y || 0);
+    nodePos[n._id.toString()] = pos;
+  });
+
+  // Generate edges
+  let edgePaths = '';
+  (snapshot.edges || []).forEach(e => {
+    const from = nodePos[e.sourceId.toString()];
+    const to = nodePos[e.targetId.toString()];
+    if (from && to) {
+      const dx = to.x - from.x;
+      const cx1 = from.x + dx * 0.4;
+      const cx2 = to.x - dx * 0.4;
+      edgePaths += `<path d="M${from.x},${from.y} C${cx1},${from.y} ${cx2},${to.y} ${to.x},${to.y}" stroke="rgba(34,211,238,.25)" fill="none" stroke-width="1"/>`;
+    }
+  });
+
+  // Generate nodes
+  let nodeCircles = '';
+  allNodes.forEach(n => {
+    const pos = nodePos[n._id.toString()];
+    if (!pos) return;
+
+    if (n.isCore) {
+      nodeCircles += `<circle cx="${pos.x}" cy="${pos.y}" r="${coreRadius}" fill="rgba(34,211,238,.28)" stroke="#22d3ee" stroke-width="1.4"/>`;
+    } else {
+      const fill = n.status === 'kept' || n.status === 'complete' ? '#d8ad5a' : '#0b0f17';
+      const stroke = n.status === 'kept' || n.status === 'complete' ? '#d8ad5a' : '#22d3ee';
+      nodeCircles += `<circle cx="${pos.x}" cy="${pos.y}" r="${nodeRadius}" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
+    }
+  });
+
+  return `<svg viewBox="0 0 ${viewWidth} ${viewHeight}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">${edgePaths}${nodeCircles}</svg>`;
+}
+
 // POST /share/publish/:projectId - Publish a project as a shared map
 router.post('/publish/:projectId', verifyToken, async (req, res) => {
   try {
@@ -138,6 +226,9 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
       excludedBranchRoots || []
     );
 
+    // Generate SVG preview
+    const previewSvg = generatePreviewSvg(snapshot);
+
     if (sharedMap) {
       // Update existing
       sharedMap.title = title || project.name;
@@ -147,6 +238,7 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
       sharedMap.coverage = coverage;
       sharedMap.nodeCount = nodeCount;
       sharedMap.snapshot = snapshot;
+      sharedMap.previewSvg = previewSvg;
       sharedMap.excludedBranchRoots = excludedBranchRoots || [];
       sharedMap.publishedAt = new Date();
       sharedMap.unpublishedAt = null;
@@ -167,6 +259,7 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
         coverage,
         nodeCount,
         snapshot,
+        previewSvg,
         excludedBranchRoots: excludedBranchRoots || [],
         publishedAt: new Date(),
         ownerName: user.firstName || user.email.split('@')[0],
@@ -239,7 +332,7 @@ router.put('/:mapId', verifyToken, async (req, res) => {
     if (category) map.category = category;
     if (visibility) map.visibility = visibility;
 
-    // If branch exclusions changed, rebuild snapshot
+    // If branch exclusions changed, rebuild snapshot and preview
     if (excludedBranchRoots !== undefined) {
       const { snapshot, nodeCount, coverage } = await buildSnapshot(
         map.projectId,
@@ -249,6 +342,7 @@ router.put('/:mapId', verifyToken, async (req, res) => {
       map.nodeCount = nodeCount;
       map.coverage = coverage;
       map.excludedBranchRoots = excludedBranchRoots;
+      map.previewSvg = generatePreviewSvg(snapshot);
     }
 
     await map.save();

@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
 const { connectDB } = require('./config/database');
 const { aggregateNews } = require('./jobs/rssAggregator');
+const { generateSeedMaps } = require('./jobs/seedMaps');
 
 const AuthController = require('./controllers/AuthController');
 const UserController = require('./controllers/UserController');
@@ -275,6 +276,17 @@ app.listen(PORT, () => {
     }
   });
   console.log('RSS Aggregation: Scheduled (hourly)');
+
+  // Schedule seed map generation - 3x daily at 8am, 2pm, 8pm UTC
+  cron.schedule('0 8,14,20 * * *', async () => {
+    console.log('[CRON] Running seed map generation...');
+    try {
+      await generateSeedMaps(5);
+    } catch (error) {
+      console.error('[CRON] Seed map generation failed:', error.message);
+    }
+  });
+  console.log('Seed Maps: Scheduled (8am, 2pm, 8pm UTC)');
 
   // Run initial aggregation after 30 seconds on startup
   setTimeout(async () => {

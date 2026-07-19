@@ -332,11 +332,12 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
     }
 
     // Sort options - default to forks (usefulness)
+    // isSeed: 1 ensures real user maps rank above seeds when engagement is equal
     const sortOptions = {
-      forks: { forkCount: -1, publishedAt: -1 },
-      stars: { starCount: -1, publishedAt: -1 },
-      coverage: { coverage: -1, publishedAt: -1 },
-      newest: { publishedAt: -1 }
+      forks: { forkCount: -1, isSeed: 1, publishedAt: -1 },
+      stars: { starCount: -1, isSeed: 1, publishedAt: -1 },
+      coverage: { coverage: -1, isSeed: 1, publishedAt: -1 },
+      newest: { publishedAt: -1, isSeed: 1 }
     };
 
     const sortBy = sortOptions[sort] || sortOptions.forks;

@@ -150,7 +150,21 @@ const sharedMapSchema = new mongoose.Schema({
   // Owner display info (denormalized)
   ownerName: String,
   ownerHandle: String,
-  ownerAvatar: String
+  ownerAvatar: String,
+
+  // Pre-rendered SVG preview of the graph
+  // Generated at publish time for efficient feed rendering
+  previewSvg: {
+    type: String,
+    maxlength: 50000
+  },
+
+  // For seed maps from Clockwork account
+  isSeed: {
+    type: Boolean,
+    default: false,
+    index: true
+  }
 
 }, {
   timestamps: true
