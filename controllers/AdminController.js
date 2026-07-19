@@ -668,12 +668,12 @@ router.get('/applications/:id', async (req, res) => {
   }
 });
 
-// Review application (approve/reject)
+// Review application (publish/reject)
 router.put('/applications/:id/review', async (req, res) => {
   const { status, rejectionReason } = req.body;
 
-  if (!['approved', 'rejected'].includes(status)) {
-    return res.status(400).json({ error: 'Status must be approved or rejected' });
+  if (!['published', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'Status must be published or rejected' });
   }
 
   if (status === 'rejected' && !rejectionReason?.trim()) {

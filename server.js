@@ -13,6 +13,7 @@ const AdminController = require('./controllers/AdminController');
 const AnalyticsController = require('./controllers/AnalyticsController');
 const NewsController = require('./controllers/NewsController');
 const ApplicationController = require('./controllers/ApplicationController');
+const BlueprintController = require('./controllers/BlueprintController');
 
 const app = express();
 
@@ -94,6 +95,7 @@ app.use('/api/v1/admin', AdminController);
 app.use('/api/v1/analytics', AnalyticsController);
 app.use('/api/v1/news', NewsController);
 app.use('/api/v1/applications', ApplicationController);
+app.use('/api/v1/blueprint', BlueprintController);
 
 // Root
 app.get('/', (req, res) => {
@@ -134,6 +136,22 @@ app.get('/', (req, res) => {
         submit: 'POST /api/v1/applications',
         mine: 'GET /api/v1/applications/mine',
         single: 'GET /api/v1/applications/:id'
+      },
+      blueprint: {
+        projects: 'GET /api/v1/blueprint/projects',
+        createProject: 'POST /api/v1/blueprint/projects',
+        getProject: 'GET /api/v1/blueprint/projects/:id',
+        updateProject: 'PUT /api/v1/blueprint/projects/:id',
+        deleteProject: 'DELETE /api/v1/blueprint/projects/:id',
+        claimProject: 'POST /api/v1/blueprint/projects/:id/claim',
+        createNode: 'POST /api/v1/blueprint/projects/:projectId/nodes',
+        updateNode: 'PUT /api/v1/blueprint/nodes/:id',
+        deleteNode: 'DELETE /api/v1/blueprint/nodes/:id',
+        createEdge: 'POST /api/v1/blueprint/projects/:projectId/edges',
+        deleteEdge: 'DELETE /api/v1/blueprint/edges/:id',
+        chat: 'POST /api/v1/blueprint/projects/:projectId/chat',
+        chatHistory: 'GET /api/v1/blueprint/projects/:projectId/chat',
+        quota: 'GET /api/v1/blueprint/quota'
       },
       admin: 'All admin endpoints require admin role'
     }

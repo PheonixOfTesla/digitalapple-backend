@@ -11,6 +11,31 @@ const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Per-user rate limiting (5 applications per day)
+const userSubmitLimits = new Map();
+const DAILY_SUBMIT_LIMIT = 5;
+
+function checkUserRateLimit(userId) {
+  const today = new Date().toISOString().split('T')[0];
+  const key = `${userId}:${today}`;
+
+  if (!userSubmitLimits.has(key)) {
+    // Clean old entries
+    for (const [k] of userSubmitLimits) {
+      if (!k.endsWith(today)) userSubmitLimits.delete(k);
+    }
+    userSubmitLimits.set(key, 0);
+  }
+
+  const count = userSubmitLimits.get(key);
+  if (count >= DAILY_SUBMIT_LIMIT) {
+    return { allowed: false, remaining: 0 };
+  }
+
+  userSubmitLimits.set(key, count + 1);
+  return { allowed: true, remaining: DAILY_SUBMIT_LIMIT - count - 1 };
+}
+
 // All routes require authentication
 router.use(verifyToken);
 
@@ -30,6 +55,16 @@ router.post('/', async (req, res) => {
     whyBelongs,
     accuracyConfirmed
   } = req.body;
+
+  // Check per-user rate limit
+  const rateCheck = checkUserRateLimit(req.userId);
+  if (!rateCheck.allowed) {
+    return res.status(429).json({
+      error: 'Daily submission limit reached',
+      message: `You can submit ${DAILY_SUBMIT_LIMIT} applications per day`,
+      remaining: 0
+    });
+  }
 
   // Validation
   const errors = [];

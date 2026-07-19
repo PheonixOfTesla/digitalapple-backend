@@ -1,0 +1,859 @@
+/**
+ * BlueprintController - Canvas CRUD and LLM chat
+ *
+ * Full CRUD for projects, nodes, and edges.
+ * LLM chat returns structured operations for canvas manipulation.
+ */
+
+const express = require('express');
+const Project = require('../models/Project');
+const Node = require('../models/Node');
+const Edge = require('../models/Edge');
+const UserQuota = require('../models/UserQuota');
+const { verifyToken } = require('../middleware/auth');
+
+const router = express.Router();
+
+// Quota limits
+const QUOTA = {
+  authenticated: { chat: 50, projects: 10 },
+  anonymous: { chat: 5, projects: 1 }
+};
+
+// Helper: get today's date string
+function getToday() {
+  return new Date().toISOString().split('T')[0];
+}
+
+// Helper: check/increment quota
+async function checkQuota(userId, anonymousSessionId, type) {
+  const date = getToday();
+  const isAuth = !!userId;
+  const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
+
+  const query = userId
+    ? { userId, date }
+    : { anonymousSessionId, date };
+
+  let quota = await UserQuota.findOne(query);
+  if (!quota) {
+    quota = new UserQuota({ ...query, chatRequests: 0, projectsCreated: 0 });
+  }
+
+  const field = type === 'chat' ? 'chatRequests' : 'projectsCreated';
+  const limit = type === 'chat' ? limits.chat : limits.projects;
+
+  if (quota[field] >= limit) {
+    return { allowed: false, remaining: 0, limit };
+  }
+
+  quota[field]++;
+  await quota.save();
+
+  return { allowed: true, remaining: limit - quota[field], limit };
+}
+
+// Helper: verify project ownership
+async function verifyOwnership(projectId, userId, anonymousSessionId) {
+  const project = await Project.findById(projectId);
+  if (!project) return null;
+
+  if (userId && project.ownerId?.toString() === userId) return project;
+  if (!userId && project.anonymousSessionId === anonymousSessionId) return project;
+
+  return null;
+}
+
+// Optional auth middleware - extracts user if token present
+async function optionalAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.userId = decoded.id;
+    } catch (e) {
+      // Invalid token, continue as anonymous
+    }
+  }
+  // Get or create anonymous session ID
+  req.anonymousSessionId = req.headers['x-session-id'] || req.query.sessionId;
+  next();
+}
+
+// ============== PROJECTS ==============
+
+// List user's projects
+router.get('/projects', optionalAuth, async (req, res) => {
+  try {
+    const query = req.userId
+      ? { ownerId: req.userId }
+      : { anonymousSessionId: req.anonymousSessionId, ownerId: null };
+
+    const projects = await Project.find(query)
+      .select('name createdAt updatedAt')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    res.json({
+      success: true,
+      projects: projects.map(p => ({
+        id: p._id,
+        name: p.name,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt
+      }))
+    });
+  } catch (error) {
+    console.error('List projects error:', error);
+    res.status(500).json({ error: 'Failed to list projects' });
+  }
+});
+
+// Create project
+router.post('/projects', optionalAuth, async (req, res) => {
+  try {
+    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'projects');
+    if (!quotaCheck.allowed) {
+      return res.status(429).json({
+        error: 'Project limit reached',
+        message: `You can create ${quotaCheck.limit} projects per day`,
+        remaining: 0
+      });
+    }
+
+    const { name } = req.body;
+
+    const project = new Project({
+      name: name?.trim() || 'Untitled Project',
+      ownerId: req.userId || null,
+      anonymousSessionId: req.userId ? null : req.anonymousSessionId
+    });
+
+    await project.save();
+
+    res.json({
+      success: true,
+      project: {
+        id: project._id,
+        name: project.name,
+        createdAt: project.createdAt
+      },
+      quota: { remaining: quotaCheck.remaining, limit: quotaCheck.limit }
+    });
+  } catch (error) {
+    console.error('Create project error:', error);
+    res.status(500).json({ error: 'Failed to create project' });
+  }
+});
+
+// Get project with nodes and edges
+router.get('/projects/:id', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.id, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const [nodes, edges] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean()
+    ]);
+
+    res.json({
+      success: true,
+      project: {
+        id: project._id,
+        name: project.name,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt
+      },
+      nodes: nodes.map(n => ({
+        id: n._id,
+        kind: n.kind,
+        title: n.title,
+        body: n.body,
+        scores: n.scores,
+        x: n.x,
+        y: n.y,
+        kept: n.kept
+      })),
+      edges: edges.map(e => ({
+        id: e._id,
+        fromNodeId: e.fromNodeId,
+        toNodeId: e.toNodeId,
+        type: e.type
+      }))
+    });
+  } catch (error) {
+    console.error('Get project error:', error);
+    res.status(500).json({ error: 'Failed to get project' });
+  }
+});
+
+// Update project
+router.put('/projects/:id', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.id, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const { name } = req.body;
+    if (name) project.name = name.trim();
+    await project.save();
+
+    res.json({
+      success: true,
+      project: {
+        id: project._id,
+        name: project.name,
+        updatedAt: project.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Update project error:', error);
+    res.status(500).json({ error: 'Failed to update project' });
+  }
+});
+
+// Delete project (cascades to nodes and edges)
+router.delete('/projects/:id', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.id, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    await Promise.all([
+      Node.deleteMany({ projectId: project._id }),
+      Edge.deleteMany({ projectId: project._id }),
+      Project.deleteOne({ _id: project._id })
+    ]);
+
+    res.json({ success: true, message: 'Project deleted' });
+  } catch (error) {
+    console.error('Delete project error:', error);
+    res.status(500).json({ error: 'Failed to delete project' });
+  }
+});
+
+// Claim anonymous project (attach to user on login)
+router.post('/projects/:id/claim', verifyToken, async (req, res) => {
+  try {
+    const { anonymousSessionId } = req.body;
+
+    const project = await Project.findOne({
+      _id: req.params.id,
+      anonymousSessionId,
+      ownerId: null
+    });
+
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found or already claimed' });
+    }
+
+    project.ownerId = req.userId;
+    project.anonymousSessionId = null;
+    await project.save();
+
+    res.json({
+      success: true,
+      message: 'Project claimed successfully',
+      project: { id: project._id, name: project.name }
+    });
+  } catch (error) {
+    console.error('Claim project error:', error);
+    res.status(500).json({ error: 'Failed to claim project' });
+  }
+});
+
+// ============== NODES ==============
+
+// Create node
+router.post('/projects/:projectId/nodes', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const { kind, title, body, scores, x, y } = req.body;
+
+    if (!title?.trim()) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+
+    const node = new Node({
+      projectId: project._id,
+      kind: kind || 'idea',
+      title: title.trim(),
+      body: body?.trim(),
+      scores: scores || { economy: 0, orchestration: 0, demand: 0 },
+      x: x ?? 100,
+      y: y ?? 100
+    });
+
+    await node.save();
+
+    res.json({
+      success: true,
+      node: {
+        id: node._id,
+        kind: node.kind,
+        title: node.title,
+        body: node.body,
+        scores: node.scores,
+        x: node.x,
+        y: node.y,
+        kept: node.kept
+      }
+    });
+  } catch (error) {
+    console.error('Create node error:', error);
+    res.status(500).json({ error: 'Failed to create node' });
+  }
+});
+
+// Update node (position, content, scores)
+router.put('/nodes/:id', optionalAuth, async (req, res) => {
+  try {
+    const node = await Node.findById(req.params.id);
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const { kind, title, body, scores, x, y, kept } = req.body;
+
+    if (kind !== undefined) node.kind = kind;
+    if (title !== undefined) node.title = title.trim();
+    if (body !== undefined) node.body = body?.trim() || '';
+    if (scores !== undefined) {
+      if (scores.economy !== undefined) node.scores.economy = scores.economy;
+      if (scores.orchestration !== undefined) node.scores.orchestration = scores.orchestration;
+      if (scores.demand !== undefined) node.scores.demand = scores.demand;
+    }
+    if (x !== undefined) node.x = x;
+    if (y !== undefined) node.y = y;
+    if (kept !== undefined) node.kept = kept;
+
+    await node.save();
+
+    res.json({
+      success: true,
+      node: {
+        id: node._id,
+        kind: node.kind,
+        title: node.title,
+        body: node.body,
+        scores: node.scores,
+        x: node.x,
+        y: node.y,
+        kept: node.kept
+      }
+    });
+  } catch (error) {
+    console.error('Update node error:', error);
+    res.status(500).json({ error: 'Failed to update node' });
+  }
+});
+
+// Delete node (and connected edges)
+router.delete('/nodes/:id', optionalAuth, async (req, res) => {
+  try {
+    const node = await Node.findById(req.params.id);
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await Promise.all([
+      Edge.deleteMany({ $or: [{ fromNodeId: node._id }, { toNodeId: node._id }] }),
+      Node.deleteOne({ _id: node._id })
+    ]);
+
+    res.json({ success: true, message: 'Node deleted' });
+  } catch (error) {
+    console.error('Delete node error:', error);
+    res.status(500).json({ error: 'Failed to delete node' });
+  }
+});
+
+// ============== EDGES ==============
+
+// Create edge
+router.post('/projects/:projectId/edges', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const { fromNodeId, toNodeId, type } = req.body;
+
+    if (!fromNodeId || !toNodeId) {
+      return res.status(400).json({ error: 'fromNodeId and toNodeId are required' });
+    }
+
+    // Verify both nodes belong to this project
+    const [fromNode, toNode] = await Promise.all([
+      Node.findOne({ _id: fromNodeId, projectId: project._id }),
+      Node.findOne({ _id: toNodeId, projectId: project._id })
+    ]);
+
+    if (!fromNode || !toNode) {
+      return res.status(400).json({ error: 'Invalid node IDs' });
+    }
+
+    const edge = new Edge({
+      projectId: project._id,
+      fromNodeId,
+      toNodeId,
+      type: type || 'dependency'
+    });
+
+    await edge.save();
+
+    res.json({
+      success: true,
+      edge: {
+        id: edge._id,
+        fromNodeId: edge.fromNodeId,
+        toNodeId: edge.toNodeId,
+        type: edge.type
+      }
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ error: 'Edge already exists' });
+    }
+    console.error('Create edge error:', error);
+    res.status(500).json({ error: 'Failed to create edge' });
+  }
+});
+
+// Delete edge
+router.delete('/edges/:id', optionalAuth, async (req, res) => {
+  try {
+    const edge = await Edge.findById(req.params.id);
+    if (!edge) {
+      return res.status(404).json({ error: 'Edge not found' });
+    }
+
+    const project = await verifyOwnership(edge.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await Edge.deleteOne({ _id: edge._id });
+
+    res.json({ success: true, message: 'Edge deleted' });
+  } catch (error) {
+    console.error('Delete edge error:', error);
+    res.status(500).json({ error: 'Failed to delete edge' });
+  }
+});
+
+// ============== LLM CHAT ==============
+
+/**
+ * Chat endpoint - returns structured operations
+ *
+ * Response contract:
+ * {
+ *   reply: string,           // Natural language response
+ *   ops: [                   // Canvas operations to execute
+ *     { op: 'createNode', data: { kind, title, body, x, y } },
+ *     { op: 'updateNode', nodeId: string, data: { title?, body?, scores?, kept? } },
+ *     { op: 'deleteNode', nodeId: string },
+ *     { op: 'createEdge', data: { fromNodeId, toNodeId, type? } },
+ *     { op: 'deleteEdge', edgeId: string },
+ *     { op: 'updateScores', nodeId: string, scores: { economy?, orchestration?, demand? } }
+ *   ]
+ * }
+ */
+router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Check quota
+    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    if (!quotaCheck.allowed) {
+      return res.status(429).json({
+        error: 'Chat limit reached',
+        message: `You have ${quotaCheck.limit} chat requests per day`,
+        remaining: 0
+      });
+    }
+
+    const { message } = req.body;
+    if (!message?.trim()) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    // Get current canvas state for context
+    const [nodes, edges] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean()
+    ]);
+
+    // Build context for LLM
+    const canvasContext = {
+      projectName: project.name,
+      nodes: nodes.map(n => ({
+        id: n._id.toString(),
+        kind: n.kind,
+        title: n.title,
+        body: n.body,
+        scores: n.scores,
+        kept: n.kept
+      })),
+      edges: edges.map(e => ({
+        fromNodeId: e.fromNodeId.toString(),
+        toNodeId: e.toNodeId.toString(),
+        type: e.type
+      }))
+    };
+
+    // Generate response with operations
+    // For now, use pattern matching for common commands
+    // In production, replace with actual LLM API call
+    const response = generateCanvasOperations(message, canvasContext, nodes);
+
+    // Save to chat history
+    project.chatHistory.push(
+      { role: 'user', content: message },
+      { role: 'assistant', content: response.reply, operations: response.ops }
+    );
+    await project.save();
+
+    // Execute operations and return created IDs
+    const executedOps = await executeOperations(project._id, response.ops, nodes);
+
+    res.json({
+      success: true,
+      reply: response.reply,
+      ops: executedOps,
+      quota: { remaining: quotaCheck.remaining, limit: quotaCheck.limit }
+    });
+  } catch (error) {
+    console.error('Chat error:', error);
+    res.status(500).json({ error: 'Failed to process chat' });
+  }
+});
+
+// Pattern-based operation generator (placeholder for LLM)
+function generateCanvasOperations(message, context, nodes) {
+  const msg = message.toLowerCase();
+  const ops = [];
+  let reply = '';
+
+  // "branch" / "expand" pattern - create connected node
+  if (msg.includes('branch') || msg.includes('expand')) {
+    const topic = message.replace(/branch|expand|the|from|into|a|an/gi, '').trim();
+    const lastNode = nodes[nodes.length - 1];
+
+    ops.push({
+      op: 'createNode',
+      data: {
+        kind: 'idea',
+        title: topic || 'New branch',
+        body: '',
+        x: lastNode ? lastNode.x + 220 : 320,
+        y: lastNode ? lastNode.y + 50 : 150
+      }
+    });
+
+    if (lastNode) {
+      ops.push({
+        op: 'createEdge',
+        data: {
+          fromNodeId: lastNode._id.toString(),
+          toNodeId: '__NEW_0__', // Placeholder, resolved during execution
+          type: 'expansion'
+        }
+      });
+    }
+
+    reply = `Created a new branch for "${topic || 'your idea'}". I've connected it to your last node.`;
+  }
+  // "add" / "create" pattern
+  else if (msg.includes('add') || msg.includes('create') || msg.includes('new')) {
+    const kindMatch = msg.match(/(goal|idea|constraint|orchestration)/);
+    const kind = kindMatch ? kindMatch[1] : 'idea';
+    const title = message.replace(/add|create|new|a|an|goal|idea|constraint|orchestration/gi, '').trim();
+
+    const lastNode = nodes[nodes.length - 1];
+    ops.push({
+      op: 'createNode',
+      data: {
+        kind,
+        title: title || `New ${kind}`,
+        body: '',
+        x: lastNode ? lastNode.x + 220 : 100,
+        y: lastNode ? lastNode.y : 100
+      }
+    });
+
+    reply = `Added a new ${kind} node: "${title || `New ${kind}`}"`;
+  }
+  // "score" / "rate" pattern
+  else if (msg.includes('score') || msg.includes('rate')) {
+    const nodeRef = nodes.find(n =>
+      msg.includes(n.title.toLowerCase().substring(0, 20))
+    );
+
+    if (nodeRef) {
+      const scores = {};
+      if (msg.includes('economy')) scores.economy = extractScore(msg);
+      if (msg.includes('orchestration')) scores.orchestration = extractScore(msg);
+      if (msg.includes('demand')) scores.demand = extractScore(msg);
+
+      if (Object.keys(scores).length === 0) {
+        // Default: set all to moderate
+        scores.economy = 5;
+        scores.orchestration = 5;
+        scores.demand = 5;
+      }
+
+      ops.push({
+        op: 'updateScores',
+        nodeId: nodeRef._id.toString(),
+        scores
+      });
+
+      reply = `Updated scores for "${nodeRef.title}"`;
+    } else {
+      reply = `I couldn't find which node to score. Try mentioning the node title.`;
+    }
+  }
+  // "keep" / "favorite" pattern
+  else if (msg.includes('keep') || msg.includes('favorite') || msg.includes('star')) {
+    const nodeRef = nodes.find(n =>
+      msg.includes(n.title.toLowerCase().substring(0, 20))
+    );
+
+    if (nodeRef) {
+      ops.push({
+        op: 'updateNode',
+        nodeId: nodeRef._id.toString(),
+        data: { kept: true }
+      });
+      reply = `Marked "${nodeRef.title}" as kept.`;
+    } else if (nodes.length > 0) {
+      const lastNode = nodes[nodes.length - 1];
+      ops.push({
+        op: 'updateNode',
+        nodeId: lastNode._id.toString(),
+        data: { kept: true }
+      });
+      reply = `Marked "${lastNode.title}" as kept.`;
+    } else {
+      reply = `No nodes to keep yet. Create some first!`;
+    }
+  }
+  // "reject" / "discard" pattern
+  else if (msg.includes('reject') || msg.includes('discard')) {
+    const nodeRef = nodes.find(n =>
+      msg.includes(n.title.toLowerCase().substring(0, 20))
+    );
+
+    if (nodeRef) {
+      ops.push({
+        op: 'updateNode',
+        nodeId: nodeRef._id.toString(),
+        data: { kind: 'rejected' }
+      });
+      reply = `Moved "${nodeRef.title}" to rejected.`;
+    } else {
+      reply = `I couldn't find which node to reject. Try mentioning the node title.`;
+    }
+  }
+  // "connect" / "wire" / "link" pattern
+  else if (msg.includes('connect') || msg.includes('wire') || msg.includes('link')) {
+    if (nodes.length >= 2) {
+      const lastTwo = nodes.slice(-2);
+      ops.push({
+        op: 'createEdge',
+        data: {
+          fromNodeId: lastTwo[0]._id.toString(),
+          toNodeId: lastTwo[1]._id.toString(),
+          type: 'dependency'
+        }
+      });
+      reply = `Connected "${lastTwo[0].title}" to "${lastTwo[1].title}"`;
+    } else {
+      reply = `Need at least two nodes to create a connection.`;
+    }
+  }
+  // "delete" / "remove" pattern
+  else if (msg.includes('delete') || msg.includes('remove')) {
+    const nodeRef = nodes.find(n =>
+      msg.includes(n.title.toLowerCase().substring(0, 20))
+    );
+
+    if (nodeRef) {
+      ops.push({
+        op: 'deleteNode',
+        nodeId: nodeRef._id.toString()
+      });
+      reply = `Deleted "${nodeRef.title}" and its connections.`;
+    } else {
+      reply = `I couldn't find which node to delete. Try mentioning the node title.`;
+    }
+  }
+  // Default: just acknowledge
+  else {
+    reply = `I understand you want to work on: "${message}". Try commands like "add a goal for X", "branch the compliance angle", "score the last node", or "connect the nodes".`;
+  }
+
+  return { reply, ops };
+}
+
+function extractScore(msg) {
+  const match = msg.match(/(\d+)/);
+  if (match) {
+    return Math.min(10, Math.max(0, parseInt(match[1])));
+  }
+  return 5;
+}
+
+// Execute operations and return results with created IDs
+async function executeOperations(projectId, ops, existingNodes) {
+  const results = [];
+  const createdNodeIds = {}; // Map __NEW_X__ placeholders to real IDs
+
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+
+    try {
+      if (op.op === 'createNode') {
+        const node = new Node({
+          projectId,
+          ...op.data
+        });
+        await node.save();
+        createdNodeIds[`__NEW_${i}__`] = node._id.toString();
+        results.push({
+          ...op,
+          success: true,
+          nodeId: node._id.toString()
+        });
+      }
+      else if (op.op === 'updateNode' || op.op === 'updateScores') {
+        const updateData = op.op === 'updateScores'
+          ? { scores: op.scores }
+          : op.data;
+
+        await Node.updateOne({ _id: op.nodeId }, { $set: updateData });
+        results.push({ ...op, success: true });
+      }
+      else if (op.op === 'deleteNode') {
+        await Promise.all([
+          Edge.deleteMany({ $or: [{ fromNodeId: op.nodeId }, { toNodeId: op.nodeId }] }),
+          Node.deleteOne({ _id: op.nodeId })
+        ]);
+        results.push({ ...op, success: true });
+      }
+      else if (op.op === 'createEdge') {
+        // Resolve placeholder IDs
+        let fromId = op.data.fromNodeId;
+        let toId = op.data.toNodeId;
+
+        if (fromId.startsWith('__NEW_')) fromId = createdNodeIds[fromId] || fromId;
+        if (toId.startsWith('__NEW_')) toId = createdNodeIds[toId] || toId;
+
+        const edge = new Edge({
+          projectId,
+          fromNodeId: fromId,
+          toNodeId: toId,
+          type: op.data.type || 'dependency'
+        });
+        await edge.save();
+        results.push({
+          ...op,
+          success: true,
+          edgeId: edge._id.toString(),
+          data: { ...op.data, fromNodeId: fromId, toNodeId: toId }
+        });
+      }
+      else if (op.op === 'deleteEdge') {
+        await Edge.deleteOne({ _id: op.edgeId });
+        results.push({ ...op, success: true });
+      }
+    } catch (error) {
+      console.error(`Op ${op.op} failed:`, error.message);
+      results.push({ ...op, success: false, error: error.message });
+    }
+  }
+
+  return results;
+}
+
+// Get chat history
+router.get('/projects/:projectId/chat', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    res.json({
+      success: true,
+      history: project.chatHistory.slice(-50) // Last 50 messages
+    });
+  } catch (error) {
+    console.error('Get chat history error:', error);
+    res.status(500).json({ error: 'Failed to get chat history' });
+  }
+});
+
+// Get quota status
+router.get('/quota', optionalAuth, async (req, res) => {
+  try {
+    const date = getToday();
+    const isAuth = !!req.userId;
+    const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
+
+    const query = req.userId
+      ? { userId: req.userId, date }
+      : { anonymousSessionId: req.anonymousSessionId, date };
+
+    const quota = await UserQuota.findOne(query);
+
+    res.json({
+      success: true,
+      quota: {
+        chatRequests: {
+          used: quota?.chatRequests || 0,
+          limit: limits.chat,
+          remaining: limits.chat - (quota?.chatRequests || 0)
+        },
+        projectsCreated: {
+          used: quota?.projectsCreated || 0,
+          limit: limits.projects,
+          remaining: limits.projects - (quota?.projectsCreated || 0)
+        }
+      },
+      authenticated: isAuth
+    });
+  } catch (error) {
+    console.error('Get quota error:', error);
+    res.status(500).json({ error: 'Failed to get quota' });
+  }
+});
+
+module.exports = router;

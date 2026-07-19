@@ -44,7 +44,7 @@ const applicationSchema = new mongoose.Schema({
   // Deployment type
   deployment: {
     type: String,
-    enum: ['cloud', 'on-premise', 'hybrid', 'api', 'desktop', 'mobile', 'browser-extension'],
+    enum: ['cloud', 'local', 'self-hosted', 'hybrid'],
     required: true
   },
 
@@ -100,7 +100,7 @@ const applicationSchema = new mongoose.Schema({
   // Review status
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected'],
+    enum: ['pending', 'published', 'rejected'],
     default: 'pending',
     index: true
   },

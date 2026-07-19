@@ -33,12 +33,14 @@ router.get('/', async (req, res) => {
 
       items = items.concat(headlines.map(h => ({
         id: h._id,
-        type: 'headline',
+        origin: 'aggregated',
+        type: 'general',
         title: h.title,
-        source: h.source,
-        link: h.link,
+        sourceName: h.source,
+        sourceUrl: h.link,
         category: h.category,
-        publishedAt: h.publishedAt
+        publishedAt: h.publishedAt,
+        fetchedAt: h.fetchedAt
       })));
 
       if (type === 'headlines') {
@@ -57,13 +59,14 @@ router.get('/', async (req, res) => {
 
       items = items.concat(signals.map(s => ({
         id: s._id,
-        type: 'signal',
-        signalType: s.type,
+        origin: 'signal',
+        type: s.type,
         title: s.title,
         body: s.body,
+        sourceName: s.relatedCompany || 'DigitalApple',
+        sourceUrl: s.link,
         relatedCompany: s.relatedCompany,
         relatedProduct: s.relatedProduct,
-        link: s.link,
         publishedAt: s.publishedAt
       })));
 
