@@ -8,6 +8,7 @@ const AuthController = require('./controllers/AuthController');
 const UserController = require('./controllers/UserController');
 const FeedController = require('./controllers/FeedController');
 const AdminController = require('./controllers/AdminController');
+const AnalyticsController = require('./controllers/AnalyticsController');
 
 const app = express();
 
@@ -86,6 +87,7 @@ app.use('/api/v1/auth', AuthController);
 app.use('/api/v1/user', UserController);
 app.use('/api/v1/feed', FeedController);
 app.use('/api/v1/admin', AdminController);
+app.use('/api/v1/analytics', AnalyticsController);
 
 // Root
 app.get('/', (req, res) => {

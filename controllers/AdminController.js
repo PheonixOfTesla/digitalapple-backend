@@ -351,8 +351,13 @@ router.delete('/reviews/:id', async (req, res) => {
 
 router.get('/stats', async (req, res) => {
   try {
-    const [userCount, productCount, reviewCount, marketingCount] = await Promise.all([
+    const now = new Date();
+    const weekAgo = new Date(now);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+
+    const [userCount, newUsersThisWeek, productCount, reviewCount, marketingCount] = await Promise.all([
       User.countDocuments(),
+      User.countDocuments({ createdAt: { $gte: weekAgo } }),
       Product.countDocuments(),
       Review.countDocuments(),
       User.countDocuments({ marketingOptIn: true })
@@ -362,6 +367,7 @@ router.get('/stats', async (req, res) => {
       success: true,
       stats: {
         users: userCount,
+        newUsersThisWeek,
         products: productCount,
         reviews: reviewCount,
         marketingSubscribers: marketingCount
