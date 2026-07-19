@@ -14,6 +14,9 @@ const AnalyticsController = require('./controllers/AnalyticsController');
 const NewsController = require('./controllers/NewsController');
 const ApplicationController = require('./controllers/ApplicationController');
 const BlueprintController = require('./controllers/BlueprintController');
+const EngagementController = require('./controllers/EngagementController');
+const CommentController = require('./controllers/CommentController');
+const ShareController = require('./controllers/ShareController');
 
 const app = express();
 
@@ -96,6 +99,9 @@ app.use('/api/v1/analytics', AnalyticsController);
 app.use('/api/v1/news', NewsController);
 app.use('/api/v1/applications', ApplicationController);
 app.use('/api/v1/blueprint', BlueprintController);
+app.use('/api/v1/engage', EngagementController);
+app.use('/api/v1/comments', CommentController);
+app.use('/api/v1/share', ShareController);
 
 // Root
 app.get('/', (req, res) => {
@@ -152,6 +158,34 @@ app.get('/', (req, res) => {
         chat: 'POST /api/v1/blueprint/projects/:projectId/chat',
         chatHistory: 'GET /api/v1/blueprint/projects/:projectId/chat',
         quota: 'GET /api/v1/blueprint/quota'
+      },
+      sharedMaps: {
+        publicFeed: 'GET /api/v1/feed/maps/public',
+        followingFeed: 'GET /api/v1/feed/maps/following',
+        singleMap: 'GET /api/v1/feed/maps/:mapId',
+        userMaps: 'GET /api/v1/feed/maps/user/:userId'
+      },
+      engage: {
+        star: 'POST /api/v1/engage/star/:mapId',
+        repost: 'POST /api/v1/engage/repost/:mapId',
+        fork: 'POST /api/v1/engage/fork/:mapId',
+        follow: 'POST /api/v1/engage/follow/:userId',
+        following: 'GET /api/v1/engage/following',
+        followers: 'GET /api/v1/engage/followers'
+      },
+      comments: {
+        list: 'GET /api/v1/comments/:mapId',
+        create: 'POST /api/v1/comments/:mapId',
+        edit: 'PUT /api/v1/comments/:commentId',
+        delete: 'DELETE /api/v1/comments/:commentId',
+        hide: 'POST /api/v1/comments/:commentId/hide'
+      },
+      share: {
+        publish: 'POST /api/v1/share/publish/:projectId',
+        unpublish: 'POST /api/v1/share/unpublish/:mapId',
+        update: 'PUT /api/v1/share/:mapId',
+        myMaps: 'GET /api/v1/share/my-maps',
+        branches: 'GET /api/v1/share/branches/:projectId'
       },
       admin: 'All admin endpoints require admin role'
     }

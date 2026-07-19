@@ -2,7 +2,10 @@ const express = require('express');
 const Product = require('../models/Product');
 const Review = require('../models/Review');
 const User = require('../models/User');
-const { verifyToken } = require('../middleware/auth');
+const SharedMap = require('../models/SharedMap');
+const Star = require('../models/Star');
+const Follow = require('../models/Follow');
+const { verifyToken, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -300,6 +303,240 @@ router.get('/my-reviews', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('Get my reviews error:', error);
     res.status(500).json({ error: 'Failed to get reviews' });
+  }
+});
+
+// ============================================================
+// SHARED MAP FEED - Blueprint maps shared publicly
+// ============================================================
+
+// GET /feed/maps/public - Public shared maps feed
+router.get('/maps/public', optionalAuth, async (req, res) => {
+  try {
+    const {
+      sort = 'forks',
+      category,
+      limit = 30,
+      offset = 0
+    } = req.query;
+
+    // Build query - only public, published maps
+    const query = {
+      visibility: 'public',
+      publishedAt: { $ne: null },
+      unpublishedAt: null
+    };
+
+    if (category && category !== 'all') {
+      query.category = category;
+    }
+
+    // Sort options - default to forks (usefulness)
+    const sortOptions = {
+      forks: { forkCount: -1, publishedAt: -1 },
+      stars: { starCount: -1, publishedAt: -1 },
+      coverage: { coverage: -1, publishedAt: -1 },
+      newest: { publishedAt: -1 }
+    };
+
+    const sortBy = sortOptions[sort] || sortOptions.forks;
+
+    // Fetch maps
+    const maps = await SharedMap.find(query)
+      .sort(sortBy)
+      .skip(parseInt(offset))
+      .limit(parseInt(limit))
+      .select('-snapshot') // Don't send full snapshot in list view
+      .lean();
+
+    // If user is logged in, check which maps they've starred/followed
+    let userStars = new Set();
+    let userFollows = new Set();
+
+    if (req.user) {
+      const [stars, follows] = await Promise.all([
+        Star.find({ userId: req.user._id, mapId: { $in: maps.map(m => m._id) } }).select('mapId'),
+        Follow.find({ followerId: req.user._id }).select('followeeId')
+      ]);
+
+      userStars = new Set(stars.map(s => s.mapId.toString()));
+      userFollows = new Set(follows.map(f => f.followeeId.toString()));
+    }
+
+    // Enrich maps with user-specific data
+    const enrichedMaps = maps.map(map => ({
+      ...map,
+      isStarred: userStars.has(map._id.toString()),
+      isFollowing: userFollows.has(map.ownerId?.toString())
+    }));
+
+    const total = await SharedMap.countDocuments(query);
+
+    res.json({
+      success: true,
+      maps: enrichedMaps,
+      pagination: {
+        total,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        hasMore: parseInt(offset) + maps.length < total
+      }
+    });
+  } catch (err) {
+    console.error('Maps feed error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load feed' });
+  }
+});
+
+// GET /feed/maps/following - Feed from followed users
+router.get('/maps/following', verifyToken, async (req, res) => {
+  try {
+    const { limit = 30, offset = 0 } = req.query;
+
+    // Get followed user IDs
+    const follows = await Follow.find({ followerId: req.userId }).select('followeeId');
+    const followeeIds = follows.map(f => f.followeeId);
+
+    if (followeeIds.length === 0) {
+      return res.json({
+        success: true,
+        maps: [],
+        pagination: { total: 0, limit: parseInt(limit), offset: parseInt(offset), hasMore: false }
+      });
+    }
+
+    // Fetch maps from followed users
+    const query = {
+      ownerId: { $in: followeeIds },
+      visibility: 'public',
+      publishedAt: { $ne: null },
+      unpublishedAt: null
+    };
+
+    const maps = await SharedMap.find(query)
+      .sort({ publishedAt: -1 })
+      .skip(parseInt(offset))
+      .limit(parseInt(limit))
+      .select('-snapshot')
+      .lean();
+
+    // Check stars
+    const stars = await Star.find({
+      userId: req.userId,
+      mapId: { $in: maps.map(m => m._id) }
+    }).select('mapId');
+    const userStars = new Set(stars.map(s => s.mapId.toString()));
+
+    const enrichedMaps = maps.map(map => ({
+      ...map,
+      isStarred: userStars.has(map._id.toString()),
+      isFollowing: true
+    }));
+
+    const total = await SharedMap.countDocuments(query);
+
+    res.json({
+      success: true,
+      maps: enrichedMaps,
+      pagination: {
+        total,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        hasMore: parseInt(offset) + maps.length < total
+      }
+    });
+  } catch (err) {
+    console.error('Following feed error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load feed' });
+  }
+});
+
+// GET /feed/maps/:mapId - Get single shared map with full snapshot
+router.get('/maps/:mapId', optionalAuth, async (req, res) => {
+  try {
+    const map = await SharedMap.findById(req.params.mapId).lean();
+
+    if (!map) {
+      return res.status(404).json({ success: false, error: 'Map not found' });
+    }
+
+    // Check visibility
+    if (map.visibility === 'private') {
+      if (!req.user || req.user._id.toString() !== map.ownerId.toString()) {
+        return res.status(404).json({ success: false, error: 'Map not found' });
+      }
+    }
+
+    if (map.unpublishedAt) {
+      return res.status(404).json({ success: false, error: 'Map has been unpublished' });
+    }
+
+    // Check if user has starred/is following
+    let isStarred = false;
+    let isFollowing = false;
+
+    if (req.user) {
+      const [star, follow] = await Promise.all([
+        Star.findOne({ mapId: map._id, userId: req.user._id }),
+        Follow.findOne({ followerId: req.user._id, followeeId: map.ownerId })
+      ]);
+      isStarred = !!star;
+      isFollowing = !!follow;
+    }
+
+    res.json({
+      success: true,
+      map: {
+        ...map,
+        isStarred,
+        isFollowing
+      }
+    });
+  } catch (err) {
+    console.error('Get map error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load map' });
+  }
+});
+
+// GET /feed/maps/user/:userId - Maps by a specific user
+router.get('/maps/user/:userId', optionalAuth, async (req, res) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+
+    const query = {
+      ownerId: req.params.userId,
+      visibility: 'public',
+      publishedAt: { $ne: null },
+      unpublishedAt: null
+    };
+
+    // If viewing own profile, include unlisted
+    if (req.user && req.user._id.toString() === req.params.userId) {
+      query.visibility = { $in: ['public', 'unlisted'] };
+    }
+
+    const maps = await SharedMap.find(query)
+      .sort({ publishedAt: -1 })
+      .skip(parseInt(offset))
+      .limit(parseInt(limit))
+      .select('-snapshot')
+      .lean();
+
+    const total = await SharedMap.countDocuments(query);
+
+    res.json({
+      success: true,
+      maps,
+      pagination: {
+        total,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        hasMore: parseInt(offset) + maps.length < total
+      }
+    });
+  } catch (err) {
+    console.error('User maps error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load maps' });
   }
 });
 
