@@ -3,6 +3,7 @@
  *
  * Full CRUD for projects, nodes, and edges.
  * LLM chat returns structured operations for canvas manipulation.
+ * Nebula generation from premise with auto-layout.
  */
 
 const express = require('express');
@@ -11,6 +12,15 @@ const Node = require('../models/Node');
 const Edge = require('../models/Edge');
 const UserQuota = require('../models/UserQuota');
 const { verifyToken } = require('../middleware/auth');
+
+// LLM service - lazy loaded to avoid startup errors if API key missing
+let BlueprintLLM = null;
+function getLLM() {
+  if (!BlueprintLLM) {
+    BlueprintLLM = require('../services/BlueprintLLM');
+  }
+  return BlueprintLLM;
+}
 
 const router = express.Router();
 
@@ -855,5 +865,347 @@ router.get('/quota', optionalAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to get quota' });
   }
 });
+
+// ============== NEBULA GENERATION ==============
+
+/**
+ * Auto-layout positions for nebula nodes
+ * Core at center, constellations in a ring, children clustered near parent
+ */
+function computeLayout(nebula) {
+  const CANVAS_CENTER_X = 600;
+  const CANVAS_CENTER_Y = 400;
+  const CONSTELLATION_RADIUS = 280;
+  const CHILD_RADIUS = 120;
+  const CHILD_SPREAD = 0.4; // radians spread for children
+
+  const positions = [];
+
+  // Core node at center
+  positions.push({
+    nodeRef: 'core',
+    x: CANVAS_CENTER_X,
+    y: CANVAS_CENTER_Y
+  });
+
+  // 6 constellations evenly distributed
+  const constellationAngles = {};
+  nebula.constellations.forEach((c, i) => {
+    const angle = (i * 2 * Math.PI / 6) - Math.PI / 2; // Start from top
+    constellationAngles[c.constellation] = angle;
+    positions.push({
+      nodeRef: `constellation:${c.constellation}`,
+      x: CANVAS_CENTER_X + Math.cos(angle) * CONSTELLATION_RADIUS,
+      y: CANVAS_CENTER_Y + Math.sin(angle) * CONSTELLATION_RADIUS
+    });
+
+    // Children clustered around their constellation
+    if (c.children) {
+      const childCount = c.children.length;
+      c.children.forEach((child, j) => {
+        // Spread children in an arc behind the constellation
+        const childAngle = angle + (j - (childCount - 1) / 2) * CHILD_SPREAD * 0.5;
+        const childDist = CONSTELLATION_RADIUS + CHILD_RADIUS + j * 15;
+        positions.push({
+          nodeRef: `child:${c.constellation}:${j}`,
+          x: CANVAS_CENTER_X + Math.cos(childAngle) * childDist,
+          y: CANVAS_CENTER_Y + Math.sin(childAngle) * childDist
+        });
+      });
+    }
+  });
+
+  return positions;
+}
+
+/**
+ * Generate nebula from premise
+ * POST /blueprint/nebula
+ */
+router.post('/nebula', optionalAuth, async (req, res) => {
+  try {
+    // Check quota
+    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    if (!quotaCheck.allowed) {
+      return res.status(429).json({
+        error: 'Quota exceeded',
+        message: 'Log in for more requests',
+        remaining: 0
+      });
+    }
+
+    const { premise, constraints } = req.body;
+    if (!premise?.trim()) {
+      return res.status(400).json({ error: 'Premise is required' });
+    }
+
+    // Generate nebula via LLM
+    const llm = getLLM();
+    const { nebula, tokensUsed } = await llm.generateNebula(premise, constraints || {});
+
+    // Compute layout positions
+    const layout = computeLayout(nebula);
+
+    // Create project
+    const project = new Project({
+      name: premise.substring(0, 100),
+      premise: premise,
+      ownerId: req.userId || null,
+      anonymousSessionId: req.userId ? null : req.anonymousSessionId
+    });
+    await project.save();
+
+    // Build operations to create all nodes
+    const ops = [];
+    const nodeMap = {}; // Track created node IDs
+
+    // Create core node
+    const corePos = layout.find(l => l.nodeRef === 'core');
+    const coreNode = new Node({
+      projectId: project._id,
+      kind: 'core',
+      title: nebula.core.statement,
+      statement: nebula.core.statement,
+      detail: nebula.core.detail,
+      body: nebula.core.detail,
+      scores: nebula.core.scores,
+      confidence: nebula.core.confidence,
+      stage: nebula.core.stage || 0,
+      status: nebula.core.status || 'mapped',
+      cost: nebula.core.cost,
+      sources: nebula.core.sources || [],
+      x: corePos?.x || 600,
+      y: corePos?.y || 400,
+      depth: 0
+    });
+    await coreNode.save();
+    nodeMap.core = coreNode._id;
+    ops.push({ op: 'createNode', nodeId: coreNode._id.toString(), data: formatNodeForClient(coreNode) });
+
+    // Create constellation nodes and their children
+    for (const c of nebula.constellations) {
+      const constPos = layout.find(l => l.nodeRef === `constellation:${c.constellation}`);
+      const constNode = new Node({
+        projectId: project._id,
+        parentNodeId: coreNode._id,
+        kind: 'constellation',
+        constellation: c.constellation,
+        title: c.statement,
+        statement: c.statement,
+        detail: c.detail,
+        body: c.detail,
+        scores: c.scores,
+        confidence: c.confidence,
+        stage: c.stage || 0,
+        status: c.status || 'mapped',
+        cost: c.cost,
+        sources: c.sources || [],
+        x: constPos?.x || 600,
+        y: constPos?.y || 400,
+        depth: 1
+      });
+      await constNode.save();
+      nodeMap[`constellation:${c.constellation}`] = constNode._id;
+      ops.push({ op: 'createNode', nodeId: constNode._id.toString(), data: formatNodeForClient(constNode) });
+
+      // Create edge from core to constellation
+      const constEdge = new Edge({
+        projectId: project._id,
+        fromNodeId: coreNode._id,
+        toNodeId: constNode._id,
+        type: 'contains'
+      });
+      await constEdge.save();
+      ops.push({ op: 'createEdge', edgeId: constEdge._id.toString(), data: { fromNodeId: coreNode._id.toString(), toNodeId: constNode._id.toString(), type: 'contains' } });
+
+      // Create children
+      if (c.children) {
+        for (let j = 0; j < c.children.length; j++) {
+          const child = c.children[j];
+          const childPos = layout.find(l => l.nodeRef === `child:${c.constellation}:${j}`);
+          const childNode = new Node({
+            projectId: project._id,
+            parentNodeId: constNode._id,
+            kind: 'star',
+            title: child.statement,
+            statement: child.statement,
+            detail: child.detail,
+            body: child.detail,
+            scores: child.scores,
+            confidence: child.confidence,
+            stage: child.stage || constNode.stage,
+            status: child.status || 'unexplored',
+            cost: child.cost,
+            sources: child.sources || [],
+            x: childPos?.x || constNode.x + 100,
+            y: childPos?.y || constNode.y + j * 60,
+            depth: 2
+          });
+          await childNode.save();
+          ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
+
+          // Create edge from constellation to child
+          const childEdge = new Edge({
+            projectId: project._id,
+            fromNodeId: constNode._id,
+            toNodeId: childNode._id,
+            type: 'contains'
+          });
+          await childEdge.save();
+          ops.push({ op: 'createEdge', edgeId: childEdge._id.toString(), data: { fromNodeId: constNode._id.toString(), toNodeId: childNode._id.toString(), type: 'contains' } });
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      project: {
+        id: project._id,
+        name: project.name,
+        premise: premise
+      },
+      ops,
+      tokensUsed,
+      quota: { remaining: quotaCheck.remaining - 1, limit: quotaCheck.limit }
+    });
+
+  } catch (error) {
+    console.error('Nebula generation error:', error);
+    res.status(500).json({ error: 'Failed to generate nebula', message: error.message });
+  }
+});
+
+/**
+ * Expand a star into children
+ * POST /blueprint/expand
+ */
+router.post('/expand', optionalAuth, async (req, res) => {
+  try {
+    const { nodeId } = req.body;
+    if (!nodeId) {
+      return res.status(400).json({ error: 'nodeId is required' });
+    }
+
+    const node = await Node.findById(nodeId);
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Check expansion depth limit (prevent runaway cost)
+    const MAX_DEPTH = 5;
+    if (node.depth >= MAX_DEPTH) {
+      return res.status(400).json({
+        error: 'Maximum expansion depth reached',
+        message: `Nodes can only be expanded ${MAX_DEPTH} levels deep`
+      });
+    }
+
+    // Check quota
+    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    if (!quotaCheck.allowed) {
+      return res.status(429).json({
+        error: 'Quota exceeded',
+        message: 'Log in for more requests',
+        remaining: 0
+      });
+    }
+
+    // Get context nodes
+    const contextNodes = await Node.find({ projectId: node.projectId }).limit(20).lean();
+
+    // Expand via LLM
+    const llm = getLLM();
+    const { children, reasoning, tokensUsed } = await llm.expandStar(
+      formatNodeForClient(node),
+      contextNodes.map(n => ({ id: n._id.toString(), statement: n.statement || n.title, stage: n.stage }))
+    );
+
+    // Create child nodes
+    const ops = [];
+    const CHILD_SPREAD = 80;
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const childNode = new Node({
+        projectId: node.projectId,
+        parentNodeId: node._id,
+        kind: 'star',
+        title: child.statement,
+        statement: child.statement,
+        detail: child.detail,
+        body: child.detail,
+        scores: child.scores,
+        confidence: child.confidence,
+        stage: child.stage || node.stage,
+        status: child.status || 'unexplored',
+        cost: child.cost,
+        sources: child.sources || [],
+        x: node.x + 180,
+        y: node.y + (i - (children.length - 1) / 2) * CHILD_SPREAD,
+        depth: node.depth + 1
+      });
+      await childNode.save();
+      ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
+
+      // Create edge
+      const edge = new Edge({
+        projectId: node.projectId,
+        fromNodeId: node._id,
+        toNodeId: childNode._id,
+        type: 'contains'
+      });
+      await edge.save();
+      ops.push({ op: 'createEdge', edgeId: edge._id.toString(), data: { fromNodeId: node._id.toString(), toNodeId: childNode._id.toString(), type: 'contains' } });
+    }
+
+    // Mark parent as expanded
+    node.status = 'mapped';
+    await node.save();
+    ops.push({ op: 'updateNode', nodeId: node._id.toString(), data: { status: 'mapped' } });
+
+    res.json({
+      success: true,
+      reasoning,
+      ops,
+      tokensUsed,
+      quota: { remaining: quotaCheck.remaining - 1, limit: quotaCheck.limit }
+    });
+
+  } catch (error) {
+    console.error('Expand error:', error);
+    res.status(500).json({ error: 'Failed to expand node', message: error.message });
+  }
+});
+
+// Format node for client response
+function formatNodeForClient(node) {
+  return {
+    id: node._id?.toString() || node.id,
+    kind: node.kind,
+    constellation: node.constellation,
+    parentNodeId: node.parentNodeId?.toString(),
+    title: node.title,
+    statement: node.statement || node.title,
+    detail: node.detail || node.body,
+    body: node.body,
+    scores: node.scores,
+    confidence: node.confidence,
+    stage: node.stage,
+    status: node.status,
+    cost: node.cost,
+    sources: node.sources,
+    owner: node.owner,
+    dependencies: node.dependencies?.map(d => d.toString()) || [],
+    x: node.x,
+    y: node.y,
+    depth: node.depth,
+    kept: node.kept
+  };
+}
 
 module.exports = router;

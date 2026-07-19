@@ -15,6 +15,12 @@ const projectSchema = new mongoose.Schema({
     default: 'Untitled Project'
   },
 
+  // Original premise that generated this nebula
+  premise: {
+    type: String,
+    maxlength: 1000
+  },
+
   // Owner (null for anonymous sessions)
   ownerId: {
     type: mongoose.Schema.Types.ObjectId,
