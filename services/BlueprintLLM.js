@@ -9,22 +9,7 @@
  * - Legal/financial content is scoping, not advice.
  */
 
-const OpenAI = require('openai');
-
-// Initialize client (uses OPENAI_API_KEY env var)
-let openai = null;
-function getClient() {
-  if (!openai) {
-    openai = new OpenAI();
-  }
-  return openai;
-}
-
-// Log key presence on module load (never the key itself)
-console.log('[BlueprintLLM] OPENAI_API_KEY present:', !!process.env.OPENAI_API_KEY);
-
-// Model from env with sensible default
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+const { client, model, provider } = require('./aiClient');
 
 // Schema constants
 const STAR_SCHEMA = {
@@ -51,6 +36,10 @@ const STAGE_NAMES = {
 
 // W-words that must never appear as constellation root names
 const W_WORDS = ['who', 'what', 'where', 'when', 'why', 'how'];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JSON SCHEMAS FOR STRUCTURED OUTPUTS
+// ═══════════════════════════════════════════════════════════════════════════
 
 // JSON Schema for score object (used in multiple places)
 const scoreSchema = {
@@ -238,7 +227,7 @@ const opCreateEdgeSchema = {
       properties: {
         fromNodeId: { type: 'string' },
         toNodeId: { type: 'string' },
-        type: { type: 'string', enum: ['dependency', 'alternative', 'expansion', 'rejection'] }
+        type: { type: 'string', enum: ['dependency', 'alternative', 'expansion', 'rejection', 'contains'] }
       },
       required: ['fromNodeId', 'toNodeId', 'type'],
       additionalProperties: false
@@ -291,7 +280,125 @@ const chatResponseSchema = {
   additionalProperties: false
 };
 
-// Grounding guards - reject ops with scores missing reasons
+// ═══════════════════════════════════════════════════════════════════════════
+// TOLERANT PARSING PIPELINE (SAFETY NET)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Parse LLM response with fallback extraction.
+ * Pipeline:
+ * 1. Try JSON.parse directly (clean path)
+ * 2. On failure, strip markdown fences and extract outermost object
+ * 3. Log which path was taken for conformance measurement
+ *
+ * @param {string} content - Raw response content
+ * @param {string} endpoint - Endpoint name for logging
+ * @returns {{ parsed: object, path: 'clean' | 'extracted' | 'failed' }}
+ */
+function parseResponse(content, endpoint) {
+  // Path 1: Direct JSON.parse (clean)
+  try {
+    const parsed = JSON.parse(content);
+    console.log(`[BlueprintLLM:${endpoint}] parse_path=clean`);
+    return { parsed, path: 'clean' };
+  } catch (directError) {
+    // Path 2: Extract from fenced/dirty response
+    try {
+      const extracted = extractJSON(content);
+      const parsed = JSON.parse(extracted);
+      console.log(`[BlueprintLLM:${endpoint}] parse_path=extracted`);
+      return { parsed, path: 'extracted' };
+    } catch (extractError) {
+      console.log(`[BlueprintLLM:${endpoint}] parse_path=failed direct_error="${directError.message}" extract_error="${extractError.message}"`);
+      return { parsed: null, path: 'failed' };
+    }
+  }
+}
+
+/**
+ * Extract JSON from potentially fenced/dirty content.
+ * Strips markdown code fences and finds outermost { } or [ ].
+ */
+function extractJSON(content) {
+  // Strip markdown code fences
+  let cleaned = content
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  // Find outermost JSON object or array
+  const objectMatch = cleaned.match(/\{[\s\S]*\}/);
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+
+  if (objectMatch && arrayMatch) {
+    // Return whichever appears first
+    return objectMatch.index < arrayMatch.index ? objectMatch[0] : arrayMatch[0];
+  }
+
+  return objectMatch?.[0] || arrayMatch?.[0] || cleaned;
+}
+
+/**
+ * Handle API response with full pipeline.
+ * 1. Check finish_reason for length truncation
+ * 2. Check for refusal
+ * 3. Parse with tolerant fallback
+ *
+ * @returns {{ result: object, path: string, shouldRetry: boolean, error: string|null }}
+ */
+function handleResponse(response, endpoint) {
+  const choice = response.choices?.[0];
+
+  // Check for refusal
+  if (choice?.message?.refusal) {
+    return {
+      result: null,
+      path: 'refusal',
+      shouldRetry: false,
+      error: `Model refused: ${choice.message.refusal}`
+    };
+  }
+
+  // Check for length truncation
+  if (choice?.finish_reason === 'length') {
+    return {
+      result: null,
+      path: 'truncated',
+      shouldRetry: true,
+      error: 'Response truncated due to length'
+    };
+  }
+
+  // Parse content
+  const content = choice?.message?.content || '';
+  const { parsed, path } = parseResponse(content, endpoint);
+
+  if (!parsed) {
+    return {
+      result: null,
+      path,
+      shouldRetry: true,
+      error: 'Failed to parse response'
+    };
+  }
+
+  return {
+    result: parsed,
+    path,
+    shouldRetry: false,
+    error: null
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VALIDATION AND GROUNDING GUARDS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Apply grounding guards - reject ops with invalid data.
+ * Server-side validation before applying ops.
+ */
 function applyGroundingGuards(response, premiseWordCount = 0, isFirstNebula = false) {
   const filtered = { ...response, ops: [] };
   const rejected = [];
@@ -349,7 +456,9 @@ function applyGroundingGuards(response, premiseWordCount = 0, isFirstNebula = fa
   return { filtered, rejected };
 }
 
-// Validate constellation names don't use W-words
+/**
+ * Validate nebula constellation names don't use W-words.
+ */
 function validateConstellationNames(nebula) {
   const errors = [];
   for (const c of nebula.constellations || []) {
@@ -363,7 +472,40 @@ function validateConstellationNames(nebula) {
   return errors;
 }
 
-// System prompt for nebula generation
+/**
+ * Validate nebula response scores have reasons.
+ */
+function validateNebulaScores(nebula) {
+  const errors = [];
+
+  const checkNode = (node, path) => {
+    if (!node?.scores) return;
+    for (const axis of ['economy', 'orchestration', 'demand']) {
+      if (node.scores[axis]?.value !== undefined && !node.scores[axis]?.reason?.trim()) {
+        errors.push(`${path}: ${axis} score missing reason`);
+      }
+    }
+    if (node.confidence?.basis && !STAR_SCHEMA.confidenceBasis.includes(node.confidence.basis)) {
+      errors.push(`${path}: invalid confidence.basis "${node.confidence.basis}"`);
+    }
+  };
+
+  checkNode(nebula.core, 'core');
+  for (let i = 0; i < (nebula.constellations?.length || 0); i++) {
+    const c = nebula.constellations[i];
+    checkNode(c, `constellation[${i}]`);
+    for (let j = 0; j < (c.children?.length || 0); j++) {
+      checkNode(c.children[j], `constellation[${i}].children[${j}]`);
+    }
+  }
+
+  return errors;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYSTEM PROMPTS
+// ═══════════════════════════════════════════════════════════════════════════
+
 const NEBULA_SYSTEM_PROMPT = `You are Blueprint, an analyst that decomposes business premises into structured scoping maps.
 
 STAR SCHEMA (every node must have):
@@ -404,9 +546,14 @@ CONSTELLATIONS - name them naturally for the business domain:
 
 NEVER use raw who/what/where/when/why/how as constellation names.`;
 
-// Generate complete nebula from premise
+// ═══════════════════════════════════════════════════════════════════════════
+// LLM OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Generate complete nebula from premise.
+ */
 async function generateNebula(premise, constraints = {}, maxRetries = 1) {
-  const client = getClient();
   const premiseWordCount = premise.trim().split(/\s+/).length;
 
   const constraintText = Object.keys(constraints).length > 0
@@ -428,8 +575,8 @@ Remember: Every score needs a reason. If something is unknown, mark confidence.b
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await client.chat.completions.create({
-        model: MODEL,
+      const requestParams = {
+        model,
         max_tokens: 8000,
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
@@ -443,41 +590,47 @@ Remember: Every score needs a reason. If something is unknown, mark confidence.b
             schema: nebulaResponseSchema
           }
         }
-      });
+      };
 
-      // Check for refusal
-      if (response.choices[0]?.message?.refusal) {
-        throw new Error(`Model refused: ${response.choices[0].message.refusal}`);
+      // Retry with higher tokens on truncation
+      if (attempt > 0) {
+        requestParams.max_tokens = 12000;
       }
 
-      // Check for length truncation
-      if (response.choices[0]?.finish_reason === 'length') {
-        if (attempt < maxRetries) {
-          console.log('[BlueprintLLM] Response truncated, retrying...');
-          continue;
-        }
-        throw new Error('Response truncated due to length');
+      const response = await client.chat.completions.create(requestParams);
+
+      const { result, path, shouldRetry, error } = handleResponse(response, 'nebula');
+
+      if (error && shouldRetry && attempt < maxRetries) {
+        console.log(`[BlueprintLLM:nebula] Attempt ${attempt + 1} failed: ${error}, retrying...`);
+        lastError = new Error(error);
+        continue;
+      }
+
+      if (error) {
+        throw new Error(error);
       }
 
       tokensUsed = (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0);
 
-      // Parse response - strict mode guarantees valid JSON
-      const content = response.choices[0]?.message?.content || '';
-      const nebula = JSON.parse(content);
-
-      // Validate constellation names don't use W-words
-      const nameErrors = validateConstellationNames(nebula);
+      // Validate constellation names
+      const nameErrors = validateConstellationNames(result);
       if (nameErrors.length > 0) {
-        console.log('[BlueprintLLM] W-word validation failed:', nameErrors);
-        // Don't retry for this - just log it
+        console.log('[BlueprintLLM:nebula] W-word validation warnings:', nameErrors);
       }
 
-      return { nebula, tokensUsed };
+      // Validate scores have reasons
+      const scoreErrors = validateNebulaScores(result);
+      if (scoreErrors.length > 0) {
+        console.log('[BlueprintLLM:nebula] Score validation warnings:', scoreErrors);
+      }
+
+      return { nebula: result, tokensUsed, parsePath: path };
 
     } catch (error) {
       lastError = error;
       if (attempt < maxRetries) {
-        console.log(`[BlueprintLLM] Attempt ${attempt + 1} failed:`, error.message);
+        console.log(`[BlueprintLLM:nebula] Attempt ${attempt + 1} failed:`, error.message);
         continue;
       }
     }
@@ -486,10 +639,10 @@ Remember: Every score needs a reason. If something is unknown, mark confidence.b
   throw lastError || new Error('Failed to generate nebula');
 }
 
-// Expand a star into children
+/**
+ * Expand a star into children.
+ */
 async function expandStar(node, context, maxRetries = 1) {
-  const client = getClient();
-
   const userPrompt = `Expand this node into 3-6 actionable child stars:
 
 PARENT NODE:
@@ -503,8 +656,8 @@ Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await client.chat.completions.create({
-        model: MODEL,
+      const requestParams = {
+        model,
         max_tokens: 4000,
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
@@ -518,34 +671,40 @@ Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
             schema: expandResponseSchema
           }
         }
-      });
+      };
 
-      if (response.choices[0]?.message?.refusal) {
-        throw new Error(`Model refused: ${response.choices[0].message.refusal}`);
+      if (attempt > 0) {
+        requestParams.max_tokens = 6000;
       }
 
-      if (response.choices[0]?.finish_reason === 'length') {
-        if (attempt < maxRetries) continue;
-        throw new Error('Response truncated due to length');
+      const response = await client.chat.completions.create(requestParams);
+
+      const { result, path, shouldRetry, error } = handleResponse(response, 'expand');
+
+      if (error && shouldRetry && attempt < maxRetries) {
+        console.log(`[BlueprintLLM:expand] Attempt ${attempt + 1} failed: ${error}, retrying...`);
+        continue;
+      }
+
+      if (error) {
+        throw new Error(error);
       }
 
       const tokensUsed = (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0);
-      const content = response.choices[0]?.message?.content || '';
-      const result = JSON.parse(content);
 
-      return { children: result.children, reasoning: result.reasoning, tokensUsed };
+      return { children: result.children, reasoning: result.reasoning, tokensUsed, parsePath: path };
 
     } catch (error) {
       if (attempt >= maxRetries) throw error;
-      console.log(`[BlueprintLLM] Expand attempt ${attempt + 1} failed:`, error.message);
+      console.log(`[BlueprintLLM:expand] Attempt ${attempt + 1} failed:`, error.message);
     }
   }
 }
 
-// Process chat message with ops contract
+/**
+ * Process chat message with ops contract.
+ */
 async function processChat(message, nodes, edges, maxRetries = 1) {
-  const client = getClient();
-
   const userPrompt = `User message: "${message}"
 
 Current nodes:
@@ -570,8 +729,8 @@ If no canvas changes needed, return empty ops array.`;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await client.chat.completions.create({
-        model: MODEL,
+      const requestParams = {
+        model,
         max_tokens: 4000,
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
@@ -585,20 +744,26 @@ If no canvas changes needed, return empty ops array.`;
             schema: chatResponseSchema
           }
         }
-      });
+      };
 
-      if (response.choices[0]?.message?.refusal) {
-        throw new Error(`Model refused: ${response.choices[0].message.refusal}`);
+      if (attempt > 0) {
+        requestParams.max_tokens = 6000;
       }
 
-      if (response.choices[0]?.finish_reason === 'length') {
-        if (attempt < maxRetries) continue;
-        throw new Error('Response truncated due to length');
+      const response = await client.chat.completions.create(requestParams);
+
+      const { result, path, shouldRetry, error } = handleResponse(response, 'chat');
+
+      if (error && shouldRetry && attempt < maxRetries) {
+        console.log(`[BlueprintLLM:chat] Attempt ${attempt + 1} failed: ${error}, retrying...`);
+        continue;
+      }
+
+      if (error) {
+        throw new Error(error);
       }
 
       const tokensUsed = (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0);
-      const content = response.choices[0]?.message?.content || '';
-      const result = JSON.parse(content);
 
       // Apply grounding guards
       const { filtered, rejected } = applyGroundingGuards(result);
@@ -607,20 +772,21 @@ If no canvas changes needed, return empty ops array.`;
         reply: filtered.reply,
         ops: filtered.ops,
         rejected,
-        tokensUsed
+        tokensUsed,
+        parsePath: path
       };
 
     } catch (error) {
       if (attempt >= maxRetries) throw error;
-      console.log(`[BlueprintLLM] Chat attempt ${attempt + 1} failed:`, error.message);
+      console.log(`[BlueprintLLM:chat] Attempt ${attempt + 1} failed:`, error.message);
     }
   }
 }
 
-// Branch: create alternative path from node (uses same schema)
+/**
+ * Branch: create alternative paths from node.
+ */
 async function branchNode(node, context) {
-  const client = getClient();
-
   const branchSchema = {
     type: 'object',
     properties: {
@@ -632,7 +798,7 @@ async function branchNode(node, context) {
   };
 
   const response = await client.chat.completions.create({
-    model: MODEL,
+    model,
     max_tokens: 3000,
     messages: [
       { role: 'system', content: NEBULA_SYSTEM_PROMPT },
@@ -656,24 +822,24 @@ Return alternatives with full star schema (every score needs a reason).`
     }
   });
 
-  if (response.choices[0]?.message?.refusal) {
-    throw new Error(`Model refused: ${response.choices[0].message.refusal}`);
-  }
+  const { result, path, error } = handleResponse(response, 'branch');
 
-  const content = response.choices[0]?.message?.content || '';
-  const result = JSON.parse(content);
+  if (error) {
+    throw new Error(error);
+  }
 
   return {
     alternatives: result.alternatives || [],
     tradeoffs: result.tradeoffs || '',
-    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0)
+    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0),
+    parsePath: path
   };
 }
 
-// Stress test a node
+/**
+ * Stress test a node.
+ */
 async function stressNode(node, context) {
-  const client = getClient();
-
   const stressSchema = {
     type: 'object',
     properties: {
@@ -701,7 +867,7 @@ async function stressNode(node, context) {
   };
 
   const response = await client.chat.completions.create({
-    model: MODEL,
+    model,
     max_tokens: 3000,
     messages: [
       { role: 'system', content: NEBULA_SYSTEM_PROMPT },
@@ -726,26 +892,26 @@ ${JSON.stringify(context.filter(n => n.dependencies?.includes(node.id)), null, 2
     }
   });
 
-  if (response.choices[0]?.message?.refusal) {
-    throw new Error(`Model refused: ${response.choices[0].message.refusal}`);
-  }
+  const { result, path, error } = handleResponse(response, 'stress');
 
-  const content = response.choices[0]?.message?.content || '';
-  const result = JSON.parse(content);
+  if (error) {
+    throw new Error(error);
+  }
 
   return {
     weaknesses: result.weaknesses || [],
     dependencyRisks: result.dependencyRisks || [],
     commonFailureModes: result.commonFailureModes || [],
     updatedScores: result.updatedScores || null,
-    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0)
+    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0),
+    parsePath: path
   };
 }
 
-// Cost estimation
+/**
+ * Cost estimation.
+ */
 async function costNode(node, context) {
-  const client = getClient();
-
   const costResponseSchema = {
     type: 'object',
     properties: {
@@ -758,7 +924,7 @@ async function costNode(node, context) {
   };
 
   const response = await client.chat.completions.create({
-    model: MODEL,
+    model,
     max_tokens: 2000,
     messages: [
       { role: 'system', content: NEBULA_SYSTEM_PROMPT },
@@ -782,25 +948,25 @@ If you cannot estimate, return null values with basis explaining why. Never fabr
     }
   });
 
-  if (response.choices[0]?.message?.refusal) {
-    throw new Error(`Model refused: ${response.choices[0].message.refusal}`);
-  }
+  const { result, path, error } = handleResponse(response, 'cost');
 
-  const content = response.choices[0]?.message?.content || '';
-  const result = JSON.parse(content);
+  if (error) {
+    throw new Error(error);
+  }
 
   return {
     cost: result.cost || { capitalLow: null, capitalHigh: null, timeLow: null, timeHigh: null, basis: 'unknown' },
     assumptions: result.assumptions || [],
     variables: result.variables || [],
-    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0)
+    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0),
+    parsePath: path
   };
 }
 
-// Sequence: dependency-ordered execution list
+/**
+ * Sequence: dependency-ordered execution list.
+ */
 async function sequenceNebula(nodes, edges) {
-  const client = getClient();
-
   const sequenceSchema = {
     type: 'object',
     properties: {
@@ -830,7 +996,7 @@ async function sequenceNebula(nodes, edges) {
   };
 
   const response = await client.chat.completions.create({
-    model: MODEL,
+    model,
     max_tokens: 4000,
     messages: [
       { role: 'system', content: NEBULA_SYSTEM_PROMPT },
@@ -855,25 +1021,31 @@ ${JSON.stringify(edges, null, 2)}`
     }
   });
 
-  if (response.choices[0]?.message?.refusal) {
-    throw new Error(`Model refused: ${response.choices[0].message.refusal}`);
-  }
+  const { result, path, error } = handleResponse(response, 'sequence');
 
-  const content = response.choices[0]?.message?.content || '';
-  const result = JSON.parse(content);
+  if (error) {
+    throw new Error(error);
+  }
 
   return {
     sequence: result.sequence || [],
     criticalPath: result.criticalPath || [],
     parallelTracks: result.parallelTracks || [],
-    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0)
+    tokensUsed: (response.usage?.prompt_tokens || 0) + (response.usage?.completion_tokens || 0),
+    parsePath: path
   };
 }
 
-// Coverage calculation matching the prototype formula
-// per dimension: min(1, answered/3) × mean(confidence)
-// where answered = nodes with confidence.value >= 0.5
-// total = mean across six dimensions
+// ═══════════════════════════════════════════════════════════════════════════
+// COVERAGE CALCULATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Coverage calculation matching the prototype formula.
+ * per dimension: min(1, answered/3) × mean(confidence)
+ * where answered = nodes with confidence.value >= 0.5
+ * total = mean across six dimensions
+ */
 function calculateCoverage(nodes) {
   const dimensions = STAR_SCHEMA.constellations;
   const perDimension = {};
@@ -903,7 +1075,10 @@ function calculateCoverage(nodes) {
   return { perDimension, total };
 }
 
-// Legacy validation functions for backwards compat
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGACY VALIDATION (backwards compat)
+// ═══════════════════════════════════════════════════════════════════════════
+
 function validateStar(node, context = '') {
   const errors = [];
 
@@ -981,6 +1156,10 @@ function validateNebula(nebula) {
   return errors;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// EXPORTS
+// ═══════════════════════════════════════════════════════════════════════════
+
 module.exports = {
   generateNebula,
   expandStar,
@@ -993,6 +1172,7 @@ module.exports = {
   validateStar,
   validateNebula,
   applyGroundingGuards,
+  validateConstellationNames,
   STAGE_NAMES,
   STAR_SCHEMA
 };
