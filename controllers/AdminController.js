@@ -2,6 +2,8 @@ const express = require('express');
 const User = require('../models/User');
 const Product = require('../models/Product');
 const Review = require('../models/Review');
+const SignalEntry = require('../models/SignalEntry');
+const Application = require('../models/Application');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 const { upload, cloudinary } = require('../config/cloudinary');
 
@@ -355,12 +357,14 @@ router.get('/stats', async (req, res) => {
     const weekAgo = new Date(now);
     weekAgo.setDate(weekAgo.getDate() - 7);
 
-    const [userCount, newUsersThisWeek, productCount, reviewCount, marketingCount] = await Promise.all([
+    const [userCount, newUsersThisWeek, productCount, reviewCount, marketingCount, pendingApplications, signalCount] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ createdAt: { $gte: weekAgo } }),
       Product.countDocuments(),
       Review.countDocuments(),
-      User.countDocuments({ marketingOptIn: true })
+      User.countDocuments({ marketingOptIn: true }),
+      Application.countDocuments({ status: 'pending' }),
+      SignalEntry.countDocuments({ status: 'published' })
     ]);
 
     res.json({
@@ -370,13 +374,362 @@ router.get('/stats', async (req, res) => {
         newUsersThisWeek,
         products: productCount,
         reviews: reviewCount,
-        marketingSubscribers: marketingCount
+        marketingSubscribers: marketingCount,
+        pendingApplications,
+        signalEntries: signalCount
       }
     });
 
   } catch (error) {
     console.error('Admin stats error:', error);
     res.status(500).json({ error: 'Failed to get stats' });
+  }
+});
+
+// ==================== SIGNAL ENTRIES ====================
+
+// List all Signal entries
+router.get('/signal', async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+  const skip = (page - 1) * limit;
+  const status = req.query.status;
+
+  try {
+    const query = status ? { status } : {};
+
+    const [entries, total] = await Promise.all([
+      SignalEntry.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('authorId', 'email firstName lastName')
+        .lean(),
+      SignalEntry.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      entries: entries.map(e => ({
+        id: e._id,
+        title: e.title,
+        body: e.body,
+        type: e.type,
+        relatedCompany: e.relatedCompany,
+        relatedProduct: e.relatedProduct,
+        link: e.link,
+        status: e.status,
+        publishedAt: e.publishedAt,
+        author: e.authorId ? {
+          id: e.authorId._id,
+          email: e.authorId.email,
+          name: `${e.authorId.firstName || ''} ${e.authorId.lastName || ''}`.trim()
+        } : null,
+        createdAt: e.createdAt
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin list signal error:', error);
+    res.status(500).json({ error: 'Failed to list signal entries' });
+  }
+});
+
+// Create Signal entry
+router.post('/signal', async (req, res) => {
+  const { title, body, type, relatedCompany, relatedProduct, link, status } = req.body;
+
+  if (!title?.trim()) {
+    return res.status(400).json({ error: 'Title is required' });
+  }
+  if (!body?.trim()) {
+    return res.status(400).json({ error: 'Body is required' });
+  }
+  if (!type) {
+    return res.status(400).json({ error: 'Type is required' });
+  }
+
+  try {
+    const entry = new SignalEntry({
+      title: title.trim(),
+      body: body.trim(),
+      type,
+      relatedCompany: relatedCompany?.trim(),
+      relatedProduct: relatedProduct?.trim(),
+      link: link?.trim(),
+      authorId: req.userId,
+      status: status === 'published' ? 'published' : 'draft',
+      publishedAt: status === 'published' ? new Date() : undefined
+    });
+
+    await entry.save();
+
+    console.log(`Signal entry created: ${entry.title}`);
+
+    res.json({
+      success: true,
+      entry: {
+        id: entry._id,
+        title: entry.title,
+        type: entry.type,
+        status: entry.status,
+        createdAt: entry.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin create signal error:', error);
+    res.status(500).json({ error: 'Failed to create signal entry' });
+  }
+});
+
+// Update Signal entry
+router.put('/signal/:id', async (req, res) => {
+  const { title, body, type, relatedCompany, relatedProduct, link, status } = req.body;
+
+  try {
+    const entry = await SignalEntry.findById(req.params.id);
+
+    if (!entry) {
+      return res.status(404).json({ error: 'Signal entry not found' });
+    }
+
+    if (title !== undefined) entry.title = title.trim();
+    if (body !== undefined) entry.body = body.trim();
+    if (type !== undefined) entry.type = type;
+    if (relatedCompany !== undefined) entry.relatedCompany = relatedCompany?.trim();
+    if (relatedProduct !== undefined) entry.relatedProduct = relatedProduct?.trim();
+    if (link !== undefined) entry.link = link?.trim();
+
+    // Handle publish status change
+    if (status !== undefined) {
+      const wasPublished = entry.status === 'published';
+      entry.status = status === 'published' ? 'published' : 'draft';
+      if (!wasPublished && entry.status === 'published') {
+        entry.publishedAt = new Date();
+      }
+    }
+
+    await entry.save();
+
+    console.log(`Signal entry updated: ${entry.title}`);
+
+    res.json({
+      success: true,
+      entry: {
+        id: entry._id,
+        title: entry.title,
+        type: entry.type,
+        status: entry.status,
+        publishedAt: entry.publishedAt,
+        updatedAt: entry.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin update signal error:', error);
+    res.status(500).json({ error: 'Failed to update signal entry' });
+  }
+});
+
+// Delete Signal entry
+router.delete('/signal/:id', async (req, res) => {
+  try {
+    const entry = await SignalEntry.findById(req.params.id);
+
+    if (!entry) {
+      return res.status(404).json({ error: 'Signal entry not found' });
+    }
+
+    await entry.deleteOne();
+
+    console.log(`Signal entry deleted: ${req.params.id}`);
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error('Admin delete signal error:', error);
+    res.status(500).json({ error: 'Failed to delete signal entry' });
+  }
+});
+
+// ==================== APPLICATIONS ====================
+
+// List all applications
+router.get('/applications', async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+  const skip = (page - 1) * limit;
+  const status = req.query.status;
+
+  try {
+    const query = status ? { status } : {};
+
+    const [applications, total] = await Promise.all([
+      Application.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('userId', 'email firstName lastName')
+        .populate('reviewedBy', 'email firstName lastName')
+        .lean(),
+      Application.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      applications: applications.map(app => ({
+        id: app._id,
+        productName: app.productName,
+        company: app.company,
+        url: app.url,
+        deployment: app.deployment,
+        pricing: app.pricing,
+        status: app.status,
+        submittedBy: app.userId ? {
+          id: app.userId._id,
+          email: app.userId.email,
+          name: `${app.userId.firstName || ''} ${app.userId.lastName || ''}`.trim()
+        } : null,
+        reviewedBy: app.reviewedBy ? {
+          id: app.reviewedBy._id,
+          email: app.reviewedBy.email
+        } : null,
+        reviewedAt: app.reviewedAt,
+        createdAt: app.createdAt
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin list applications error:', error);
+    res.status(500).json({ error: 'Failed to list applications' });
+  }
+});
+
+// Get single application (full details)
+router.get('/applications/:id', async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .populate('userId', 'email firstName lastName')
+      .populate('reviewedBy', 'email firstName lastName')
+      .lean();
+
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    res.json({
+      success: true,
+      application: {
+        id: application._id,
+        productName: application.productName,
+        url: application.url,
+        company: application.company,
+        role: application.role,
+        useCase: application.useCase,
+        deployment: application.deployment,
+        pricing: application.pricing,
+        modelUnderneath: application.modelUnderneath,
+        description: application.description,
+        dataPolicy: application.dataPolicy,
+        whyBelongs: application.whyBelongs,
+        status: application.status,
+        rejectionReason: application.rejectionReason,
+        submittedBy: application.userId ? {
+          id: application.userId._id,
+          email: application.userId.email,
+          name: `${application.userId.firstName || ''} ${application.userId.lastName || ''}`.trim()
+        } : null,
+        reviewedBy: application.reviewedBy ? {
+          id: application.reviewedBy._id,
+          email: application.reviewedBy.email,
+          name: `${application.reviewedBy.firstName || ''} ${application.reviewedBy.lastName || ''}`.trim()
+        } : null,
+        reviewedAt: application.reviewedAt,
+        createdAt: application.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin get application error:', error);
+    res.status(500).json({ error: 'Failed to fetch application' });
+  }
+});
+
+// Review application (approve/reject)
+router.put('/applications/:id/review', async (req, res) => {
+  const { status, rejectionReason } = req.body;
+
+  if (!['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'Status must be approved or rejected' });
+  }
+
+  if (status === 'rejected' && !rejectionReason?.trim()) {
+    return res.status(400).json({ error: 'Rejection reason is required' });
+  }
+
+  try {
+    const application = await Application.findById(req.params.id);
+
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    application.status = status;
+    application.rejectionReason = status === 'rejected' ? rejectionReason.trim() : undefined;
+    application.reviewedAt = new Date();
+    application.reviewedBy = req.userId;
+
+    await application.save();
+
+    console.log(`Application ${status}: ${application.productName}`);
+
+    res.json({
+      success: true,
+      application: {
+        id: application._id,
+        productName: application.productName,
+        status: application.status,
+        reviewedAt: application.reviewedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin review application error:', error);
+    res.status(500).json({ error: 'Failed to review application' });
+  }
+});
+
+// Delete application
+router.delete('/applications/:id', async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id);
+
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    await application.deleteOne();
+
+    console.log(`Application deleted: ${req.params.id}`);
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error('Admin delete application error:', error);
+    res.status(500).json({ error: 'Failed to delete application' });
   }
 });
 

@@ -2,13 +2,17 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const cron = require('node-cron');
 const { connectDB } = require('./config/database');
+const { aggregateNews } = require('./jobs/rssAggregator');
 
 const AuthController = require('./controllers/AuthController');
 const UserController = require('./controllers/UserController');
 const FeedController = require('./controllers/FeedController');
 const AdminController = require('./controllers/AdminController');
 const AnalyticsController = require('./controllers/AnalyticsController');
+const NewsController = require('./controllers/NewsController');
+const ApplicationController = require('./controllers/ApplicationController');
 
 const app = express();
 
@@ -88,6 +92,8 @@ app.use('/api/v1/user', UserController);
 app.use('/api/v1/feed', FeedController);
 app.use('/api/v1/admin', AdminController);
 app.use('/api/v1/analytics', AnalyticsController);
+app.use('/api/v1/news', NewsController);
+app.use('/api/v1/applications', ApplicationController);
 
 // Root
 app.get('/', (req, res) => {
@@ -118,6 +124,16 @@ app.get('/', (req, res) => {
         postReview: 'POST /api/v1/feed/product/:id/review',
         editReview: 'PUT /api/v1/feed/review/:id',
         deleteReview: 'DELETE /api/v1/feed/review/:id'
+      },
+      news: {
+        feed: 'GET /api/v1/news',
+        signal: 'GET /api/v1/news/signal/:id',
+        categories: 'GET /api/v1/news/categories'
+      },
+      applications: {
+        submit: 'POST /api/v1/applications',
+        mine: 'GET /api/v1/applications/mine',
+        single: 'GET /api/v1/applications/:id'
       },
       admin: 'All admin endpoints require admin role'
     }
@@ -195,6 +211,29 @@ app.listen(PORT, () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('');
   console.log('CORS Origins:', allowedOrigins);
+  console.log('');
+
+  // Schedule RSS aggregation - every hour at minute 0
+  cron.schedule('0 * * * *', async () => {
+    console.log('[CRON] Running RSS aggregation...');
+    try {
+      await aggregateNews();
+    } catch (error) {
+      console.error('[CRON] RSS aggregation failed:', error.message);
+    }
+  });
+  console.log('RSS Aggregation: Scheduled (hourly)');
+
+  // Run initial aggregation after 30 seconds on startup
+  setTimeout(async () => {
+    console.log('[STARTUP] Running initial RSS aggregation...');
+    try {
+      await aggregateNews();
+    } catch (error) {
+      console.error('[STARTUP] Initial RSS aggregation failed:', error.message);
+    }
+  }, 30000);
+
   console.log('');
   console.log('='.repeat(50));
   console.log('');
