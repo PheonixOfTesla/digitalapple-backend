@@ -27,6 +27,60 @@ const nodeSchema = new mongoose.Schema({
     index: true
   },
 
+  // === IDENTITY LAYER ===
+
+  // Reference to the Core document (identity anchor)
+  coreId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Core',
+    index: true
+  },
+
+  // Trace from Core to this node: [{nodeId, title}, ...]
+  path: [{
+    nodeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Node',
+      required: true
+    },
+    title: {
+      type: String,
+      required: true
+    }
+  }],
+
+  // Stable identity hash: SHA-256(coreId + JSON(path))
+  stableId: {
+    type: String,
+    index: true,
+    sparse: true
+  },
+
+  // Frozen snapshot of identity-relevant fields at creation
+  essence: {
+    title: String,
+    statement: String,
+    constellation: String,
+    constellationLabel: String
+  },
+
+  // How this node was derived
+  derivation: {
+    kind: {
+      type: String,
+      enum: ['nebula', 'expand', 'manual', 'fork', null],
+      default: null
+    },
+    sourcePrompt: String,       // The prompt that generated this
+    usedTrace: {                // Whether parent trace was in LLM context
+      type: Boolean,
+      default: false
+    }
+  },
+
+  // === END IDENTITY LAYER ===
+
+
   // Node classification
   kind: {
     type: String,
@@ -203,6 +257,8 @@ nodeSchema.index({ projectId: 1, parentNodeId: 1 });
 nodeSchema.index({ projectId: 1, constellation: 1 });
 nodeSchema.index({ projectId: 1, expanded: 1 });
 nodeSchema.index({ projectId: 1, terminal: 1 });
+nodeSchema.index({ coreId: 1 });
+nodeSchema.index({ stableId: 1 }, { sparse: true });
 
 // Virtual for getting children
 nodeSchema.virtual('children', {
