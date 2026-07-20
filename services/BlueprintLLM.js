@@ -90,6 +90,7 @@ const costSchema = {
 };
 
 // JSON Schema for a star node (full - used by expand)
+// Note: OpenAI strict mode requires ALL properties in required array
 const starNodeSchema = {
   type: 'object',
   properties: {
@@ -99,11 +100,11 @@ const starNodeSchema = {
     confidence: confidenceSchema,
     stage: { type: 'integer', minimum: 0, maximum: 9 },
     status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] },
-    dependencies: { type: 'array', items: { type: 'string' } },
-    cost: costSchema,
-    sources: { type: 'array', items: { type: 'string' } }
+    dependencies: { type: ['array', 'null'], items: { type: 'string' } },
+    cost: { ...costSchema, type: ['object', 'null'] },
+    sources: { type: ['array', 'null'], items: { type: 'string' } }
   },
-  required: ['statement', 'detail', 'scores', 'confidence', 'stage', 'status'],
+  required: ['statement', 'detail', 'scores', 'confidence', 'stage', 'status', 'dependencies', 'cost', 'sources'],
   additionalProperties: false
 };
 
