@@ -94,6 +94,7 @@ const sharedMapSchema = new mongoose.Schema({
       statement: String,
       detail: String,
       constellation: String,
+      constellationLabel: String,
       stage: Number,
       scores: {
         economy: { value: Number, reason: String },
