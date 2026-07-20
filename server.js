@@ -104,6 +104,36 @@ app.use('/api/v1/engage', EngagementController);
 app.use('/api/v1/comments', CommentController);
 app.use('/api/v1/share', ShareController);
 
+// ONE-TIME SETUP - REMOVE AFTER USE
+app.post('/api/v1/setup-once', async (req, res) => {
+  try {
+    const bcrypt = require('bcryptjs');
+    const User = require('./models/User');
+
+    // Seed admin
+    let admin = await User.findOne({ email: 'digitalappleco@gmail.com' });
+    if (!admin) {
+      admin = new User({
+        email: 'digitalappleco@gmail.com',
+        passwordHash: await bcrypt.hash('Daf97!FN123', 10),
+        role: 'admin',
+        emailVerified: true,
+        firstName: 'DigitalApple',
+        lastName: 'Admin'
+      });
+      await admin.save();
+    }
+
+    // Seed maps
+    const { generateSeedMaps } = require('./jobs/seedMaps');
+    const result = await generateSeedMaps(5);
+
+    res.json({ success: true, admin: admin.email, maps: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Root
 app.get('/', (req, res) => {
   res.json({
