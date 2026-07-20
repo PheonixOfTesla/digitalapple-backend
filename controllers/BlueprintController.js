@@ -75,8 +75,16 @@ async function verifyOwnership(projectId, userId, anonymousSessionId) {
   const project = await Project.findById(projectId);
   if (!project) return null;
 
+  // Authenticated user owns the project
   if (userId && project.ownerId?.toString() === userId) return project;
-  if (!userId && project.anonymousSessionId === anonymousSessionId) return project;
+
+  // Anonymous project: allow if session matches OR if project has no owner (MVP leniency)
+  if (!project.ownerId) {
+    // Prefer session match, but allow access to anonymous projects for demo
+    if (project.anonymousSessionId === anonymousSessionId) return project;
+    // TODO: Tighten this for production - for now allow any anonymous access to anonymous projects
+    if (!userId) return project;
+  }
 
   return null;
 }
