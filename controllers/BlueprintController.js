@@ -333,6 +333,60 @@ router.delete('/projects/:id', optionalAuth, async (req, res) => {
   }
 });
 
+// Get project lineage (fork origin for frontend display)
+router.get('/projects/:id/lineage', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.id, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Get Core document
+    const coreDoc = await Core.findOne({ projectId: project._id });
+
+    const lineage = {
+      hasCore: !!coreDoc,
+      coreId: coreDoc?._id.toString() || null,
+      premise: coreDoc?.premise || project.premise
+    };
+
+    // Fork origin from Core.origin
+    if (coreDoc?.origin?.coreId) {
+      const originCore = await Core.findById(coreDoc.origin.coreId);
+      const originProject = originCore
+        ? await Project.findById(originCore.projectId)
+        : null;
+
+      lineage.origin = {
+        coreId: coreDoc.origin.coreId.toString(),
+        projectId: coreDoc.origin.projectId?.toString(),
+        projectName: originProject?.name,
+        forkedAt: coreDoc.origin.forkedAt,
+        forkedBy: coreDoc.origin.forkedBy?.toString()
+      };
+    }
+
+    // Fork origin from Project.forkedFrom (map-level)
+    if (project.forkedFrom?.mapId) {
+      lineage.forkedFromMap = {
+        mapId: project.forkedFrom.mapId.toString(),
+        mapTitle: project.forkedFrom.mapTitle,
+        ownerId: project.forkedFrom.ownerId?.toString(),
+        ownerName: project.forkedFrom.ownerName
+      };
+    }
+
+    res.json({
+      success: true,
+      projectId: project._id.toString(),
+      lineage
+    });
+  } catch (error) {
+    console.error('Get project lineage error:', error);
+    res.status(500).json({ error: 'Failed to get lineage' });
+  }
+});
+
 // Claim anonymous project (attach to user on login)
 router.post('/projects/:id/claim', verifyToken, async (req, res) => {
   try {
@@ -524,6 +578,174 @@ router.delete('/nodes/:id', optionalAuth, async (req, res) => {
   } catch (error) {
     console.error('Delete node error:', error);
     res.status(500).json({ error: 'Failed to delete node' });
+  }
+});
+
+// Get node by stableId (cross-project identity lookup)
+router.get('/nodes/by-stable/:stableId', optionalAuth, async (req, res) => {
+  try {
+    const { stableId } = req.params;
+
+    if (!stableId || stableId.length !== 64) {
+      return res.status(400).json({ error: 'Invalid stableId format' });
+    }
+
+    const node = await Node.findOne({ stableId }).lean();
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    // Verify ownership for full access, or return limited info for public maps
+    const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
+
+    if (project) {
+      // Full access - return complete node
+      res.json({
+        success: true,
+        node: formatNodeForClient(node),
+        projectId: node.projectId.toString(),
+        projectName: project.name
+      });
+    } else {
+      // Check if this is a public shared map
+      const SharedMap = require('../models/SharedMap');
+      const sharedMap = await SharedMap.findOne({
+        projectId: node.projectId,
+        visibility: { $ne: 'private' },
+        unpublishedAt: null
+      });
+
+      if (sharedMap) {
+        // Public map - return limited info
+        res.json({
+          success: true,
+          node: {
+            id: node._id.toString(),
+            stableId: node.stableId,
+            title: node.title,
+            statement: node.statement,
+            kind: node.kind
+          },
+          projectId: node.projectId.toString(),
+          isPublic: true,
+          mapId: sharedMap._id.toString()
+        });
+      } else {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+    }
+  } catch (error) {
+    console.error('Get node by stableId error:', error);
+    res.status(500).json({ error: 'Failed to get node' });
+  }
+});
+
+// Verify node identity (debugging/admin endpoint)
+router.get('/nodes/:id/verify-identity', optionalAuth, async (req, res) => {
+  try {
+    const node = await Node.findById(req.params.id);
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Quick verification (no DB lookups)
+    const quickResult = identity.quickVerifyIdentity(node);
+
+    // Full verification (with DB lookups)
+    const fullResult = await identity.verifyNodeIdentity(node);
+
+    res.json({
+      success: true,
+      nodeId: node._id.toString(),
+      quickCheck: quickResult,
+      fullCheck: fullResult,
+      identity: {
+        coreId: node.coreId?.toString() || null,
+        stableId: node.stableId || null,
+        pathLength: node.path?.length || 0,
+        derivation: node.derivation || null
+      }
+    });
+  } catch (error) {
+    console.error('Verify node identity error:', error);
+    res.status(500).json({ error: 'Failed to verify identity' });
+  }
+});
+
+// Get node lineage (fork origin tracking)
+router.get('/nodes/:id/lineage', optionalAuth, async (req, res) => {
+  try {
+    const node = await Node.findById(req.params.id);
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Get Core for this node
+    const coreDoc = node.coreId
+      ? await Core.findById(node.coreId)
+      : await Core.findOne({ projectId: node.projectId });
+
+    if (!coreDoc) {
+      return res.json({
+        success: true,
+        lineage: null,
+        message: 'No identity anchor found'
+      });
+    }
+
+    // Build lineage response
+    const lineage = {
+      coreId: coreDoc._id.toString(),
+      premise: coreDoc.premise,
+      path: node.path || [],
+      stableId: node.stableId,
+      derivation: node.derivation
+    };
+
+    // If this project was forked, include origin info
+    if (coreDoc.origin?.coreId) {
+      const originCore = await Core.findById(coreDoc.origin.coreId);
+      const originProject = originCore
+        ? await Project.findById(originCore.projectId)
+        : null;
+
+      lineage.forkedFrom = {
+        coreId: coreDoc.origin.coreId.toString(),
+        projectId: coreDoc.origin.projectId?.toString(),
+        projectName: originProject?.name,
+        forkedAt: coreDoc.origin.forkedAt
+      };
+    }
+
+    // Also check Project.forkedFrom for map origin
+    if (project.forkedFrom?.mapId) {
+      const SharedMap = require('../models/SharedMap');
+      const sourceMap = await SharedMap.findById(project.forkedFrom.mapId);
+
+      lineage.forkedFromMap = {
+        mapId: project.forkedFrom.mapId.toString(),
+        mapTitle: project.forkedFrom.mapTitle || sourceMap?.title,
+        ownerName: project.forkedFrom.ownerName
+      };
+    }
+
+    res.json({
+      success: true,
+      lineage
+    });
+  } catch (error) {
+    console.error('Get node lineage error:', error);
+    res.status(500).json({ error: 'Failed to get lineage' });
   }
 });
 
