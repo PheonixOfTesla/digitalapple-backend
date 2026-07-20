@@ -257,8 +257,7 @@ nodeSchema.index({ projectId: 1, parentNodeId: 1 });
 nodeSchema.index({ projectId: 1, constellation: 1 });
 nodeSchema.index({ projectId: 1, expanded: 1 });
 nodeSchema.index({ projectId: 1, terminal: 1 });
-nodeSchema.index({ coreId: 1 });
-nodeSchema.index({ stableId: 1 }, { sparse: true });
+// Note: coreId and stableId indexes already declared inline with field definitions
 
 // Virtual for getting children
 nodeSchema.virtual('children', {
