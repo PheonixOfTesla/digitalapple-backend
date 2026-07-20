@@ -44,9 +44,15 @@ const userQuotaSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound indexes
-userQuotaSchema.index({ userId: 1, date: 1 }, { unique: true, sparse: true });
-userQuotaSchema.index({ anonymousSessionId: 1, date: 1 }, { unique: true, sparse: true });
+// Compound indexes with partial filter - unique only when field exists
+userQuotaSchema.index(
+  { userId: 1, date: 1 },
+  { unique: true, partialFilterExpression: { userId: { $type: 'objectId' } } }
+);
+userQuotaSchema.index(
+  { anonymousSessionId: 1, date: 1 },
+  { unique: true, partialFilterExpression: { anonymousSessionId: { $type: 'string' } } }
+);
 
 // TTL - auto-delete after 7 days
 userQuotaSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });

@@ -45,22 +45,24 @@ async function checkQuota(userId, anonymousSessionId, type) {
     ? { userId, date }
     : { anonymousSessionId, date };
 
-  let quota = await UserQuota.findOne(query);
-  if (!quota) {
-    quota = new UserQuota({ ...query, chatRequests: 0, projectsCreated: 0 });
-  }
-
   const field = type === 'chat' ? 'chatRequests' : 'projectsCreated';
   const limit = type === 'chat' ? limits.chat : limits.projects;
+
+  // Atomically find or create quota, then check limit before incrementing
+  const quota = await UserQuota.findOneAndUpdate(
+    query,
+    { $setOnInsert: { chatRequests: 0, projectsCreated: 0 } },
+    { upsert: true, new: true }
+  );
 
   if (quota[field] >= limit) {
     return { allowed: false, remaining: 0, limit };
   }
 
-  quota[field]++;
-  await quota.save();
+  // Increment the field
+  await UserQuota.updateOne(query, { $inc: { [field]: 1 } });
 
-  return { allowed: true, remaining: limit - quota[field], limit };
+  return { allowed: true, remaining: limit - quota[field] - 1, limit };
 }
 
 // Helper: verify project ownership
