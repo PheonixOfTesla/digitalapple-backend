@@ -754,24 +754,18 @@ router.get('/projects/:projectId/chat', optionalAuth, async (req, res) => {
 // Get quota status
 router.get('/quota', optionalAuth, async (req, res) => {
   try {
-    const date = getToday();
     const isAuth = !!req.userId;
     const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
 
     const query = req.userId
-      ? { userId: req.userId, date }
-      : { anonymousSessionId: req.anonymousSessionId, date };
+      ? { userId: req.userId }
+      : { anonymousSessionId: req.anonymousSessionId };
 
     const quota = await UserQuota.findOne(query);
 
     res.json({
       success: true,
       quota: {
-        chatRequests: {
-          used: quota?.chatRequests || 0,
-          limit: limits.chat,
-          remaining: limits.chat - (quota?.chatRequests || 0)
-        },
         projectsCreated: {
           used: quota?.projectsCreated || 0,
           limit: limits.projects,
