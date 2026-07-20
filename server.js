@@ -138,6 +138,7 @@ app.post('/api/v1/setup-once', async (req, res) => {
 app.post('/api/v1/force-seed', async (req, res) => {
   try {
     const crypto = require('crypto');
+    const mongoose = require('mongoose');
     const User = require('./models/User');
     const Project = require('./models/Project');
     const Node = require('./models/Node');
@@ -175,7 +176,7 @@ app.post('/api/v1/force-seed', async (req, res) => {
       await project.save();
 
       // Create core node
-      const coreId = new require('mongoose').Types.ObjectId();
+      const coreId = new mongoose.Types.ObjectId();
       await new Node({
         _id: coreId,
         projectId: project._id,
@@ -190,7 +191,7 @@ app.post('/api/v1/force-seed', async (req, res) => {
       const nodeIds = [coreId];
       for (let i = 0; i < constellations.length; i++) {
         const angle = (2 * Math.PI * i / constellations.length) - Math.PI/2;
-        const nodeId = new require('mongoose').Types.ObjectId();
+        const nodeId = new mongoose.Types.ObjectId();
         nodeIds.push(nodeId);
         await new Node({
           _id: nodeId,
@@ -224,7 +225,7 @@ app.post('/api/v1/force-seed', async (req, res) => {
         snapshot: {
           core: { _id: coreNode._id, label: coreNode.title, statement: coreNode.statement, x: coreNode.x, y: coreNode.y },
           nodes: otherNodes.map(n => ({ _id: n._id, parentNodeId: n.parentNodeId, label: n.title, statement: n.statement, constellation: n.constellation, status: n.status, depth: n.depth, x: n.x, y: n.y })),
-          edges: otherNodes.map(n => ({ _id: new require('mongoose').Types.ObjectId(), sourceId: coreNode._id, targetId: n._id }))
+          edges: otherNodes.map(n => ({ _id: new mongoose.Types.ObjectId(), sourceId: coreNode._id, targetId: n._id }))
         },
         publishedAt: new Date(),
         ownerName: 'Clockwork',
