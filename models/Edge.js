@@ -32,7 +32,7 @@ const edgeSchema = new mongoose.Schema({
   // Edge type for styling
   type: {
     type: String,
-    enum: ['dependency', 'alternative', 'expansion', 'rejection'],
+    enum: ['dependency', 'alternative', 'expansion', 'rejection', 'contains'],
     default: 'dependency'
   }
 }, {
