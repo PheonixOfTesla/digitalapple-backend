@@ -619,16 +619,22 @@ Target: 6-14 total nodes for a short premise. Depth comes from expansion, not fr
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt }
-        ],
-        response_format: {
+        ]
+      };
+
+      // Use strict JSON schema for OpenAI, simple JSON mode for other providers
+      if (provider === 'openai') {
+        requestParams.response_format = {
           type: 'json_schema',
           json_schema: {
             name: 'nebula_response',
             strict: true,
             schema: nebulaResponseSchema
           }
-        }
-      };
+        };
+      } else {
+        requestParams.response_format = { type: 'json_object' };
+      }
 
       // Safety net: retry with higher tokens (should rarely fire after payload reduction)
       if (attempt > 0) {
@@ -700,16 +706,22 @@ Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt }
-        ],
-        response_format: {
+        ]
+      };
+
+      // Use strict JSON schema for OpenAI, simple JSON mode for other providers
+      if (provider === 'openai') {
+        requestParams.response_format = {
           type: 'json_schema',
           json_schema: {
             name: 'expand_response',
             strict: true,
             schema: expandResponseSchema
           }
-        }
-      };
+        };
+      } else {
+        requestParams.response_format = { type: 'json_object' };
+      }
 
       if (attempt > 0) {
         requestParams.max_tokens = 6000;
@@ -774,16 +786,22 @@ If no canvas changes needed, return empty ops array.`;
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt }
-        ],
-        response_format: {
+        ]
+      };
+
+      // Use strict JSON schema for OpenAI, simple JSON mode for other providers
+      if (provider === 'openai') {
+        requestParams.response_format = {
           type: 'json_schema',
           json_schema: {
             name: 'chat_response',
             strict: true,
             schema: chatResponseSchema
           }
-        }
-      };
+        };
+      } else {
+        requestParams.response_format = { type: 'json_object' };
+      }
 
       if (attempt > 0) {
         requestParams.max_tokens = 3000;
