@@ -41,6 +41,11 @@ async function checkQuota(userId, anonymousSessionId, type) {
   const isAuth = !!userId;
   const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
 
+  // Must have either userId or anonymousSessionId
+  if (!userId && !anonymousSessionId) {
+    return { allowed: false, remaining: 0, limit: 0, error: 'No session identifier' };
+  }
+
   const query = userId
     ? { userId, date }
     : { anonymousSessionId, date };
@@ -89,8 +94,15 @@ async function optionalAuth(req, res, next) {
       // Invalid token, continue as anonymous
     }
   }
-  // Get or create anonymous session ID
+  // Get session ID from header/query, or use IP+UA hash as fallback
   req.anonymousSessionId = req.headers['x-session-id'] || req.query.sessionId;
+  if (!req.anonymousSessionId && !req.userId) {
+    // Generate deterministic session from IP + User-Agent
+    const crypto = require('crypto');
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const ua = req.headers['user-agent'] || 'unknown';
+    req.anonymousSessionId = crypto.createHash('sha256').update(`${ip}:${ua}`).digest('hex').slice(0, 16);
+  }
   next();
 }
 
