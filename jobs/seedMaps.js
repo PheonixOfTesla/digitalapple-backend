@@ -21,8 +21,10 @@ const SharedMap = require('../models/SharedMap');
 const Project = require('../models/Project');
 const Node = require('../models/Node');
 const Edge = require('../models/Edge');
+const Core = require('../models/Core');
 const User = require('../models/User');
 const NewsItem = require('../models/NewsItem');
+const identity = require('../services/identity');
 
 // System user email for seed maps
 const CLOCKWORK_EMAIL = 'system@clockwork.app';
@@ -366,45 +368,126 @@ async function createSeedMap(user, topic) {
   // Generate graph
   const { nodes, edges } = generateBasicGraph(premise, category);
 
-  // Save nodes
-  for (const nodeData of nodes) {
+  // Find core node to create Core document
+  const coreNodeData = nodes.find(n => n.depth === 0);
+  if (!coreNodeData) {
+    throw new Error('No core node in generated graph');
+  }
+
+  // Save core node first
+  const coreNode = new Node({
+    ...coreNodeData,
+    projectId: project._id,
+    kind: 'core',
+    title: coreNodeData.label
+  });
+  await coreNode.save();
+
+  // Create Core document (identity anchor)
+  const coreDoc = new Core({
+    projectId: project._id,
+    coreNodeId: coreNode._id,
+    premise: premise,
+    classification: {
+      type: category === 'business' ? 'venture' :
+            category === 'career' ? 'career' :
+            category === 'product' ? 'venture' :
+            category === 'creative' ? 'creative-work' : 'unknown',
+      confidence: 0.7,
+      alternates: [],
+      reasoning: 'Seed map classification'
+    },
+    frameMeta: {
+      selectedType: category,
+      confidence: 0.7,
+      usedFallback: false
+    },
+    stagesEnabled: true
+  });
+  await coreDoc.save();
+
+  // Assign identity to core node
+  const corePath = [{ nodeId: coreNode._id, title: coreNode.title || coreNode.label }];
+  coreNode.coreId = coreDoc._id;
+  coreNode.path = corePath;
+  coreNode.stableId = identity.computeStableId(coreDoc._id, corePath);
+  coreNode.essence = identity.freezeEssence(coreNode);
+  coreNode.derivation = { kind: 'nebula', sourcePrompt: premise, usedTrace: false };
+  await coreNode.save();
+
+  // Build nodeId map for path building
+  const nodeIdMap = new Map();
+  nodeIdMap.set(coreNodeData._id.toString(), coreNode._id);
+
+  // Save other nodes with identity
+  const otherNodes = nodes.filter(n => n.depth > 0);
+  for (const nodeData of otherNodes) {
+    const parentId = nodeData.parentNodeId ? nodeIdMap.get(nodeData.parentNodeId.toString()) : coreNode._id;
+
     const node = new Node({
       ...nodeData,
-      projectId: project._id
+      projectId: project._id,
+      parentNodeId: parentId,
+      kind: nodeData.depth === 1 ? 'constellation' : 'star',
+      title: nodeData.label
     });
+    await node.save();
+    nodeIdMap.set(nodeData._id.toString(), node._id);
+
+    // Build path from parent
+    const parentNode = await Node.findById(parentId);
+    const parentPath = parentNode?.path || corePath;
+    const nodePath = [...parentPath, { nodeId: node._id, title: node.title || node.label }];
+
+    node.coreId = coreDoc._id;
+    node.path = nodePath;
+    node.stableId = identity.computeStableId(coreDoc._id, nodePath);
+    node.essence = identity.freezeEssence(node);
+    node.derivation = { kind: 'nebula', sourcePrompt: premise, usedTrace: true };
     await node.save();
   }
 
-  // Save edges
+  // Save edges with updated IDs
   for (const edgeData of edges) {
-    const edge = new Edge({
-      ...edgeData,
-      projectId: project._id
-    });
-    await edge.save();
+    const fromId = nodeIdMap.get(edgeData.sourceId.toString());
+    const toId = nodeIdMap.get(edgeData.targetId.toString());
+    if (fromId && toId) {
+      const edge = new Edge({
+        _id: edgeData._id,
+        projectId: project._id,
+        fromNodeId: fromId,
+        toNodeId: toId,
+        type: 'contains'
+      });
+      await edge.save();
+    }
   }
 
-  // Build snapshot
-  const coreNode = nodes.find(n => n.depth === 0);
-  const otherNodes = nodes.filter(n => n.depth > 0);
-  const coverage = calculateCoverage(nodes);
+  // Build snapshot from saved nodes (with correct IDs)
+  const savedNodes = await Node.find({ projectId: project._id }).lean();
+  const savedCoreNode = savedNodes.find(n => n.kind === 'core');
+  const savedOtherNodes = savedNodes.filter(n => n.kind !== 'core');
+  const coverage = calculateCoverage(savedNodes.map(n => ({ ...n, depth: n.depth || 0 })));
 
   const snapshot = {
-    core: coreNode ? {
-      _id: coreNode._id,
-      label: coreNode.label,
-      statement: coreNode.statement,
-      detail: coreNode.detail,
-      x: coreNode.x,
-      y: coreNode.y
+    core: savedCoreNode ? {
+      _id: savedCoreNode._id,
+      label: savedCoreNode.label || savedCoreNode.title,
+      title: savedCoreNode.title,
+      statement: savedCoreNode.statement,
+      detail: savedCoreNode.detail,
+      x: savedCoreNode.x,
+      y: savedCoreNode.y
     } : null,
-    nodes: otherNodes.map(n => ({
+    nodes: savedOtherNodes.map(n => ({
       _id: n._id,
       parentNodeId: n.parentNodeId,
-      label: n.label,
+      label: n.label || n.title,
+      title: n.title,
       statement: n.statement,
       detail: n.detail,
       constellation: n.constellation,
+      constellationLabel: n.constellationLabel,
       stage: n.stage,
       scores: n.scores,
       confidence: n.confidence,
@@ -413,10 +496,10 @@ async function createSeedMap(user, topic) {
       x: n.x,
       y: n.y
     })),
-    edges: edges.map(e => ({
+    edges: (await Edge.find({ projectId: project._id }).lean()).map(e => ({
       _id: e._id,
-      sourceId: e.sourceId,
-      targetId: e.targetId
+      sourceId: e.fromNodeId,
+      targetId: e.toNodeId
     }))
   };
 
