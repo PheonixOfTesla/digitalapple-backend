@@ -398,6 +398,95 @@ async function calculateProjectCoverage(projectId) {
   };
 }
 
+/**
+ * Calculate resolution gauge for a project.
+ * Resolution = how far the map has walked toward actual behavior.
+ *
+ * Unlike coverage (how explored), resolution measures how REAL:
+ * - Only counts LIVE nodes (non-dormant, non-rejected)
+ * - Measures what fraction of leaf branches are WALLED (terminal)
+ * - Weighted by grounding (confidence)
+ *
+ * HONESTY RULE:
+ * - Dormant nodes (basis 'unknown') do NOT contribute
+ * - Adding dormant nodes cannot raise the gauge
+ * - Only grounded terminal nodes increase resolution
+ *
+ * @param {string} projectId - The project ID
+ * @returns {Promise<{resolution: number, walledCount: number, liveCount: number, dormantCount: number}>}
+ */
+async function calculateResolution(projectId) {
+  // Get all nodes for this project
+  const allNodes = await Node.find({ projectId }).lean();
+
+  if (allNodes.length === 0) {
+    return { resolution: 0, walledCount: 0, liveCount: 0, dormantCount: 0 };
+  }
+
+  // Build parent-child lookup to identify leaf nodes
+  const childrenOf = new Map();
+  for (const node of allNodes) {
+    const parentId = node.parentNodeId?.toString();
+    if (parentId) {
+      if (!childrenOf.has(parentId)) {
+        childrenOf.set(parentId, []);
+      }
+      childrenOf.get(parentId).push(node);
+    }
+  }
+
+  // Categorize nodes by liveness
+  let walledCount = 0;
+  let walledWeight = 0;
+  let liveCount = 0;
+  let liveWeight = 0;
+  let dormantCount = 0;
+
+  for (const node of allNodes) {
+    // Skip rejected nodes
+    if (node.kind === 'rejected') continue;
+
+    const basis = node.confidence?.basis || 'unknown';
+    const confidence = node.confidence?.value || 0;
+    const isTerminal = node.terminal || false;
+    const nodeId = node._id.toString();
+
+    // Check if this is a leaf (no children) or terminal
+    const hasChildren = childrenOf.has(nodeId) && childrenOf.get(nodeId).length > 0;
+    const isLeafOrTerminal = !hasChildren || isTerminal;
+
+    if (basis === 'unknown' && !isTerminal) {
+      // DORMANT: has identity but no content - does NOT contribute
+      dormantCount++;
+      continue;
+    }
+
+    if (isTerminal) {
+      // WALLED: arrived at an actionable element
+      walledCount++;
+      walledWeight += confidence;
+      liveCount++;
+      liveWeight += confidence;
+    } else if (isLeafOrTerminal && basis !== 'unknown') {
+      // OPEN leaf: grounded but could go deeper - contributes to live but not walled
+      liveCount++;
+      liveWeight += confidence;
+    }
+    // Non-leaf open nodes are branches, not endpoints - don't count as "needing to reach wall"
+  }
+
+  // Resolution = (walled weight) / (live weight)
+  // This is the fraction of live grounding that has reached walls
+  const resolution = liveWeight > 0 ? walledWeight / liveWeight : 0;
+
+  return {
+    resolution: Math.round(resolution * 100) / 100, // 0.00 - 1.00
+    walledCount,
+    liveCount,
+    dormantCount
+  };
+}
+
 module.exports = {
   generateMap,
   previewClassification,
@@ -406,5 +495,6 @@ module.exports = {
   expandAsSubNebula,
   expandNode,
   calculateNodeCoverage,
-  calculateProjectCoverage
+  calculateProjectCoverage,
+  calculateResolution
 };

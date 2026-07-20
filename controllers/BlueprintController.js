@@ -258,9 +258,12 @@ router.get('/projects/:id', optionalAuth, async (req, res) => {
       Edge.find({ projectId: project._id }).lean()
     ]);
 
-    // Calculate depth-relative coverage
+    // Calculate depth-relative coverage and resolution
     const blueprint = getBlueprint();
-    const coverage = await blueprint.calculateProjectCoverage(project._id);
+    const [coverage, resolution] = await Promise.all([
+      blueprint.calculateProjectCoverage(project._id),
+      blueprint.calculateResolution(project._id)
+    ]);
 
     res.json({
       success: true,
@@ -272,6 +275,7 @@ router.get('/projects/:id', optionalAuth, async (req, res) => {
         blueprint: project.blueprint
       },
       coverage,
+      resolution, // Idea → Behavior gauge (distinct from coverage)
       nodes: nodes.map(formatNodeForClient),
       edges: edges.map(e => ({
         id: e._id,
@@ -1817,6 +1821,21 @@ function mapFrameIdToConstellation(frameId) {
 
 // Format node for client response
 function formatNodeForClient(node) {
+  // Derive liveness from existing flags (no new persisted field)
+  // WALLED: terminal === true (arrived at actionable element)
+  // DORMANT: basis === 'unknown' AND not terminal (empty doorway)
+  // OPEN: grounded (basis stated/inferred) AND not terminal (live limb)
+  const basis = node.confidence?.basis || 'unknown';
+  const isTerminal = node.terminal || false;
+  let liveness;
+  if (isTerminal) {
+    liveness = 'walled';
+  } else if (basis === 'unknown') {
+    liveness = 'dormant';
+  } else {
+    liveness = 'open';
+  }
+
   return {
     id: node._id?.toString() || node.id,
     kind: node.kind,
@@ -1844,6 +1863,8 @@ function formatNodeForClient(node) {
     terminal: node.terminal || false,
     expansionType: node.expansionType || null,
     subFrameType: node.subFrameType || null,
+    // Liveness (derived, not persisted)
+    liveness,
     // Identity fields
     coreId: node.coreId?.toString() || null,
     stableId: node.stableId || null,
