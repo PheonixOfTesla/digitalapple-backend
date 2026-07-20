@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "frames": {
+    "venture": {
+      "label": "Venture",
+      "description": "A business, product, or service",
+      "roots": [
+        { "key": "who",   "label": "Customers",   "covers": "segments, demand, who pays" },
+        { "key": "what",  "label": "The Offer",   "covers": "product/service, positioning" },
+        { "key": "where", "label": "Channel",     "covers": "market, distribution, GTM" },
+        { "key": "when",  "label": "Sequence",    "covers": "build order, milestones" },
+        { "key": "why",   "label": "The Wedge",   "covers": "why this wins, moat" },
+        { "key": "how",   "label": "Operations",  "covers": "delivery, supply, team" },
+        { "key": "risk",  "label": "Risk",        "covers": "what breaks it", "optional": true }
+      ],
+      "stagesEnabled": true
+    },
+    "event": {
+      "label": "Event",
+      "description": "A gathering, party, wedding, reunion, conference",
+      "roots": [
+        { "key": "who",   "label": "Guests",           "covers": "who's coming, headcount, RSVPs" },
+        { "key": "what",  "label": "What Happens",     "covers": "program, activities, flow" },
+        { "key": "where", "label": "Where & When",     "covers": "venue, date, logistics of place" },
+        { "key": "how",   "label": "The Work",         "covers": "setup, catering, who does what" },
+        { "key": "why",   "label": "Budget",           "covers": "what it costs, who pays" },
+        { "key": "risk",  "label": "What Could Go Wrong", "covers": "weather, no-shows, conflicts", "optional": true }
+      ],
+      "stagesEnabled": false
+    },
+    "personal-goal": {
+      "label": "Personal Goal",
+      "description": "Learning a skill, fitness, a habit, self-improvement",
+      "roots": [
+        { "key": "when",  "label": "Milestones",    "covers": "what done looks like, checkpoints" },
+        { "key": "what",  "label": "What It Takes", "covers": "skills, knowledge, equipment" },
+        { "key": "how",   "label": "Time & Routine","covers": "schedule, practice, cadence" },
+        { "key": "who",   "label": "Support",       "covers": "coaches, community, accountability" },
+        { "key": "risk",  "label": "Obstacles",     "covers": "what derails it", "optional": true },
+        { "key": "why",   "label": "Why It Matters","covers": "the payoff, motivation" }
+      ],
+      "stagesEnabled": false
+    },
+    "creative-work": {
+      "label": "Creative Work",
+      "description": "A novel, film, album, game, art project",
+      "roots": [
+        { "key": "who",   "label": "Cast",      "covers": "characters, people, voices" },
+        { "key": "what",  "label": "Structure", "covers": "plot, form, arc, composition" },
+        { "key": "where", "label": "Setting",   "covers": "world, tone, medium" },
+        { "key": "how",   "label": "Craft",     "covers": "technique, production, tools" },
+        { "key": "why",   "label": "Audience",  "covers": "who it's for, why it lands" },
+        { "key": "when",  "label": "Sequence",  "covers": "draft, revise, finish" }
+      ],
+      "stagesEnabled": false
+    },
+    "life-transition": {
+      "label": "Life Transition",
+      "description": "Moving, divorce, retirement, new baby, major change",
+      "roots": [
+        { "key": "what",  "label": "The Change",  "covers": "what's actually shifting" },
+        { "key": "who",   "label": "People",      "covers": "who's affected, who helps" },
+        { "key": "how",   "label": "Logistics",   "covers": "the practical moves" },
+        { "key": "when",  "label": "Timeline",    "covers": "sequence, deadlines, phases" },
+        { "key": "why",   "label": "Money",       "covers": "financial side" },
+        { "key": "risk",  "label": "What's Hard", "covers": "the friction, the fear", "optional": true }
+      ],
+      "stagesEnabled": false
+    },
+    "career": {
+      "label": "Career",
+      "description": "A job search, promotion path, switching fields",
+      "roots": [
+        { "key": "where", "label": "Target",       "covers": "roles, companies, market" },
+        { "key": "what",  "label": "Your Case",    "covers": "portfolio, story, evidence" },
+        { "key": "risk",  "label": "Gaps",         "covers": "skills/experience to close", "optional": true },
+        { "key": "who",   "label": "Network",      "covers": "people, referrals, mentors" },
+        { "key": "when",  "label": "Timeline",     "covers": "when, milestones" },
+        { "key": "how",   "label": "The Approach", "covers": "applications, outreach, prep" }
+      ],
+      "stagesEnabled": true
+    },
+    "research": {
+      "label": "Research",
+      "description": "A study, investigation, thesis, deep question",
+      "roots": [
+        { "key": "why",   "label": "The Question", "covers": "what you're actually asking" },
+        { "key": "what",  "label": "What's Known", "covers": "prior work, existing evidence" },
+        { "key": "how",   "label": "Method",       "covers": "approach, data, tools" },
+        { "key": "who",   "label": "Sources",      "covers": "who to talk to, where to look" },
+        { "key": "when",  "label": "Sequence",     "covers": "phases of the work" },
+        { "key": "risk",  "label": "Unknowns",     "covers": "gaps, risks to the conclusion", "optional": true }
+      ],
+      "stagesEnabled": false
+    },
+    "campaign": {
+      "label": "Campaign",
+      "description": "A launch, fundraiser, movement, marketing push",
+      "roots": [
+        { "key": "who",   "label": "Audience",   "covers": "who you're reaching" },
+        { "key": "what",  "label": "The Message","covers": "the core ask, the story" },
+        { "key": "where", "label": "Channels",   "covers": "where it runs" },
+        { "key": "when",  "label": "Sequence",   "covers": "timeline, phases, moments" },
+        { "key": "why",   "label": "The Goal",   "covers": "what success is, the number" },
+        { "key": "how",   "label": "Execution",  "covers": "who does what, assets" },
+        { "key": "risk",  "label": "Risk",       "covers": "what could sink it", "optional": true }
+      ],
+      "stagesEnabled": true
+    }
+  },
+  "fallback": {
+    "label": "General",
+    "description": "Raw W-spine, model names roots from premise",
+    "roots": [
+      { "key": "who",   "label": null, "covers": "who is this for, who is involved" },
+      { "key": "what",  "label": null, "covers": "the thing itself" },
+      { "key": "where", "label": null, "covers": "channel, place, market, setting" },
+      { "key": "when",  "label": null, "covers": "sequence, timeline, phases" },
+      { "key": "why",   "label": null, "covers": "the wedge, the reason, the payoff" },
+      { "key": "how",   "label": null, "covers": "operations, the work, execution" }
+    ],
+    "stagesEnabled": false
+  }
+}

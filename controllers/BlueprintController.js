@@ -22,6 +22,15 @@ function getLLM() {
   return BlueprintLLM;
 }
 
+// Frame-aware blueprint service (new premise type system)
+let BlueprintService = null;
+function getBlueprint() {
+  if (!BlueprintService) {
+    BlueprintService = require('../services/blueprint');
+  }
+  return BlueprintService;
+}
+
 const router = express.Router();
 
 // Quota limits
@@ -822,14 +831,15 @@ router.get('/quota', optionalAuth, async (req, res) => {
 
 /**
  * Auto-layout positions for nebula nodes
- * Core at center, constellations in a ring, children clustered near parent
+ * Core at center, roots in a ring, stars clustered near parent
+ * Works with both old constellations format and new roots format
  */
 function computeLayout(nebula) {
   const CANVAS_CENTER_X = 600;
   const CANVAS_CENTER_Y = 400;
-  const CONSTELLATION_RADIUS = 280;
-  const CHILD_RADIUS = 120;
-  const CHILD_SPREAD = 0.4; // radians spread for children
+  const ROOT_RADIUS = 280;
+  const STAR_RADIUS = 120;
+  const STAR_SPREAD = 0.4; // radians spread for stars
 
   const positions = [];
 
@@ -840,28 +850,31 @@ function computeLayout(nebula) {
     y: CANVAS_CENTER_Y
   });
 
-  // 6 constellations evenly distributed
-  const constellationAngles = {};
-  nebula.constellations.forEach((c, i) => {
-    const angle = (i * 2 * Math.PI / 6) - Math.PI / 2; // Start from top
-    constellationAngles[c.constellation] = angle;
+  // Support both old (constellations) and new (roots) format
+  const roots = nebula.roots || nebula.constellations || [];
+  const rootCount = roots.length || 6;
+
+  roots.forEach((root, i) => {
+    const angle = (i * 2 * Math.PI / rootCount) - Math.PI / 2; // Start from top
+    const rootId = root.frameId || root.constellation || `root_${i}`;
+
     positions.push({
-      nodeRef: `constellation:${c.constellation}`,
-      x: CANVAS_CENTER_X + Math.cos(angle) * CONSTELLATION_RADIUS,
-      y: CANVAS_CENTER_Y + Math.sin(angle) * CONSTELLATION_RADIUS
+      nodeRef: `root:${rootId}`,
+      x: CANVAS_CENTER_X + Math.cos(angle) * ROOT_RADIUS,
+      y: CANVAS_CENTER_Y + Math.sin(angle) * ROOT_RADIUS
     });
 
-    // Children clustered around their constellation
-    if (c.children) {
-      const childCount = c.children.length;
-      c.children.forEach((child, j) => {
-        // Spread children in an arc behind the constellation
-        const childAngle = angle + (j - (childCount - 1) / 2) * CHILD_SPREAD * 0.5;
-        const childDist = CONSTELLATION_RADIUS + CHILD_RADIUS + j * 15;
+    // Stars (children) clustered around their root
+    const stars = root.stars || root.children || [];
+    if (stars.length > 0) {
+      stars.forEach((star, j) => {
+        // Spread stars in an arc behind the root
+        const starAngle = angle + (j - (stars.length - 1) / 2) * STAR_SPREAD * 0.5;
+        const starDist = ROOT_RADIUS + STAR_RADIUS + j * 15;
         positions.push({
-          nodeRef: `child:${c.constellation}:${j}`,
-          x: CANVAS_CENTER_X + Math.cos(childAngle) * childDist,
-          y: CANVAS_CENTER_Y + Math.sin(childAngle) * childDist
+          nodeRef: `star:${rootId}:${j}`,
+          x: CANVAS_CENTER_X + Math.cos(starAngle) * starDist,
+          y: CANVAS_CENTER_Y + Math.sin(starAngle) * starDist
         });
       });
     }
@@ -874,9 +887,13 @@ function computeLayout(nebula) {
  * Generate nebula from premise
  * POST /blueprint/nebula
  * Costs: 4 units + 1 project
+ *
+ * Now uses frame-aware classification to select appropriate template:
+ * - venture, event, personal-goal, creative-work, life-transition, career, research, campaign
  */
 router.post('/nebula', optionalAuth, async (req, res) => {
   let quotaCheck = null;
+  let project = null;
   try {
     // Check quota (nebula = 4 units + 1 project)
     quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'nebula');
@@ -893,7 +910,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       });
     }
 
-    const { premise, constraints } = req.body;
+    const { premise } = req.body;
     if (!premise?.trim()) {
       return res.status(400).json({ error: 'Premise is required' });
     }
@@ -901,21 +918,21 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     // Pre-consume quota (will refund on failure)
     await consumeQuota(quotaCheck.query, 'nebula');
 
-    // Generate nebula via LLM
-    const llm = getLLM();
-    const { nebula, tokensUsed } = await llm.generateNebula(premise, constraints || {});
-
-    // Compute layout positions
-    const layout = computeLayout(nebula);
-
-    // Create project
-    const project = new Project({
+    // Create project first so we can store classification on it
+    project = new Project({
       name: premise.substring(0, 100),
       premise: premise,
       ownerId: req.userId || null,
       anonymousSessionId: req.userId ? null : req.anonymousSessionId
     });
     await project.save();
+
+    // Generate nebula via frame-aware blueprint service
+    const blueprint = getBlueprint();
+    const nebula = await blueprint.generateMap(premise, project._id);
+
+    // Compute layout positions
+    const layout = computeLayout(nebula);
 
     // Build operations to create all nodes
     const ops = [];
@@ -926,16 +943,14 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     const coreNode = new Node({
       projectId: project._id,
       kind: 'core',
-      title: nebula.core.title, // Short 2-4 word label
-      statement: nebula.core.statement,
-      detail: nebula.core.detail,
-      body: nebula.core.detail,
-      scores: nebula.core.scores,
-      confidence: nebula.core.confidence,
-      stage: nebula.core.stage || 0,
-      status: nebula.core.status || 'mapped',
-      cost: nebula.core.cost,
-      sources: nebula.core.sources || [],
+      title: nebula.core?.title || premise.substring(0, 40),
+      statement: nebula.core?.statement || premise,
+      detail: nebula.core?.detail,
+      body: nebula.core?.detail,
+      scores: nebula.core?.scores,
+      confidence: nebula.core?.confidence,
+      stage: nebula.stagesEnabled ? (nebula.core?.stage || 0) : undefined,
+      status: nebula.core?.status || 'mapped',
       x: corePos?.x || 600,
       y: corePos?.y || 400,
       depth: 0
@@ -944,91 +959,97 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     nodeMap.core = coreNode._id;
     ops.push({ op: 'createNode', nodeId: coreNode._id.toString(), data: formatNodeForClient(coreNode) });
 
-    // Create constellation nodes and their children
-    for (const c of nebula.constellations) {
-      const constPos = layout.find(l => l.nodeRef === `constellation:${c.constellation}`);
-      const constNode = new Node({
+    // Create root nodes and their stars (new frame-aware format)
+    const roots = nebula.roots || [];
+    for (let i = 0; i < roots.length; i++) {
+      const root = roots[i];
+      const rootId = root.frameId || `root_${i}`;
+      const rootPos = layout.find(l => l.nodeRef === `root:${rootId}`);
+
+      const rootNode = new Node({
         projectId: project._id,
         parentNodeId: coreNode._id,
         kind: 'constellation',
-        constellation: c.constellation,
-        constellationLabel: c.name, // Domain-specific label (e.g., "Roasting Operation")
-        title: c.title || c.name, // Short 2-4 word label
-        statement: c.statement,
-        detail: c.detail,
-        body: c.detail,
-        scores: c.scores,
-        confidence: c.confidence,
-        stage: c.stage || 0,
-        status: c.status || 'mapped',
-        cost: c.cost,
-        sources: c.sources || [],
-        x: constPos?.x || 600,
-        y: constPos?.y || 400,
+        constellation: root.frameId, // W-spine key (who/what/where/etc)
+        constellationLabel: root.label, // Domain-specific label
+        title: root.title || root.label,
+        statement: root.statement,
+        detail: root.detail,
+        body: root.detail,
+        scores: root.scores,
+        confidence: root.confidence,
+        stage: nebula.stagesEnabled ? (root.stage || 0) : undefined,
+        status: root.status || 'mapped',
+        x: rootPos?.x || 600,
+        y: rootPos?.y || 400,
         depth: 1
       });
-      await constNode.save();
-      nodeMap[`constellation:${c.constellation}`] = constNode._id;
-      ops.push({ op: 'createNode', nodeId: constNode._id.toString(), data: formatNodeForClient(constNode) });
+      await rootNode.save();
+      nodeMap[`root:${rootId}`] = rootNode._id;
+      ops.push({ op: 'createNode', nodeId: rootNode._id.toString(), data: formatNodeForClient(rootNode) });
 
-      // Create edge from core to constellation
-      const constEdge = new Edge({
+      // Create edge from core to root
+      const rootEdge = new Edge({
         projectId: project._id,
         fromNodeId: coreNode._id,
-        toNodeId: constNode._id,
+        toNodeId: rootNode._id,
         type: 'contains'
       });
-      await constEdge.save();
-      ops.push({ op: 'createEdge', edgeId: constEdge._id.toString(), data: { fromNodeId: coreNode._id.toString(), toNodeId: constNode._id.toString(), type: 'contains' } });
+      await rootEdge.save();
+      ops.push({ op: 'createEdge', edgeId: rootEdge._id.toString(), data: { fromNodeId: coreNode._id.toString(), toNodeId: rootNode._id.toString(), type: 'contains' } });
 
-      // Create children
-      if (c.children) {
-        for (let j = 0; j < c.children.length; j++) {
-          const child = c.children[j];
-          const childPos = layout.find(l => l.nodeRef === `child:${c.constellation}:${j}`);
-          const childNode = new Node({
-            projectId: project._id,
-            parentNodeId: constNode._id,
-            kind: 'star',
-            title: child.title, // Short 2-4 word label
-            statement: child.statement,
-            detail: child.detail,
-            body: child.detail,
-            scores: child.scores,
-            confidence: child.confidence,
-            stage: child.stage || constNode.stage,
-            status: child.status || 'unexplored',
-            cost: child.cost,
-            sources: child.sources || [],
-            x: childPos?.x || constNode.x + 100,
-            y: childPos?.y || constNode.y + j * 60,
-            depth: 2
-          });
-          await childNode.save();
-          ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
+      // Create stars (children)
+      const stars = root.stars || [];
+      for (let j = 0; j < stars.length; j++) {
+        const star = stars[j];
+        const starPos = layout.find(l => l.nodeRef === `star:${rootId}:${j}`);
 
-          // Create edge from constellation to child
-          const childEdge = new Edge({
-            projectId: project._id,
-            fromNodeId: constNode._id,
-            toNodeId: childNode._id,
-            type: 'contains'
-          });
-          await childEdge.save();
-          ops.push({ op: 'createEdge', edgeId: childEdge._id.toString(), data: { fromNodeId: constNode._id.toString(), toNodeId: childNode._id.toString(), type: 'contains' } });
-        }
+        const starNode = new Node({
+          projectId: project._id,
+          parentNodeId: rootNode._id,
+          kind: 'star',
+          constellation: root.frameId, // Inherit from parent
+          constellationLabel: root.label,
+          title: star.title,
+          statement: star.statement,
+          detail: star.detail,
+          body: star.detail,
+          scores: star.scores,
+          confidence: star.confidence,
+          stage: nebula.stagesEnabled ? (star.stage || rootNode.stage) : undefined,
+          status: star.status || 'unexplored',
+          x: starPos?.x || rootNode.x + 100,
+          y: starPos?.y || rootNode.y + j * 60,
+          depth: 2
+        });
+        await starNode.save();
+        ops.push({ op: 'createNode', nodeId: starNode._id.toString(), data: formatNodeForClient(starNode) });
+
+        // Create edge from root to star
+        const starEdge = new Edge({
+          projectId: project._id,
+          fromNodeId: rootNode._id,
+          toNodeId: starNode._id,
+          type: 'contains'
+        });
+        await starEdge.save();
+        ops.push({ op: 'createEdge', edgeId: starEdge._id.toString(), data: { fromNodeId: rootNode._id.toString(), toNodeId: starNode._id.toString(), type: 'contains' } });
       }
     }
+
+    // Reload project to get classification data
+    const updatedProject = await Project.findById(project._id).lean();
 
     res.json({
       success: true,
       project: {
         id: project._id,
         name: project.name,
-        premise: premise
+        premise: premise,
+        blueprint: updatedProject?.blueprint
       },
       ops,
-      tokensUsed,
+      stagesEnabled: nebula.stagesEnabled,
       quota: { remaining: quotaCheck.unitsRemaining, limit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].units }
     });
 
@@ -1037,6 +1058,10 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     // Refund quota on LLM failure
     if (quotaCheck?.query) {
       await refundQuota(quotaCheck.query, 'nebula');
+    }
+    // Clean up project if created
+    if (project?._id) {
+      await Project.deleteOne({ _id: project._id }).catch(() => {});
     }
     res.status(500).json({ error: 'Failed to generate nebula', message: error.message });
   }

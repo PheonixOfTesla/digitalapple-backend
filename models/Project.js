@@ -46,6 +46,37 @@ const projectSchema = new mongoose.Schema({
     default: 5 // Free tier: 5 units per project
   },
 
+  // Blueprint frame classification and metadata
+  blueprint: {
+    // Classification result from premise
+    classification: {
+      type: {
+        type: String,
+        enum: ['venture', 'event', 'personal-goal', 'creative-work',
+               'life-transition', 'career', 'research', 'campaign', 'unknown']
+      },
+      confidence: Number,
+      alternates: [{
+        type: { type: String },
+        confidence: Number
+      }],
+      reasoning: String
+    },
+    // Frame loader metadata
+    frameMeta: {
+      selectedType: String,
+      confidence: Number,
+      usedFallback: Boolean,
+      isStraddle: Boolean,
+      straddleWith: String
+    },
+    // Whether stage UI should be shown
+    stagesEnabled: {
+      type: Boolean,
+      default: true
+    }
+  },
+
   // Chat history for this project
   chatHistory: [{
     role: {
