@@ -61,8 +61,8 @@ function getResetTime() {
 }
 
 // Helper: check quota before operation (does NOT consume)
+// Note: Now lifetime-based for authenticated users, session-based for anonymous
 async function checkQuota(userId, anonymousSessionId, operationType) {
-  const date = getToday();
   const isAuth = !!userId;
   const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
   const unitCost = UNIT_COSTS[operationType] || 1;
@@ -72,33 +72,19 @@ async function checkQuota(userId, anonymousSessionId, operationType) {
     return { allowed: false, error: 'No session identifier' };
   }
 
+  // Query without date - lifetime for auth users, session-based for anonymous
   const query = userId
-    ? { userId, date }
-    : { anonymousSessionId, date };
+    ? { userId }
+    : { anonymousSessionId };
 
   // Find or create quota record
   const quota = await UserQuota.findOneAndUpdate(
     query,
-    { $setOnInsert: { unitsUsed: 0, projectsCreated: 0 } },
+    { $setOnInsert: { projectsCreated: 0 } },
     { upsert: true, new: true }
   );
 
-  const unitsRemaining = limits.units - (quota.unitsUsed || 0);
   const projectsRemaining = limits.projects - (quota.projectsCreated || 0);
-
-  // Check units
-  if (unitsRemaining < unitCost) {
-    return {
-      allowed: false,
-      quotaType: 'units',
-      used: quota.unitsUsed || 0,
-      limit: limits.units,
-      remaining: unitsRemaining,
-      cost: unitCost,
-      resetsAt: getResetTime(),
-      error: `Requires ${unitCost} units, only ${unitsRemaining} remaining`
-    };
-  }
 
   // Check projects for nebula operations
   if (operationType === 'nebula' && projectsRemaining <= 0) {
@@ -108,14 +94,12 @@ async function checkQuota(userId, anonymousSessionId, operationType) {
       used: quota.projectsCreated || 0,
       limit: limits.projects,
       remaining: 0,
-      resetsAt: getResetTime(),
-      error: `Daily project limit (${limits.projects}) reached`
+      error: `Project limit (${limits.projects}) reached`
     };
   }
 
   return {
     allowed: true,
-    unitsRemaining: unitsRemaining - unitCost,
     projectsRemaining: operationType === 'nebula' ? projectsRemaining - 1 : projectsRemaining,
     cost: unitCost,
     query // Pass query for later consumption
@@ -124,26 +108,22 @@ async function checkQuota(userId, anonymousSessionId, operationType) {
 
 // Helper: consume quota after successful operation
 async function consumeQuota(query, operationType) {
-  const unitCost = UNIT_COSTS[operationType] || 1;
-  const incFields = { unitsUsed: unitCost };
   if (operationType === 'nebula') {
-    incFields.projectsCreated = 1;
+    await UserQuota.updateOne(query, { $inc: { projectsCreated: 1 } });
   }
-  await UserQuota.updateOne(query, { $inc: incFields });
+  // Other operations don't consume quota in the new lifetime model
+  // Unit budget is per-project, tracked on the Project document
 }
 
 // Helper: refund quota on failure
 async function refundQuota(query, operationType) {
-  const unitCost = UNIT_COSTS[operationType] || 1;
-  const incFields = { unitsUsed: -unitCost };
   if (operationType === 'nebula') {
-    incFields.projectsCreated = -1;
+    // Decrement but prevent negative values
+    await UserQuota.updateOne(
+      { ...query, projectsCreated: { $gt: 0 } },
+      { $inc: { projectsCreated: -1 } }
+    );
   }
-  // Use $max to prevent negative values
-  await UserQuota.updateOne(query, {
-    $inc: incFields,
-    $max: { unitsUsed: 0, projectsCreated: 0 }
-  });
 }
 
 // Helper: verify project ownership
@@ -231,25 +211,7 @@ router.post('/projects', optionalAuth, async (req, res) => {
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.remaining,
-        resetsAt: quotaCheck.resetsAt
-      });
-    }
-
-    // Also check project limit
-    const date = getToday();
-    const query = req.userId ? { userId: req.userId, date } : { anonymousSessionId: req.anonymousSessionId, date };
-    const limits = req.userId ? QUOTA.authenticated : QUOTA.anonymous;
-    const quota = await UserQuota.findOne(query);
-    if ((quota?.projectsCreated || 0) >= limits.projects) {
-      return res.status(429).json({
-        error: 'Quota exceeded',
-        message: `Daily project limit (${limits.projects}) reached`,
-        quotaType: 'projects',
-        used: quota.projectsCreated,
-        limit: limits.projects,
-        remaining: 0,
-        resetsAt: getResetTime()
+        remaining: quotaCheck.projectsRemaining || 0
       });
     }
 
@@ -263,9 +225,8 @@ router.post('/projects', optionalAuth, async (req, res) => {
 
     await project.save();
 
-    // Consume quota
-    await consumeQuota(quotaCheck.query, 'chat');
-    await UserQuota.updateOne(query, { $inc: { projectsCreated: 1 } });
+    // Consume quota (project creation counts against project limit)
+    await consumeQuota(quotaCheck.query, 'nebula');
 
     res.json({
       success: true,
@@ -274,7 +235,7 @@ router.post('/projects', optionalAuth, async (req, res) => {
         name: project.name,
         createdAt: project.createdAt
       },
-      quota: { remaining: quotaCheck.remaining, limit: quotaCheck.limit }
+      quota: { projectsRemaining: quotaCheck.projectsRemaining - 1, projectLimit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].projects }
     });
   } catch (error) {
     console.error('Create project error:', error);
@@ -633,9 +594,7 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.remaining,
-        cost: quotaCheck.cost,
-        resetsAt: quotaCheck.resetsAt
+        remaining: quotaCheck.projectsRemaining || 0
       });
     }
 
@@ -690,7 +649,7 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
       success: true,
       reply: response.reply,
       ops: executedOps,
-      quota: { remaining: quotaCheck.unitsRemaining, limit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].units }
+      quota: { projectsRemaining: quotaCheck.projectsRemaining, projectLimit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].projects }
     });
   } catch (error) {
     console.error('Chat error:', error);
@@ -904,9 +863,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.remaining,
-        cost: quotaCheck.cost,
-        resetsAt: quotaCheck.resetsAt
+        remaining: quotaCheck.projectsRemaining || 0
       });
     }
 
@@ -1050,7 +1007,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       },
       ops,
       stagesEnabled: nebula.stagesEnabled,
-      quota: { remaining: quotaCheck.unitsRemaining, limit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].units }
+      quota: { projectsRemaining: quotaCheck.projectsRemaining, projectLimit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].projects }
     });
 
   } catch (error) {
@@ -1108,9 +1065,7 @@ router.post('/expand', optionalAuth, async (req, res) => {
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.remaining,
-        cost: quotaCheck.cost,
-        resetsAt: quotaCheck.resetsAt
+        remaining: quotaCheck.projectsRemaining || 0
       });
     }
 
@@ -1174,8 +1129,7 @@ router.post('/expand', optionalAuth, async (req, res) => {
       success: true,
       reasoning,
       ops,
-      tokensUsed,
-      quota: { remaining: quotaCheck.remaining - 1, limit: quotaCheck.limit }
+      tokensUsed
     });
 
   } catch (error) {
