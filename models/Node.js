@@ -42,6 +42,13 @@ const nodeSchema = new mongoose.Schema({
     default: null
   },
 
+  // Human-readable constellation label (domain-specific, no W-words)
+  constellationLabel: {
+    type: String,
+    maxlength: 50,
+    default: null
+  },
+
   // Stage axis (0-9)
   stage: {
     type: Number,
@@ -51,11 +58,11 @@ const nodeSchema = new mongoose.Schema({
     index: true
   },
 
-  // Content - statement is the primary content, title kept for backwards compat
+  // Content - title is a short label (2-4 words), statement is the full sentence
   title: {
     type: String,
     required: true,
-    maxlength: 300
+    maxlength: 50 // Short label: 2-4 words
   },
 
   statement: {

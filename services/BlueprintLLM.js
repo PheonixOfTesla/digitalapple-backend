@@ -129,17 +129,18 @@ const lightScoresSchema = {
   additionalProperties: false
 };
 
-// Light star for nebula: statement only, no detail (detail comes on expand)
+// Light star for nebula: title (short label) + statement (full sentence)
 const nebulaStarSchema = {
   type: 'object',
   properties: {
-    statement: { type: 'string', maxLength: 150 },
+    title: { type: 'string', maxLength: 40 }, // Short label: 2-4 words
+    statement: { type: 'string', maxLength: 150 }, // Full sentence
     scores: lightScoresSchema,
     confidence: confidenceSchema,
     stage: { type: 'integer', minimum: 0, maximum: 9 },
     status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] }
   },
-  required: ['statement', 'scores', 'confidence', 'stage', 'status'],
+  required: ['title', 'statement', 'scores', 'confidence', 'stage', 'status'],
   additionalProperties: false
 };
 
@@ -148,6 +149,8 @@ const nebulaConstellationSchema = {
   type: 'object',
   properties: {
     constellation: { type: 'string', enum: ['offer', 'demand', 'delivery', 'economy', 'orchestration', 'risk'] },
+    name: { type: 'string', maxLength: 40 }, // Domain-specific label (e.g., "Roasting Operation" not "delivery")
+    title: { type: 'string', maxLength: 40 }, // Short label for the root node
     statement: { type: 'string', maxLength: 150 },
     scores: lightScoresSchema,
     confidence: confidenceSchema,
@@ -155,7 +158,7 @@ const nebulaConstellationSchema = {
     status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] },
     children: { type: 'array', items: nebulaStarSchema, maxItems: 2 }
   },
-  required: ['constellation', 'statement', 'scores', 'confidence', 'stage', 'status', 'children'],
+  required: ['constellation', 'name', 'title', 'statement', 'scores', 'confidence', 'stage', 'status', 'children'],
   additionalProperties: false
 };
 
@@ -490,14 +493,23 @@ function applyGroundingGuards(response, premiseWordCount = 0, isFirstNebula = fa
 
 /**
  * Validate nebula constellation names don't use W-words.
+ * Checks both the 'name' field (constellationLabel) and 'title' field.
  */
 function validateConstellationNames(nebula) {
   const errors = [];
   for (const c of nebula.constellations || []) {
-    const name = (c.statement || '').toLowerCase();
+    // Check 'name' field (constellationLabel)
+    const name = (c.name || '').toLowerCase();
     for (const w of W_WORDS) {
       if (name === w || name.startsWith(w + ' ') || name.startsWith(w + ':')) {
-        errors.push(`Constellation "${c.constellation}" uses W-word "${w}" in statement`);
+        errors.push(`Constellation "${c.constellation}" uses W-word "${w}" in name`);
+      }
+    }
+    // Check 'title' field
+    const title = (c.title || '').toLowerCase();
+    for (const w of W_WORDS) {
+      if (title === w || title.startsWith(w + ' ') || title.startsWith(w + ':')) {
+        errors.push(`Constellation "${c.constellation}" uses W-word "${w}" in title`);
       }
     }
   }
@@ -599,13 +611,31 @@ PREMISE: "${premise}"${constraintText}
 CRITICAL GROUNDING RULE: This premise is ${premiseWordCount} words. Thin input produces a SMALL HONEST MAP that names what's missing — never fabricated breadth.
 
 Return exactly 6 constellations (offer, demand, delivery, economy, orchestration, risk).
-- Name each constellation naturally for this domain (e.g. "Roasting Operation" not "delivery")
-- Each constellation gets 0-2 children ONLY — add stars only where the premise actually supports them
+
+FIELD REQUIREMENTS:
+- "name": Domain-specific label for each constellation root (e.g., "Roasting Operation", "Local Coffee Lovers", "Retail Channels"). NEVER use generic terms like "Offer", "Demand", "Delivery" or W-words (who/what/where/when/why/how).
+- "title": Short 2-4 word label for each node (e.g., "Bean sourcing", "Local vendors", "Event risk"). NOT a sentence.
+- "statement": Full sentence describing the node's scope or gap.
+
+STAGE ASSIGNMENT (0-9):
+- 0 Premise: The starting idea
+- 1 Formation: Initial concept, unvalidated
+- 2 Proof: Market validation, evidence gathering
+- 3 Rights: Legal, contracts, IP
+- 4 Build: Product/service development
+- 5 Capital: Funding, investment
+- 6 GTM: Go-to-market, launch
+- 7 Unit Econ: Pricing, margins, unit economics
+- 8 Operate: Day-to-day operations
+- 9 Scale: Growth, expansion, exit
+Assign stage based on where this component actually sits. A nebula should have a SPREAD of stages, not all the same.
+
+STRUCTURE:
+- Each constellation gets 0-2 children ONLY — add stars only where the premise supports them
 - Roots with nothing grounded: zero children, statement names what's missing
 - Reason strings: one sentence, ~15 words max. They justify a score, not explain the business.
-- No detail field — that comes on expand when the user asks about a specific node.
 
-Target: 6-14 total nodes for a short premise. Depth comes from expansion, not front-loading.`;
+Target: 6-14 total nodes for a short premise.`;
 
   let lastError = null;
   let tokensUsed = 0;

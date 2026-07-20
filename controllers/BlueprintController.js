@@ -810,7 +810,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     const coreNode = new Node({
       projectId: project._id,
       kind: 'core',
-      title: nebula.core.statement,
+      title: nebula.core.title, // Short 2-4 word label
       statement: nebula.core.statement,
       detail: nebula.core.detail,
       body: nebula.core.detail,
@@ -836,7 +836,8 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         parentNodeId: coreNode._id,
         kind: 'constellation',
         constellation: c.constellation,
-        title: c.statement,
+        constellationLabel: c.name, // Domain-specific label (e.g., "Roasting Operation")
+        title: c.title || c.name, // Short 2-4 word label
         statement: c.statement,
         detail: c.detail,
         body: c.detail,
@@ -873,7 +874,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
             projectId: project._id,
             parentNodeId: constNode._id,
             kind: 'star',
-            title: child.statement,
+            title: child.title, // Short 2-4 word label
             statement: child.statement,
             detail: child.detail,
             body: child.detail,
@@ -1034,6 +1035,7 @@ function formatNodeForClient(node) {
     id: node._id?.toString() || node.id,
     kind: node.kind,
     constellation: node.constellation,
+    constellationLabel: node.constellationLabel, // Domain-specific label
     parentNodeId: node.parentNodeId?.toString(),
     title: node.title,
     statement: node.statement || node.title,
