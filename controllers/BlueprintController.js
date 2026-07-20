@@ -1819,6 +1819,23 @@ function mapFrameIdToConstellation(frameId) {
   return map[frameId] || null;
 }
 
+// Territory descriptions and invitation questions by constellation
+const CONSTELLATION_TERRITORY = {
+  // Venture frame
+  offer: { territory: 'what you deliver to customers', invitation: 'What product or service do you offer?' },
+  demand: { territory: 'who pays and why they need you', invitation: 'Who are your customers and what do they need?' },
+  delivery: { territory: 'how you reach customers', invitation: 'How will you reach and acquire customers?' },
+  economy: { territory: 'revenue, costs, and margins', invitation: 'What are the numbers — pricing, costs, margins?' },
+  orchestration: { territory: 'how the work gets done', invitation: 'How will operations actually work?' },
+  risk: { territory: 'what could break it', invitation: 'What are the key risks and failure modes?' },
+  // Additional labels that may appear
+  customers: { territory: 'who pays and why', invitation: 'Who are your target customers?' },
+  channel: { territory: 'market, distribution, go-to-market', invitation: 'How will you reach the market?' },
+  operations: { territory: 'delivery, supply, team', invitation: 'How will the work get done?' },
+  sequence: { territory: 'build order, milestones', invitation: 'What is the sequence and timeline?' },
+  wedge: { territory: 'why this wins, competitive moat', invitation: 'What makes this win against alternatives?' }
+};
+
 // Format node for client response
 function formatNodeForClient(node) {
   // Derive liveness from existing flags (no new persisted field)
@@ -1834,6 +1851,27 @@ function formatNodeForClient(node) {
     liveness = 'dormant';
   } else {
     liveness = 'open';
+  }
+
+  // For dormant nodes, generate territory line and invitation
+  let territory = null;
+  let invitation = null;
+  if (liveness === 'dormant') {
+    const label = node.constellationLabel || node.constellation || node.title;
+    const key = (node.constellation || '').toLowerCase();
+    const labelKey = (node.constellationLabel || '').toLowerCase().replace(/[^a-z]/g, '');
+
+    // Try to find matching territory info
+    const info = CONSTELLATION_TERRITORY[key] || CONSTELLATION_TERRITORY[labelKey] || null;
+
+    if (info) {
+      territory = `${label} — ${info.territory}`;
+      invitation = info.invitation;
+    } else {
+      // Fallback: use the label and a generic invitation
+      territory = `${label} — what this area covers`;
+      invitation = `What should we know about ${label.toLowerCase()}?`;
+    }
   }
 
   return {
@@ -1865,6 +1903,9 @@ function formatNodeForClient(node) {
     subFrameType: node.subFrameType || null,
     // Liveness (derived, not persisted)
     liveness,
+    // Dormant node territory/invitation (null for grounded nodes)
+    territory,
+    invitation,
     // Identity fields
     coreId: node.coreId?.toString() || null,
     stableId: node.stableId || null,
