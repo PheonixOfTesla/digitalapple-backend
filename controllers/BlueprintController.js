@@ -917,11 +917,22 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       const rootId = root.frameId || `root_${i}`;
       const rootPos = layout.find(l => l.nodeRef === `root:${rootId}`);
 
+      // Map W-spine frameId to legacy constellation enum if possible
+      const constellationMap = {
+        'what': 'offer',
+        'who': 'demand',
+        'where': 'delivery',
+        'how': 'orchestration',
+        'why': 'economy',
+        'risk': 'risk',
+        'when': null // No direct mapping
+      };
+
       const rootNode = new Node({
         projectId: project._id,
         parentNodeId: coreNode._id,
         kind: 'constellation',
-        constellation: root.frameId, // W-spine key (who/what/where/etc)
+        constellation: constellationMap[root.frameId] || null,
         constellationLabel: root.label, // Domain-specific label
         title: root.title || root.label,
         statement: root.statement,
@@ -959,7 +970,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
           projectId: project._id,
           parentNodeId: rootNode._id,
           kind: 'star',
-          constellation: root.frameId, // Inherit from parent
+          constellation: constellationMap[root.frameId] || null, // Map to legacy enum
           constellationLabel: root.label,
           title: star.title,
           statement: star.statement,
