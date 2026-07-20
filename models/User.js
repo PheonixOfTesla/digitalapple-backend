@@ -52,6 +52,11 @@ const userSchema = new mongoose.Schema({
   // Password reset
   passwordResetToken: String,
   passwordResetExpires: Date,
+  // Token balance for Blueprint (purchased units)
+  tokenBalance: {
+    type: Number,
+    default: 0
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -99,6 +104,7 @@ userSchema.methods.toPrivateProfile = function() {
     marketingOptIn: this.marketingOptIn,
     emailVerified: this.emailVerified,
     pendingEmail: this.pendingEmail,
+    tokenBalance: this.tokenBalance,
     createdAt: this.createdAt
   };
 };

@@ -35,6 +35,17 @@ const projectSchema = new mongoose.Schema({
     sparse: true
   },
 
+  // Per-project unit budget (lifetime, does not reset)
+  unitsUsed: {
+    type: Number,
+    default: 0
+  },
+
+  unitsAllowed: {
+    type: Number,
+    default: 5 // Free tier: 5 units per project
+  },
+
   // Chat history for this project
   chatHistory: [{
     role: {

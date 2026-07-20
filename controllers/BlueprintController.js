@@ -25,9 +25,17 @@ function getLLM() {
 const router = express.Router();
 
 // Quota limits
+// Unit costs per operation type (weighted)
+const UNIT_COSTS = {
+  chat: 1,
+  expand: 3,
+  nebula: 4
+};
+
+// Quota limits
 const QUOTA = {
-  authenticated: { chat: 50, projects: 10 },
-  anonymous: { chat: 5, projects: 1 }
+  authenticated: { units: 15, projects: 3 },
+  anonymous: { units: 5, projects: 1 }
 };
 
 // Helper: get today's date string
@@ -35,39 +43,98 @@ function getToday() {
   return new Date().toISOString().split('T')[0];
 }
 
-// Helper: check/increment quota
-async function checkQuota(userId, anonymousSessionId, type) {
+// Helper: get reset time (midnight UTC)
+function getResetTime() {
+  const tomorrow = new Date();
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  tomorrow.setUTCHours(0, 0, 0, 0);
+  return tomorrow.toISOString();
+}
+
+// Helper: check quota before operation (does NOT consume)
+async function checkQuota(userId, anonymousSessionId, operationType) {
   const date = getToday();
   const isAuth = !!userId;
   const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
+  const unitCost = UNIT_COSTS[operationType] || 1;
 
   // Must have either userId or anonymousSessionId
   if (!userId && !anonymousSessionId) {
-    return { allowed: false, remaining: 0, limit: 0, error: 'No session identifier' };
+    return { allowed: false, error: 'No session identifier' };
   }
 
   const query = userId
     ? { userId, date }
     : { anonymousSessionId, date };
 
-  const field = type === 'chat' ? 'chatRequests' : 'projectsCreated';
-  const limit = type === 'chat' ? limits.chat : limits.projects;
-
-  // Atomically find or create quota, then check limit before incrementing
+  // Find or create quota record
   const quota = await UserQuota.findOneAndUpdate(
     query,
-    { $setOnInsert: { chatRequests: 0, projectsCreated: 0 } },
+    { $setOnInsert: { unitsUsed: 0, projectsCreated: 0 } },
     { upsert: true, new: true }
   );
 
-  if (quota[field] >= limit) {
-    return { allowed: false, remaining: 0, limit };
+  const unitsRemaining = limits.units - (quota.unitsUsed || 0);
+  const projectsRemaining = limits.projects - (quota.projectsCreated || 0);
+
+  // Check units
+  if (unitsRemaining < unitCost) {
+    return {
+      allowed: false,
+      quotaType: 'units',
+      used: quota.unitsUsed || 0,
+      limit: limits.units,
+      remaining: unitsRemaining,
+      cost: unitCost,
+      resetsAt: getResetTime(),
+      error: `Requires ${unitCost} units, only ${unitsRemaining} remaining`
+    };
   }
 
-  // Increment the field
-  await UserQuota.updateOne(query, { $inc: { [field]: 1 } });
+  // Check projects for nebula operations
+  if (operationType === 'nebula' && projectsRemaining <= 0) {
+    return {
+      allowed: false,
+      quotaType: 'projects',
+      used: quota.projectsCreated || 0,
+      limit: limits.projects,
+      remaining: 0,
+      resetsAt: getResetTime(),
+      error: `Daily project limit (${limits.projects}) reached`
+    };
+  }
 
-  return { allowed: true, remaining: limit - quota[field] - 1, limit };
+  return {
+    allowed: true,
+    unitsRemaining: unitsRemaining - unitCost,
+    projectsRemaining: operationType === 'nebula' ? projectsRemaining - 1 : projectsRemaining,
+    cost: unitCost,
+    query // Pass query for later consumption
+  };
+}
+
+// Helper: consume quota after successful operation
+async function consumeQuota(query, operationType) {
+  const unitCost = UNIT_COSTS[operationType] || 1;
+  const incFields = { unitsUsed: unitCost };
+  if (operationType === 'nebula') {
+    incFields.projectsCreated = 1;
+  }
+  await UserQuota.updateOne(query, { $inc: incFields });
+}
+
+// Helper: refund quota on failure
+async function refundQuota(query, operationType) {
+  const unitCost = UNIT_COSTS[operationType] || 1;
+  const incFields = { unitsUsed: -unitCost };
+  if (operationType === 'nebula') {
+    incFields.projectsCreated = -1;
+  }
+  // Use $max to prevent negative values
+  await UserQuota.updateOne(query, {
+    $inc: incFields,
+    $max: { unitsUsed: 0, projectsCreated: 0 }
+  });
 }
 
 // Helper: verify project ownership
@@ -143,15 +210,37 @@ router.get('/projects', optionalAuth, async (req, res) => {
   }
 });
 
-// Create project
+// Create project (manual, not via nebula - minimal quota impact)
 router.post('/projects', optionalAuth, async (req, res) => {
   try {
-    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'projects');
+    // Manual project creation counts as 1 unit + 1 project
+    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
     if (!quotaCheck.allowed) {
       return res.status(429).json({
-        error: 'Project limit reached',
-        message: `You can create ${quotaCheck.limit} projects per day`,
-        remaining: 0
+        error: 'Quota exceeded',
+        message: quotaCheck.error,
+        quotaType: quotaCheck.quotaType,
+        used: quotaCheck.used,
+        limit: quotaCheck.limit,
+        remaining: quotaCheck.remaining,
+        resetsAt: quotaCheck.resetsAt
+      });
+    }
+
+    // Also check project limit
+    const date = getToday();
+    const query = req.userId ? { userId: req.userId, date } : { anonymousSessionId: req.anonymousSessionId, date };
+    const limits = req.userId ? QUOTA.authenticated : QUOTA.anonymous;
+    const quota = await UserQuota.findOne(query);
+    if ((quota?.projectsCreated || 0) >= limits.projects) {
+      return res.status(429).json({
+        error: 'Quota exceeded',
+        message: `Daily project limit (${limits.projects}) reached`,
+        quotaType: 'projects',
+        used: quota.projectsCreated,
+        limit: limits.projects,
+        remaining: 0,
+        resetsAt: getResetTime()
       });
     }
 
@@ -164,6 +253,10 @@ router.post('/projects', optionalAuth, async (req, res) => {
     });
 
     await project.save();
+
+    // Consume quota
+    await consumeQuota(quotaCheck.query, 'chat');
+    await UserQuota.updateOne(query, { $inc: { projectsCreated: 1 } });
 
     res.json({
       success: true,
@@ -515,19 +608,25 @@ router.delete('/edges/:id', optionalAuth, async (req, res) => {
  * }
  */
 router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
+  let quotaCheck = null;
   try {
     const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Check quota
-    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    // Check quota (chat = 1 unit)
+    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
     if (!quotaCheck.allowed) {
       return res.status(429).json({
-        error: 'Chat limit reached',
-        message: `You have ${quotaCheck.limit} chat requests per day`,
-        remaining: 0
+        error: 'Quota exceeded',
+        message: quotaCheck.error,
+        quotaType: quotaCheck.quotaType,
+        used: quotaCheck.used,
+        limit: quotaCheck.limit,
+        remaining: quotaCheck.remaining,
+        cost: quotaCheck.cost,
+        resetsAt: quotaCheck.resetsAt
       });
     }
 
@@ -535,6 +634,9 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
     if (!message?.trim()) {
       return res.status(400).json({ error: 'Message is required' });
     }
+
+    // Pre-consume quota (will refund on failure)
+    await consumeQuota(quotaCheck.query, 'chat');
 
     // Get current canvas state for context
     const [nodes, edges] = await Promise.all([
@@ -579,11 +681,15 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
       success: true,
       reply: response.reply,
       ops: executedOps,
-      quota: { remaining: quotaCheck.remaining, limit: quotaCheck.limit }
+      quota: { remaining: quotaCheck.unitsRemaining, limit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].units }
     });
   } catch (error) {
     console.error('Chat error:', error);
-    res.status(500).json({ error: 'Failed to process chat' });
+    // Refund quota on LLM failure
+    if (quotaCheck?.query) {
+      await refundQuota(quotaCheck.query, 'chat');
+    }
+    res.status(500).json({ error: 'Failed to process chat', message: error.message });
   }
 });
 
@@ -767,16 +873,23 @@ function computeLayout(nebula) {
 /**
  * Generate nebula from premise
  * POST /blueprint/nebula
+ * Costs: 4 units + 1 project
  */
 router.post('/nebula', optionalAuth, async (req, res) => {
+  let quotaCheck = null;
   try {
-    // Check quota
-    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    // Check quota (nebula = 4 units + 1 project)
+    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'nebula');
     if (!quotaCheck.allowed) {
       return res.status(429).json({
         error: 'Quota exceeded',
-        message: 'Log in for more requests',
-        remaining: 0
+        message: quotaCheck.error,
+        quotaType: quotaCheck.quotaType,
+        used: quotaCheck.used,
+        limit: quotaCheck.limit,
+        remaining: quotaCheck.remaining,
+        cost: quotaCheck.cost,
+        resetsAt: quotaCheck.resetsAt
       });
     }
 
@@ -784,6 +897,9 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     if (!premise?.trim()) {
       return res.status(400).json({ error: 'Premise is required' });
     }
+
+    // Pre-consume quota (will refund on failure)
+    await consumeQuota(quotaCheck.query, 'nebula');
 
     // Generate nebula via LLM
     const llm = getLLM();
@@ -913,11 +1029,15 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       },
       ops,
       tokensUsed,
-      quota: { remaining: quotaCheck.remaining - 1, limit: quotaCheck.limit }
+      quota: { remaining: quotaCheck.unitsRemaining, limit: QUOTA[req.userId ? 'authenticated' : 'anonymous'].units }
     });
 
   } catch (error) {
     console.error('Nebula generation error:', error);
+    // Refund quota on LLM failure
+    if (quotaCheck?.query) {
+      await refundQuota(quotaCheck.query, 'nebula');
+    }
     res.status(500).json({ error: 'Failed to generate nebula', message: error.message });
   }
 });
@@ -925,8 +1045,10 @@ router.post('/nebula', optionalAuth, async (req, res) => {
 /**
  * Expand a star into children
  * POST /blueprint/expand
+ * Costs: 3 units
  */
 router.post('/expand', optionalAuth, async (req, res) => {
+  let quotaCheck = null;
   try {
     const { nodeId } = req.body;
     if (!nodeId) {
@@ -952,15 +1074,23 @@ router.post('/expand', optionalAuth, async (req, res) => {
       });
     }
 
-    // Check quota
-    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    // Check quota (expand = 3 units)
+    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'expand');
     if (!quotaCheck.allowed) {
       return res.status(429).json({
         error: 'Quota exceeded',
-        message: 'Log in for more requests',
-        remaining: 0
+        message: quotaCheck.error,
+        quotaType: quotaCheck.quotaType,
+        used: quotaCheck.used,
+        limit: quotaCheck.limit,
+        remaining: quotaCheck.remaining,
+        cost: quotaCheck.cost,
+        resetsAt: quotaCheck.resetsAt
       });
     }
+
+    // Pre-consume quota (will refund on failure)
+    await consumeQuota(quotaCheck.query, 'expand');
 
     // Get context nodes
     const contextNodes = await Node.find({ projectId: node.projectId }).limit(20).lean();
@@ -1055,5 +1185,175 @@ function formatNodeForClient(node) {
     kept: node.kept
   };
 }
+
+// ============== EXPORTS (AUTH REQUIRED) ==============
+
+// Export rate limit tracking (in-memory, resets on restart - upgrade to Redis for prod)
+const exportRateLimits = new Map();
+const EXPORT_DAILY_LIMIT = 20;
+
+function checkExportRateLimit(userId) {
+  const today = getToday();
+  const key = `${userId}:${today}`;
+  const count = exportRateLimits.get(key) || 0;
+
+  if (count >= EXPORT_DAILY_LIMIT) {
+    return { allowed: false, used: count, limit: EXPORT_DAILY_LIMIT };
+  }
+
+  exportRateLimits.set(key, count + 1);
+  return { allowed: true, used: count + 1, limit: EXPORT_DAILY_LIMIT };
+}
+
+// Middleware: require authentication for exports
+function requireAuthForExport(req, res, next) {
+  if (!req.userId) {
+    return res.status(401).json({
+      error: 'Authentication required',
+      reason: 'export_requires_login',
+      message: 'Create an account to export your map. Your current map will be saved to your account.',
+      action: 'signup',
+      projectId: req.params.projectId || req.body?.projectId
+    });
+  }
+  next();
+}
+
+/**
+ * Export project as JSON
+ * GET /blueprint/projects/:projectId/export/json
+ */
+router.get('/projects/:projectId/export/json', optionalAuth, requireAuthForExport, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Must own the project
+    if (project.ownerId?.toString() !== req.userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Check rate limit
+    const rateCheck = checkExportRateLimit(req.userId);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        error: 'Export limit reached',
+        message: `You can export ${EXPORT_DAILY_LIMIT} times per day`,
+        used: rateCheck.used,
+        limit: rateCheck.limit
+      });
+    }
+
+    const [nodes, edges] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean()
+    ]);
+
+    res.json({
+      success: true,
+      format: 'json',
+      project: {
+        id: project._id,
+        name: project.name,
+        premise: project.premise,
+        createdAt: project.createdAt
+      },
+      nodes: nodes.map(formatNodeForClient),
+      edges: edges.map(e => ({
+        id: e._id.toString(),
+        fromNodeId: e.fromNodeId.toString(),
+        toNodeId: e.toNodeId.toString(),
+        type: e.type
+      })),
+      exportedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Export JSON error:', error);
+    res.status(500).json({ error: 'Failed to export' });
+  }
+});
+
+/**
+ * Export project as CSV (sequence/timeline format)
+ * GET /blueprint/projects/:projectId/export/csv
+ */
+router.get('/projects/:projectId/export/csv', optionalAuth, requireAuthForExport, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project || project.ownerId?.toString() !== req.userId) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const rateCheck = checkExportRateLimit(req.userId);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({ error: 'Export limit reached', used: rateCheck.used, limit: rateCheck.limit });
+    }
+
+    const nodes = await Node.find({ projectId: project._id }).sort({ stage: 1, createdAt: 1 }).lean();
+
+    // CSV header
+    const header = 'Stage,Title,Statement,Economy,Orchestration,Demand,Confidence,Status\n';
+    const rows = nodes.map(n => {
+      const econ = n.scores?.economy?.value ?? '';
+      const orch = n.scores?.orchestration?.value ?? '';
+      const dem = n.scores?.demand?.value ?? '';
+      const conf = n.confidence?.value ? Math.round(n.confidence.value * 100) + '%' : '';
+      return `${n.stage},"${(n.title || '').replace(/"/g, '""')}","${(n.statement || '').replace(/"/g, '""')}",${econ},${orch},${dem},${conf},${n.status}`;
+    }).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-z0-9]/gi, '_')}_sequence.csv"`);
+    res.send(header + rows);
+  } catch (error) {
+    console.error('Export CSV error:', error);
+    res.status(500).json({ error: 'Failed to export' });
+  }
+});
+
+/**
+ * Export formats - stub endpoints (return structured error until implemented)
+ * These are gated behind auth but not yet built
+ */
+const STUB_FORMATS = ['pdf', 'xlsx', 'formation-pack', 'deck-outline'];
+
+STUB_FORMATS.forEach(format => {
+  router.get(`/projects/:projectId/export/${format}`, optionalAuth, requireAuthForExport, async (req, res) => {
+    const project = await Project.findById(req.params.projectId);
+    if (!project || project.ownerId?.toString() !== req.userId) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    res.status(501).json({
+      error: 'Format not yet available',
+      format,
+      message: `${format.toUpperCase()} export is coming soon. Use JSON or CSV for now.`,
+      availableFormats: ['json', 'csv']
+    });
+  });
+});
+
+/**
+ * List available export formats
+ * GET /blueprint/projects/:projectId/export
+ */
+router.get('/projects/:projectId/export', optionalAuth, async (req, res) => {
+  const formats = [
+    { format: 'json', name: 'Raw JSON', available: true, description: 'Complete map data for developers' },
+    { format: 'csv', name: 'Sequence CSV', available: true, description: 'Timeline view for spreadsheets' },
+    { format: 'pdf', name: 'PDF Brief', available: false, description: 'Executive summary document' },
+    { format: 'xlsx', name: 'Model XLSX', available: false, description: 'Financial model template' },
+    { format: 'formation-pack', name: 'Formation Pack', available: false, description: 'Complete founding documents' },
+    { format: 'deck-outline', name: 'Deck Outline', available: false, description: 'Pitch deck structure' }
+  ];
+
+  res.json({
+    success: true,
+    requiresAuth: true,
+    authenticated: !!req.userId,
+    formats
+  });
+});
 
 module.exports = router;

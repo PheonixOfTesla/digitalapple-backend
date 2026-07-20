@@ -1,8 +1,11 @@
 /**
- * UserQuota - Daily usage tracking
+ * UserQuota - Lifetime project count tracking
  *
- * Tracks LLM chat requests per user per day.
- * Anonymous users have smaller quotas.
+ * Tracks how many projects a user has created (lifetime limit for free tier).
+ * Anonymous users still have 24h TTL.
+ *
+ * Note: Per-project unit budget is now on the Project document itself,
+ * not here. This model only tracks the project count cap.
  */
 
 const mongoose = require('mongoose');
@@ -12,30 +15,20 @@ const userQuotaSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    index: true
-  },
-
-  // Anonymous session ID
-  anonymousSessionId: {
-    type: String,
     index: true,
+    unique: true,
     sparse: true
   },
 
-  // Date (YYYY-MM-DD format for daily tracking)
-  date: {
+  // Anonymous session ID (for pre-login tracking)
+  anonymousSessionId: {
     type: String,
-    required: true,
-    index: true
+    index: true,
+    unique: true,
+    sparse: true
   },
 
-  // Chat requests used today
-  chatRequests: {
-    type: Number,
-    default: 0
-  },
-
-  // Projects created today
+  // Total projects created (lifetime for auth, session for anon)
   projectsCreated: {
     type: Number,
     default: 0
@@ -44,29 +37,33 @@ const userQuotaSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound indexes with partial filter - unique only when field exists
+// TTL - auto-delete anonymous quotas after 24 hours
 userQuotaSchema.index(
-  { userId: 1, date: 1 },
-  { unique: true, partialFilterExpression: { userId: { $type: 'objectId' } } }
-);
-userQuotaSchema.index(
-  { anonymousSessionId: 1, date: 1 },
-  { unique: true, partialFilterExpression: { anonymousSessionId: { $type: 'string' } } }
+  { createdAt: 1 },
+  {
+    expireAfterSeconds: 24 * 60 * 60,
+    partialFilterExpression: { userId: null }
+  }
 );
 
-// TTL - auto-delete after 7 days
-userQuotaSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
-
-// Quota limits
+// Free tier limits
 userQuotaSchema.statics.LIMITS = {
   authenticated: {
-    chatRequests: 50,
-    projectsCreated: 10
+    projects: 3 // 3 projects lifetime
   },
   anonymous: {
-    chatRequests: 5,
-    projectsCreated: 1
+    projects: 1 // 1 project per 24h session
   }
+};
+
+// Per-project unit budget (stored on Project, not here)
+userQuotaSchema.statics.PROJECT_UNITS = 5;
+
+// Unit costs per operation type
+userQuotaSchema.statics.UNIT_COSTS = {
+  chat: 1,
+  expand: 3,
+  nebula: 0 // Free - creates the project
 };
 
 module.exports = mongoose.model('UserQuota', userQuotaSchema);
