@@ -134,7 +134,7 @@ app.post('/api/v1/setup-once', async (req, res) => {
   }
 });
 
-// FORCE SEED - bypasses deduplication
+// FORCE SEED - comprehensive showcase maps with depth
 app.post('/api/v1/force-seed', async (req, res) => {
   try {
     const crypto = require('crypto');
@@ -143,6 +143,9 @@ app.post('/api/v1/force-seed', async (req, res) => {
     const Project = require('./models/Project');
     const Node = require('./models/Node');
     const SharedMap = require('./models/SharedMap');
+
+    // Delete existing seed maps first
+    await SharedMap.deleteMany({ isSeed: true });
 
     // Get or create Clockwork user
     let user = await User.findOne({ email: 'system@clockwork.app' });
@@ -158,74 +161,281 @@ app.post('/api/v1/force-seed', async (req, res) => {
       await user.save();
     }
 
-    const topics = [
-      { category: 'business', premise: 'A boutique coffee roastery with direct-to-consumer subscriptions' },
-      { category: 'career', premise: 'Transition from software engineering to product management in 6 months' },
-      { category: 'product', premise: 'A privacy-first habit tracking app that works offline' },
-      { category: 'creative', premise: 'A documentary series exploring urban farming pioneers' },
-      { category: 'business', premise: 'A mobile car detailing service targeting residential neighborhoods' }
+    // Comprehensive seed data with domain-specific labels and deep structure
+    const seedMaps = [
+      {
+        category: 'business',
+        title: 'Mobile Detailing Service',
+        description: 'A mobile car detailing business targeting residential neighborhoods with premium packages.',
+        coverage: 72,
+        roots: [
+          { constellation: 'offer', label: 'The Service', statement: 'What you deliver to customers', stars: [
+            { label: 'Interior Detail', statement: 'Deep cleaning of seats, carpets, and surfaces', status: 'kept', children: [
+              { label: 'Leather Care', statement: 'Conditioning and protection for leather surfaces', status: 'kept' },
+              { label: 'Odor Removal', statement: 'Enzyme treatment for stubborn smells', status: 'unexplored' }
+            ]},
+            { label: 'Exterior Polish', statement: 'Multi-stage paint correction and ceramic coating', status: 'kept' }
+          ]},
+          { constellation: 'demand', label: 'Your Clients', statement: 'Who pays and why they need you', stars: [
+            { label: 'Busy Professionals', statement: 'No time to visit a car wash, value convenience', status: 'kept', children: [
+              { label: 'Recurring Schedule', statement: 'Monthly subscription for hassle-free maintenance', status: 'kept' }
+            ]},
+            { label: 'Car Enthusiasts', statement: 'Want showroom quality at home', status: 'unexplored' }
+          ]},
+          { constellation: 'delivery', label: 'How You Reach Them', statement: 'Marketing and customer acquisition', stars: [
+            { label: 'Neighborhood Blitz', statement: 'Door hangers when you finish a job nearby', status: 'kept' },
+            { label: 'Referral Bonus', statement: '$25 credit for each new customer referred', status: 'kept' }
+          ]},
+          { constellation: 'economy', label: 'The Numbers', statement: 'Revenue, costs, and margins', stars: [
+            { label: 'Package Pricing', statement: '$150 basic, $250 premium, $400 full detail', status: 'kept', children: [
+              { label: 'Upsell Path', statement: 'Ceramic coating add-on at $200 margin', status: 'kept' }
+            ]},
+            { label: 'Supply Costs', statement: '$30-50 in products per full detail', status: 'kept' }
+          ]},
+          { constellation: 'orchestration', label: 'Operations', statement: 'How the work actually gets done', stars: [
+            { label: 'Equipment Setup', statement: 'Van with water tank, generator, and tools', status: 'kept' },
+            { label: 'Booking System', statement: 'Square appointments with automated reminders', status: 'unexplored' }
+          ]},
+          { constellation: 'risk', label: 'What Could Break', statement: 'Threats to the business model', stars: [
+            { label: 'Weather Dependency', statement: 'Rain cancels outdoor work', status: 'unexplored' },
+            { label: 'Insurance Gap', statement: 'Damage liability while on customer property', status: 'kept' }
+          ]}
+        ]
+      },
+      {
+        category: 'career',
+        title: 'Engineer to PM Pivot',
+        description: 'A structured 6-month transition from software engineering to product management.',
+        coverage: 58,
+        roots: [
+          { constellation: 'offer', label: 'Skills to Build', statement: 'What makes you hirable as a PM', stars: [
+            { label: 'Product Sense', statement: 'Developing intuition for what users need', status: 'kept', children: [
+              { label: 'User Interviews', statement: 'Practice running 10 discovery calls', status: 'kept' },
+              { label: 'Competitive Analysis', statement: 'Deep-dive 3 products in target industry', status: 'unexplored' }
+            ]},
+            { label: 'Stakeholder Communication', statement: 'Translating tech to business outcomes', status: 'kept' }
+          ]},
+          { constellation: 'demand', label: 'Target Roles', statement: 'Which companies and positions to pursue', stars: [
+            { label: 'Technical PM Roles', statement: 'Leverage engineering background as advantage', status: 'kept' },
+            { label: 'Growth Stage Startups', statement: 'More flexibility, faster learning curve', status: 'kept' }
+          ]},
+          { constellation: 'delivery', label: 'How to Get Noticed', statement: 'Building visibility and credibility', stars: [
+            { label: 'Side Project', statement: 'Ship something small, write about decisions', status: 'kept', children: [
+              { label: 'Product Teardown Blog', statement: 'Weekly analysis of real product decisions', status: 'kept' }
+            ]},
+            { label: 'Internal Transfer', statement: 'Shadow PM team at current company', status: 'unexplored' }
+          ]},
+          { constellation: 'economy', label: 'Financial Bridge', statement: 'Managing income during transition', stars: [
+            { label: 'Salary Expectations', statement: 'May take 10-20% cut for first PM role', status: 'kept' },
+            { label: 'Runway Needed', statement: '3 months expenses for interview period', status: 'kept' }
+          ]},
+          { constellation: 'orchestration', label: 'The Timeline', statement: 'Week-by-week execution plan', stars: [
+            { label: 'Months 1-2', statement: 'Skill building and portfolio creation', status: 'kept' },
+            { label: 'Months 3-4', statement: 'Networking and informational interviews', status: 'unexplored' },
+            { label: 'Months 5-6', statement: 'Active applications and interview prep', status: 'unexplored' }
+          ]},
+          { constellation: 'risk', label: 'Blockers', statement: 'What could derail the transition', stars: [
+            { label: 'Imposter Syndrome', statement: 'Feeling unqualified without PM title', status: 'kept' },
+            { label: 'Golden Handcuffs', statement: 'Hard to leave comfortable engineering salary', status: 'unexplored' }
+          ]}
+        ]
+      },
+      {
+        category: 'product',
+        title: 'Offline Habit Tracker',
+        description: 'A privacy-first habit tracking app that works entirely offline with optional encrypted sync.',
+        coverage: 45,
+        roots: [
+          { constellation: 'offer', label: 'Core Features', statement: 'What the app actually does', stars: [
+            { label: 'Habit Streaks', statement: 'Visual tracking with break forgiveness', status: 'kept', children: [
+              { label: 'Streak Shields', statement: 'Bank 2 skip days per month for emergencies', status: 'kept' }
+            ]},
+            { label: 'Local-First Storage', statement: 'SQLite database on device, never cloud-required', status: 'kept' }
+          ]},
+          { constellation: 'demand', label: 'Who Wants This', statement: 'Target users and their motivations', stars: [
+            { label: 'Privacy Advocates', statement: 'Tired of apps selling their behavior data', status: 'kept' },
+            { label: 'Offline Workers', statement: 'Field work, travel, unreliable connectivity', status: 'unexplored' }
+          ]},
+          { constellation: 'delivery', label: 'Distribution', statement: 'How people find and download it', stars: [
+            { label: 'Privacy Communities', statement: 'Reddit, HN, privacy-focused newsletters', status: 'kept', children: [
+              { label: 'Open Source Core', statement: 'Audit-friendly codebase builds trust', status: 'unexplored' }
+            ]},
+            { label: 'App Store SEO', statement: 'Target "offline habit tracker" keywords', status: 'unexplored' }
+          ]},
+          { constellation: 'economy', label: 'Revenue Model', statement: 'How the app makes money', stars: [
+            { label: 'One-Time Purchase', statement: '$9.99 unlock, no subscriptions ever', status: 'kept' },
+            { label: 'Optional Sync Add-on', statement: '$2.99/month for encrypted cross-device sync', status: 'unexplored' }
+          ]},
+          { constellation: 'orchestration', label: 'Build Plan', statement: 'Technical and launch execution', stars: [
+            { label: 'React Native', statement: 'Single codebase for iOS and Android', status: 'kept' },
+            { label: 'MVP Scope', statement: '3 habits, streaks, reminders — ship in 6 weeks', status: 'kept' }
+          ]},
+          { constellation: 'risk', label: 'Failure Modes', statement: 'What could kill the product', stars: [
+            { label: 'Feature Creep', statement: 'Adding too much defeats simplicity promise', status: 'kept' },
+            { label: 'Platform Lock-out', statement: 'Apple/Google policy changes', status: 'unexplored' }
+          ]}
+        ]
+      },
+      {
+        category: 'creative',
+        title: 'Urban Farming Documentary',
+        description: 'A 6-part documentary series profiling pioneers transforming city rooftops into productive farms.',
+        coverage: 38,
+        roots: [
+          { constellation: 'offer', label: 'The Story', statement: 'What makes this compelling to watch', stars: [
+            { label: 'Character Arcs', statement: 'Follow 4 farmers across growing season', status: 'kept', children: [
+              { label: 'The Rooftop Pioneer', statement: 'Former chef converting Brooklyn rooftops', status: 'kept' },
+              { label: 'The Policy Fighter', statement: 'Activist changing zoning laws in Detroit', status: 'kept' }
+            ]},
+            { label: 'Visual Contrast', statement: 'Lush green against concrete jungle', status: 'kept' }
+          ]},
+          { constellation: 'demand', label: 'The Audience', statement: 'Who watches and why they care', stars: [
+            { label: 'Sustainability Curious', statement: 'Mainstream viewers exploring green living', status: 'kept' },
+            { label: 'Urban Planners', statement: 'Professional interest in livable cities', status: 'unexplored' }
+          ]},
+          { constellation: 'delivery', label: 'Distribution Path', statement: 'How it reaches viewers', stars: [
+            { label: 'Streaming Pitch', statement: 'Netflix, Hulu, or Amazon original', status: 'unexplored', children: [
+              { label: 'Festival Circuit First', statement: 'Tribeca or SXSW for credibility', status: 'unexplored' }
+            ]},
+            { label: 'PBS Partnership', statement: 'Educational angle for broadcast', status: 'kept' }
+          ]},
+          { constellation: 'economy', label: 'The Budget', statement: 'Funding and financial structure', stars: [
+            { label: 'Production Costs', statement: '$400K for 6 episodes, lean crew', status: 'kept' },
+            { label: 'Grant Funding', statement: 'Environmental foundations, arts councils', status: 'kept' }
+          ]},
+          { constellation: 'orchestration', label: 'Production Plan', statement: 'How the work gets done', stars: [
+            { label: 'Shooting Schedule', statement: 'March-October to capture full season', status: 'kept' },
+            { label: 'Crew Size', statement: 'Director, DP, sound, 2 producers', status: 'unexplored' }
+          ]},
+          { constellation: 'risk', label: 'What Could Fail', statement: 'Production and market risks', stars: [
+            { label: 'Subject Burnout', statement: 'Farmers tired of cameras after month 4', status: 'unexplored' },
+            { label: 'Market Saturation', statement: 'Too many food/farming docs already', status: 'kept' }
+          ]}
+        ]
+      },
+      {
+        category: 'business',
+        title: 'Specialty Tea Import',
+        description: 'Direct-trade tea importing from small Asian farms to specialty cafes and subscription customers.',
+        coverage: 65,
+        roots: [
+          { constellation: 'offer', label: 'The Product', statement: 'What you sell and why it is special', stars: [
+            { label: 'Single-Origin Lots', statement: 'Traceable to specific farm and harvest', status: 'kept', children: [
+              { label: 'Tasting Notes', statement: 'Detailed flavor profiles like specialty coffee', status: 'kept' }
+            ]},
+            { label: 'Direct Relationships', statement: 'Skip brokers, pay farmers 40% more', status: 'kept' }
+          ]},
+          { constellation: 'demand', label: 'Customer Segments', statement: 'Who buys and at what volume', stars: [
+            { label: 'Specialty Cafes', statement: 'B2B wholesale for tea-forward menus', status: 'kept', children: [
+              { label: 'Staff Training', statement: 'Teach baristas to brew and sell premium tea', status: 'unexplored' }
+            ]},
+            { label: 'Home Enthusiasts', statement: 'D2C subscriptions and one-time purchases', status: 'kept' }
+          ]},
+          { constellation: 'delivery', label: 'Go-to-Market', statement: 'How you build the customer base', stars: [
+            { label: 'Trade Shows', statement: 'World Tea Expo, specialty coffee events', status: 'kept' },
+            { label: 'Content Marketing', statement: 'YouTube brewing guides, origin stories', status: 'unexplored' }
+          ]},
+          { constellation: 'economy', label: 'Unit Economics', statement: 'Margins and pricing structure', stars: [
+            { label: 'Wholesale Margin', statement: '35% on $15-30/100g to cafes', status: 'kept' },
+            { label: 'D2C Margin', statement: '60% on $20-45/100g retail', status: 'kept' }
+          ]},
+          { constellation: 'orchestration', label: 'Supply Chain', statement: 'Sourcing, importing, fulfillment', stars: [
+            { label: 'Sourcing Trips', statement: 'Annual visits to Taiwan, Japan, Yunnan', status: 'kept' },
+            { label: '3PL Fulfillment', statement: 'ShipBob for D2C, self-ship wholesale', status: 'unexplored' }
+          ]},
+          { constellation: 'risk', label: 'Vulnerabilities', statement: 'What threatens the business', stars: [
+            { label: 'Import Regulations', statement: 'FDA compliance, country-specific rules', status: 'kept' },
+            { label: 'Climate Volatility', statement: 'Bad harvest years disrupt supply', status: 'unexplored' }
+          ]}
+        ]
+      }
     ];
 
     const created = [];
-    for (const topic of topics) {
-      const project = new Project({
-        name: topic.premise.substring(0, 100),
-        premise: topic.premise,
-        ownerId: user._id
-      });
+    for (const seed of seedMaps) {
+      const project = new Project({ name: seed.title, premise: seed.description, ownerId: user._id });
       await project.save();
 
-      // Create core node
-      const coreId = new mongoose.Types.ObjectId();
-      await new Node({
-        _id: coreId,
-        projectId: project._id,
-        kind: 'core',
-        title: 'CORE',
-        statement: topic.premise,
-        x: 600, y: 400, depth: 0
-      }).save();
+      const allNodes = [];
+      const allEdges = [];
 
-      // Create constellation nodes
-      const constellations = ['offer', 'demand', 'delivery', 'economy'];
-      const nodeIds = [coreId];
-      for (let i = 0; i < constellations.length; i++) {
-        const angle = (2 * Math.PI * i / constellations.length) - Math.PI/2;
-        const nodeId = new mongoose.Types.ObjectId();
-        nodeIds.push(nodeId);
-        await new Node({
-          _id: nodeId,
-          projectId: project._id,
-          parentNodeId: coreId,
-          kind: 'constellation',
-          constellation: constellations[i],
-          title: constellations[i].charAt(0).toUpperCase() + constellations[i].slice(1),
-          statement: `${constellations[i]} dimension`,
-          status: Math.random() > 0.4 ? 'kept' : 'unexplored',
-          x: Math.round(600 + 180 * Math.cos(angle)),
-          y: Math.round(400 + 180 * Math.sin(angle)),
-          depth: 1
-        }).save();
+      // Core node
+      const coreId = new mongoose.Types.ObjectId();
+      allNodes.push({ _id: coreId, label: 'CORE', statement: seed.description, x: 500, y: 400, depth: 0, kind: 'core' });
+
+      // Generate constellation roots and their children
+      const angleStep = (2 * Math.PI) / seed.roots.length;
+      seed.roots.forEach((root, i) => {
+        const angle = angleStep * i - Math.PI / 2;
+        const rootId = new mongoose.Types.ObjectId();
+        const rootX = Math.round(500 + 200 * Math.cos(angle));
+        const rootY = Math.round(400 + 200 * Math.sin(angle));
+
+        allNodes.push({
+          _id: rootId, parentNodeId: coreId, label: root.label, statement: root.statement,
+          constellation: root.constellation, constellationLabel: root.label,
+          x: rootX, y: rootY, depth: 1, status: 'kept', kind: 'constellation'
+        });
+        allEdges.push({ _id: new mongoose.Types.ObjectId(), sourceId: coreId, targetId: rootId });
+
+        // Stars under this root
+        root.stars.forEach((star, j) => {
+          const starAngle = angle + (j - (root.stars.length - 1) / 2) * 0.3;
+          const starId = new mongoose.Types.ObjectId();
+          const starX = Math.round(rootX + 160 * Math.cos(starAngle));
+          const starY = Math.round(rootY + 160 * Math.sin(starAngle));
+
+          allNodes.push({
+            _id: starId, parentNodeId: rootId, label: star.label, statement: star.statement,
+            constellation: root.constellation, constellationLabel: root.label,
+            x: starX, y: starY, depth: 2, status: star.status || 'unexplored', kind: 'star'
+          });
+          allEdges.push({ _id: new mongoose.Types.ObjectId(), sourceId: rootId, targetId: starId });
+
+          // Sub-stars (depth 3)
+          if (star.children) {
+            star.children.forEach((child, k) => {
+              const childAngle = starAngle + (k - (star.children.length - 1) / 2) * 0.25;
+              const childId = new mongoose.Types.ObjectId();
+              allNodes.push({
+                _id: childId, parentNodeId: starId, label: child.label, statement: child.statement,
+                constellation: root.constellation, constellationLabel: root.label,
+                x: Math.round(starX + 130 * Math.cos(childAngle)),
+                y: Math.round(starY + 130 * Math.sin(childAngle)),
+                depth: 3, status: child.status || 'unexplored', kind: 'star'
+              });
+              allEdges.push({ _id: new mongoose.Types.ObjectId(), sourceId: starId, targetId: childId });
+            });
+          }
+        });
+      });
+
+      // Save to DB
+      for (const n of allNodes) {
+        await new Node({ ...n, projectId: project._id, title: n.label }).save();
       }
 
-      // Create SharedMap
-      const nodes = await Node.find({ projectId: project._id }).lean();
-      const coreNode = nodes.find(n => n.kind === 'core');
-      const otherNodes = nodes.filter(n => n.kind !== 'core');
+      // Create SharedMap snapshot
+      const coreNode = allNodes.find(n => n.kind === 'core');
+      const childNodes = allNodes.filter(n => n.kind !== 'core');
 
       const sharedMap = new SharedMap({
         projectId: project._id,
         ownerId: user._id,
-        title: topic.premise.substring(0, 100),
-        description: topic.premise,
-        category: topic.category,
+        title: seed.title,
+        description: seed.description,
+        category: seed.category,
         visibility: 'public',
-        coverage: Math.floor(Math.random() * 40) + 30,
-        nodeCount: nodes.length,
+        coverage: seed.coverage,
+        nodeCount: allNodes.length,
         snapshot: {
-          core: { _id: coreNode._id, label: coreNode.title, statement: coreNode.statement, x: coreNode.x, y: coreNode.y },
-          nodes: otherNodes.map(n => ({ _id: n._id, parentNodeId: n.parentNodeId, label: n.title, statement: n.statement, constellation: n.constellation, status: n.status, depth: n.depth, x: n.x, y: n.y })),
-          edges: otherNodes.map(n => ({ _id: new mongoose.Types.ObjectId(), sourceId: coreNode._id, targetId: n._id }))
+          core: { _id: coreNode._id, label: coreNode.label, statement: coreNode.statement, x: coreNode.x, y: coreNode.y },
+          nodes: childNodes.map(n => ({
+            _id: n._id, parentNodeId: n.parentNodeId, label: n.label, statement: n.statement,
+            constellation: n.constellation, constellationLabel: n.constellationLabel,
+            status: n.status, depth: n.depth, x: n.x, y: n.y
+          })),
+          edges: allEdges.map(e => ({ _id: e._id, sourceId: e.sourceId, targetId: e.targetId }))
         },
         publishedAt: new Date(),
         ownerName: 'Clockwork',
@@ -233,10 +443,10 @@ app.post('/api/v1/force-seed', async (req, res) => {
         isSeed: true
       });
       await sharedMap.save();
-      created.push(topic.premise.substring(0, 50));
+      created.push(seed.title);
     }
 
-    res.json({ success: true, created });
+    res.json({ success: true, created, count: created.length });
   } catch (err) {
     res.status(500).json({ error: err.message, stack: err.stack });
   }
