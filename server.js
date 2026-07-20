@@ -69,16 +69,37 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many attempts, please try again later.' },
+// Separate limiters for signup vs login (don't share budget)
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10, // 10 signups per hour per IP
+  message: { error: 'Too many signup attempts. Please try again in an hour.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // 20 login attempts per 15 min per IP
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const passwordResetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // 5 reset requests per hour
+  message: { error: 'Too many password reset attempts. Please try again in an hour.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 app.use('/api/', apiLimiter);
-app.use('/api/v1/auth/', authLimiter);
+// Apply specific limiters to auth routes (not a blanket limiter)
+app.use('/api/v1/auth/register', signupLimiter);
+app.use('/api/v1/auth/login', loginLimiter);
+app.use('/api/v1/auth/forgot-password', passwordResetLimiter);
+app.use('/api/v1/auth/reset-password', passwordResetLimiter);
 
 // Request logging (development)
 if (process.env.NODE_ENV === 'development') {
