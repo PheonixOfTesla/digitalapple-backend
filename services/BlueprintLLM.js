@@ -89,7 +89,7 @@ const costSchema = {
   additionalProperties: false
 };
 
-// JSON Schema for a star node
+// JSON Schema for a star node (full - used by expand)
 const starNodeSchema = {
   type: 'object',
   properties: {
@@ -107,34 +107,66 @@ const starNodeSchema = {
   additionalProperties: false
 };
 
-// JSON Schema for constellation with children
-const constellationSchema = {
+// Light schema for nebula: no detail, reasons capped at ~15 words
+const lightScoreSchema = {
   type: 'object',
   properties: {
-    constellation: { type: 'string', enum: ['offer', 'demand', 'delivery', 'economy', 'orchestration', 'risk'] },
-    statement: { type: 'string', maxLength: 200 },
-    detail: { type: 'string', maxLength: 1000 },
-    scores: scoresSchema,
-    confidence: confidenceSchema,
-    stage: { type: 'integer', minimum: 0, maximum: 9 },
-    status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] },
-    dependencies: { type: 'array', items: { type: 'string' } },
-    cost: costSchema,
-    sources: { type: 'array', items: { type: 'string' } },
-    children: { type: 'array', items: starNodeSchema }
+    value: { type: 'number', minimum: 0, maximum: 10 },
+    reason: { type: 'string', maxLength: 100 } // ~15 words max
   },
-  required: ['constellation', 'statement', 'detail', 'scores', 'confidence', 'stage', 'status', 'children'],
+  required: ['value', 'reason'],
   additionalProperties: false
 };
 
-// JSON Schema for nebula response
+const lightScoresSchema = {
+  type: 'object',
+  properties: {
+    economy: lightScoreSchema,
+    orchestration: lightScoreSchema,
+    demand: lightScoreSchema
+  },
+  required: ['economy', 'orchestration', 'demand'],
+  additionalProperties: false
+};
+
+// Light star for nebula: statement only, no detail (detail comes on expand)
+const nebulaStarSchema = {
+  type: 'object',
+  properties: {
+    statement: { type: 'string', maxLength: 150 },
+    scores: lightScoresSchema,
+    confidence: confidenceSchema,
+    stage: { type: 'integer', minimum: 0, maximum: 9 },
+    status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] }
+  },
+  required: ['statement', 'scores', 'confidence', 'stage', 'status'],
+  additionalProperties: false
+};
+
+// Nebula constellation: 0-2 children only (grounded stars, not fabricated breadth)
+const nebulaConstellationSchema = {
+  type: 'object',
+  properties: {
+    constellation: { type: 'string', enum: ['offer', 'demand', 'delivery', 'economy', 'orchestration', 'risk'] },
+    statement: { type: 'string', maxLength: 150 },
+    scores: lightScoresSchema,
+    confidence: confidenceSchema,
+    stage: { type: 'integer', minimum: 0, maximum: 9 },
+    status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] },
+    children: { type: 'array', items: nebulaStarSchema, maxItems: 2 }
+  },
+  required: ['constellation', 'statement', 'scores', 'confidence', 'stage', 'status', 'children'],
+  additionalProperties: false
+};
+
+// Nebula response: 6 roots, minimal children
 const nebulaResponseSchema = {
   type: 'object',
   properties: {
-    core: starNodeSchema,
+    core: nebulaStarSchema,
     constellations: {
       type: 'array',
-      items: constellationSchema,
+      items: nebulaConstellationSchema,
       minItems: 6,
       maxItems: 6
     }
@@ -227,7 +259,7 @@ const opCreateEdgeSchema = {
       properties: {
         fromNodeId: { type: 'string' },
         toNodeId: { type: 'string' },
-        type: { type: 'string', enum: ['dependency', 'alternative', 'expansion', 'rejection', 'contains'] }
+        type: { type: 'string', enum: ['dependency', 'alternative', 'expansion', 'rejection'] }
       },
       required: ['fromNodeId', 'toNodeId', 'type'],
       additionalProperties: false
@@ -560,24 +592,30 @@ async function generateNebula(premise, constraints = {}, maxRetries = 1) {
     ? `\n\nCONSTRAINTS PROVIDED:\n${JSON.stringify(constraints, null, 2)}`
     : '\n\nNo constraints provided - generate honest uncertainty markers.';
 
-  const userPrompt = `Decompose this business premise into a complete nebula with 6 constellation roots.
+  const userPrompt = `Decompose this business premise into a nebula with 6 constellation roots.
 
 PREMISE: "${premise}"${constraintText}
 
-Return exactly 6 constellations (offer, demand, delivery, economy, orchestration, risk).
-Each constellation should have 3-6 children.
-Name each constellation naturally for this business domain - never use generic who/what/where/when/why/how.
+CRITICAL GROUNDING RULE: This premise is ${premiseWordCount} words. Thin input produces a SMALL HONEST MAP that names what's missing — never fabricated breadth.
 
-Remember: Every score needs a reason. If something is unknown, mark confidence.basis='unknown'.`;
+Return exactly 6 constellations (offer, demand, delivery, economy, orchestration, risk).
+- Name each constellation naturally for this domain (e.g. "Roasting Operation" not "delivery")
+- Each constellation gets 0-2 children ONLY — add stars only where the premise actually supports them
+- Roots with nothing grounded: zero children, statement names what's missing
+- Reason strings: one sentence, ~15 words max. They justify a score, not explain the business.
+- No detail field — that comes on expand when the user asks about a specific node.
+
+Target: 6-14 total nodes for a short premise. Depth comes from expansion, not front-loading.`;
 
   let lastError = null;
   let tokensUsed = 0;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      // Nebula: 6 roots + 0-2 children each = 6-18 nodes, target <4k output tokens
       const requestParams = {
         model,
-        max_tokens: 8000,
+        max_tokens: 6000,
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt }
@@ -592,9 +630,9 @@ Remember: Every score needs a reason. If something is unknown, mark confidence.b
         }
       };
 
-      // Retry with higher tokens on truncation
+      // Safety net: retry with higher tokens (should rarely fire after payload reduction)
       if (attempt > 0) {
-        requestParams.max_tokens = 12000;
+        requestParams.max_tokens = 8000;
       }
 
       const response = await client.chat.completions.create(requestParams);
@@ -729,9 +767,10 @@ If no canvas changes needed, return empty ops array.`;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      // Chat: usually creates 0-2 nodes, target <2k output tokens
       const requestParams = {
         model,
-        max_tokens: 4000,
+        max_tokens: 2000,
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt }
@@ -747,7 +786,7 @@ If no canvas changes needed, return empty ops array.`;
       };
 
       if (attempt > 0) {
-        requestParams.max_tokens = 6000;
+        requestParams.max_tokens = 3000;
       }
 
       const response = await client.chat.completions.create(requestParams);
