@@ -716,9 +716,15 @@ Target: 6-14 total nodes for a short premise.`;
 /**
  * Expand a star into children.
  */
-async function expandStar(node, context, maxRetries = 1, refinePrompt = null) {
+async function expandStar(node, context, maxRetries = 1, refinePrompt = null, traceString = null) {
   // Build the user prompt, optionally including a refine instruction
   let userPrompt;
+
+  // Include trace context if available (grounding for expansion)
+  const traceSection = traceString && traceString !== '[No trace available]'
+    ? `\nTRACE (path from Core to this node - stay grounded to this lineage):
+${traceString}\n`
+    : '';
 
   if (refinePrompt) {
     // Refine mode: user is asking for specific changes or expansion
@@ -729,7 +735,7 @@ async function expandStar(node, context, maxRetries = 1, refinePrompt = null) {
 
 USER REQUEST:
 ${refinePrompt}
-
+${traceSection}
 PARENT NODE:
 ${JSON.stringify(node, null, 2)}
 
@@ -756,7 +762,7 @@ Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
   } else {
     // Standard expansion mode
     userPrompt = `Expand this node into 3-6 actionable child stars:
-
+${traceSection}
 PARENT NODE:
 ${JSON.stringify(node, null, 2)}
 
@@ -764,6 +770,7 @@ CONTEXT (other nodes):
 ${JSON.stringify(context.slice(0, 10), null, 2)}
 
 Each child should be one step more concrete than the parent.
+Stay grounded to the trace lineage shown above. Do not fabricate breadth.
 Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
   }
 

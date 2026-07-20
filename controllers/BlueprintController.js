@@ -10,8 +10,10 @@ const express = require('express');
 const Project = require('../models/Project');
 const Node = require('../models/Node');
 const Edge = require('../models/Edge');
+const Core = require('../models/Core');
 const UserQuota = require('../models/UserQuota');
 const { verifyToken } = require('../middleware/auth');
+const identity = require('../services/identity');
 
 // LLM service - lazy loaded to avoid startup errors if API key missing
 let BlueprintLLM = null;
@@ -363,7 +365,7 @@ router.post('/projects/:id/claim', verifyToken, async (req, res) => {
 
 // ============== NODES ==============
 
-// Create node
+// Create node (manual creation requires parent for identity)
 router.post('/projects/:projectId/nodes', optionalAuth, async (req, res) => {
   try {
     const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
@@ -371,36 +373,80 @@ router.post('/projects/:projectId/nodes', optionalAuth, async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const { kind, title, body, scores, x, y } = req.body;
+    const { kind, title, body, scores, x, y, parentNodeId } = req.body;
 
     if (!title?.trim()) {
       return res.status(400).json({ error: 'Title is required' });
     }
 
-    const node = new Node({
+    // Find Core for this project
+    const coreDoc = await Core.findOne({ projectId: project._id });
+
+    // If project has identity, manual nodes MUST have a parent
+    if (coreDoc && !parentNodeId) {
+      return res.status(400).json({
+        error: 'Parent node required',
+        message: 'Manual nodes must be attached to an existing node in the map.',
+        hint: 'Provide parentNodeId to specify where this node should attach.'
+      });
+    }
+
+    // Validate parent exists and belongs to project
+    let parentNode = null;
+    let parentPath = [];
+    if (parentNodeId) {
+      parentNode = await Node.findById(parentNodeId);
+      if (!parentNode || parentNode.projectId.toString() !== project._id.toString()) {
+        return res.status(400).json({ error: 'Invalid parent node' });
+      }
+      parentPath = parentNode.path || [];
+
+      // Verify parent identity if it has one
+      if (parentNode.coreId && parentNode.stableId) {
+        const identityCheck = identity.quickVerifyIdentity(parentNode);
+        if (!identityCheck.valid) {
+          return res.status(409).json({
+            error: 'Parent node identity compromised',
+            reason: identityCheck.reason,
+            message: 'Cannot attach to a node with invalid identity trace.'
+          });
+        }
+      }
+    }
+
+    const nodeData = {
       projectId: project._id,
+      parentNodeId: parentNodeId || null,
       kind: kind || 'idea',
       title: title.trim(),
       body: body?.trim(),
-      scores: scores || { economy: 0, orchestration: 0, demand: 0 },
+      scores: scores || { economy: { value: 0 }, orchestration: { value: 0 }, demand: { value: 0 } },
       x: x ?? 100,
-      y: y ?? 100
-    });
+      y: y ?? 100,
+      depth: parentNode ? (parentNode.depth || 0) + 1 : 0
+    };
 
+    const node = new Node(nodeData);
     await node.save();
+
+    // Assign identity if project has Core
+    if (coreDoc && parentNode) {
+      const nodePath = [...parentPath, { nodeId: node._id, title: node.title }];
+      node.coreId = coreDoc._id;
+      node.path = nodePath;
+      node.stableId = identity.computeStableId(coreDoc._id, nodePath);
+      node.essence = identity.freezeEssence(node);
+      node.derivation = {
+        kind: 'manual',
+        sourcePrompt: null,
+        usedTrace: false
+      };
+      await node.save();
+    }
 
     res.json({
       success: true,
-      node: {
-        id: node._id,
-        kind: node.kind,
-        title: node.title,
-        body: node.body,
-        scores: node.scores,
-        x: node.x,
-        y: node.y,
-        kept: node.kept
-      }
+      node: formatNodeForClient(node)
     });
   } catch (error) {
     console.error('Create node error:', error);
@@ -914,9 +960,9 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     const ops = [];
     const nodeMap = {}; // Track created node IDs
 
-    // Create core node
+    // Create core node (without identity fields first - need _id)
     const corePos = layout.find(l => l.nodeRef === 'core');
-    const coreNode = new Node({
+    const coreNodeData = {
       projectId: project._id,
       kind: 'core',
       title: nebula.core?.title || premise.substring(0, 40),
@@ -930,9 +976,40 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       x: corePos?.x || 600,
       y: corePos?.y || 400,
       depth: 0
-    });
+    };
+    const coreNode = new Node(coreNodeData);
     await coreNode.save();
     nodeMap.core = coreNode._id;
+
+    // Create Core document (identity anchor)
+    const coreDoc = new Core({
+      projectId: project._id,
+      coreNodeId: coreNode._id,
+      premise: premise,
+      classification: nebula.classification || {
+        type: 'unknown',
+        confidence: 0.5,
+        alternates: [],
+        reasoning: 'Generated via nebula'
+      },
+      frameMeta: nebula.frameMeta || {},
+      stagesEnabled: nebula.stagesEnabled
+    });
+    await coreDoc.save();
+
+    // Now assign identity to core node
+    const corePath = [{ nodeId: coreNode._id, title: coreNode.title }];
+    coreNode.coreId = coreDoc._id;
+    coreNode.path = corePath;
+    coreNode.stableId = identity.computeStableId(coreDoc._id, corePath);
+    coreNode.essence = identity.freezeEssence(coreNode);
+    coreNode.derivation = {
+      kind: 'nebula',
+      sourcePrompt: premise,
+      usedTrace: false
+    };
+    await coreNode.save();
+
     ops.push({ op: 'createNode', nodeId: coreNode._id.toString(), data: formatNodeForClient(coreNode) });
 
     // Create root nodes and their stars (new frame-aware format)
@@ -953,7 +1030,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         'when': null // No direct mapping
       };
 
-      const rootNode = new Node({
+      const rootNodeData = {
         projectId: project._id,
         parentNodeId: coreNode._id,
         kind: 'constellation',
@@ -970,8 +1047,23 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         x: rootPos?.x || 600,
         y: rootPos?.y || 400,
         depth: 1
-      });
+      };
+      const rootNode = new Node(rootNodeData);
       await rootNode.save();
+
+      // Assign identity to root node
+      const rootPath = [...corePath, { nodeId: rootNode._id, title: rootNode.title }];
+      rootNode.coreId = coreDoc._id;
+      rootNode.path = rootPath;
+      rootNode.stableId = identity.computeStableId(coreDoc._id, rootPath);
+      rootNode.essence = identity.freezeEssence(rootNode);
+      rootNode.derivation = {
+        kind: 'nebula',
+        sourcePrompt: premise,
+        usedTrace: true
+      };
+      await rootNode.save();
+
       nodeMap[`root:${rootId}`] = rootNode._id;
       ops.push({ op: 'createNode', nodeId: rootNode._id.toString(), data: formatNodeForClient(rootNode) });
 
@@ -991,7 +1083,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         const star = stars[j];
         const starPos = layout.find(l => l.nodeRef === `star:${rootId}:${j}`);
 
-        const starNode = new Node({
+        const starNodeData = {
           projectId: project._id,
           parentNodeId: rootNode._id,
           kind: 'star',
@@ -1008,8 +1100,23 @@ router.post('/nebula', optionalAuth, async (req, res) => {
           x: starPos?.x || rootNode.x + 100,
           y: starPos?.y || rootNode.y + j * 60,
           depth: 2
-        });
+        };
+        const starNode = new Node(starNodeData);
         await starNode.save();
+
+        // Assign identity to star node
+        const starPath = [...rootPath, { nodeId: starNode._id, title: starNode.title }];
+        starNode.coreId = coreDoc._id;
+        starNode.path = starPath;
+        starNode.stableId = identity.computeStableId(coreDoc._id, starPath);
+        starNode.essence = identity.freezeEssence(starNode);
+        starNode.derivation = {
+          kind: 'nebula',
+          sourcePrompt: premise,
+          usedTrace: true
+        };
+        await starNode.save();
+
         ops.push({ op: 'createNode', nodeId: starNode._id.toString(), data: formatNodeForClient(starNode) });
 
         // Create edge from root to star
@@ -1078,6 +1185,28 @@ router.post('/expand', optionalAuth, async (req, res) => {
     const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
     if (!project) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Verify node identity if it has identity fields
+    if (node.coreId && node.stableId) {
+      const identityCheck = identity.quickVerifyIdentity(node);
+      if (!identityCheck.valid) {
+        return res.status(409).json({
+          error: 'Node identity compromised',
+          reason: identityCheck.reason,
+          message: 'This node\'s identity trace is invalid. It may have been corrupted.',
+          nodeId: node._id.toString()
+        });
+      }
+    }
+
+    // Get Core document for identity assignment to children
+    let coreDoc = null;
+    if (node.coreId) {
+      coreDoc = await Core.findById(node.coreId);
+    } else {
+      // Legacy node - try to find Core by project
+      coreDoc = await Core.findOne({ projectId: node.projectId });
     }
 
     // Check if already expanded (unless refining)
@@ -1150,9 +1279,12 @@ router.post('/expand', optionalAuth, async (req, res) => {
       const CHILD_SPREAD = 100;
       const roots = nebula.roots || [];
 
+      // Get parent path for identity inheritance
+      const parentPath = node.path || [];
+
       for (let i = 0; i < roots.length; i++) {
         const root = roots[i];
-        const childNode = new Node({
+        const childNodeData = {
           projectId: node.projectId,
           parentNodeId: node._id,
           kind: 'constellation',
@@ -1169,8 +1301,25 @@ router.post('/expand', optionalAuth, async (req, res) => {
           x: node.x + 200,
           y: node.y + (i - (roots.length - 1) / 2) * CHILD_SPREAD,
           depth: node.depth + 1
-        });
+        };
+        const childNode = new Node(childNodeData);
         await childNode.save();
+
+        // Assign identity (path continues from parent, NOT a new core)
+        if (coreDoc) {
+          const childPath = [...parentPath, { nodeId: childNode._id, title: childNode.title }];
+          childNode.coreId = coreDoc._id;
+          childNode.path = childPath;
+          childNode.stableId = identity.computeStableId(coreDoc._id, childPath);
+          childNode.essence = identity.freezeEssence(childNode);
+          childNode.derivation = {
+            kind: 'expand',
+            sourcePrompt: node.statement || node.title,
+            usedTrace: true
+          };
+          await childNode.save();
+        }
+
         ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
 
         // Create edge
@@ -1185,9 +1334,11 @@ router.post('/expand', optionalAuth, async (req, res) => {
 
         // Create star children under each root
         const stars = root.stars || [];
+        const childPath = childNode.path || [...parentPath, { nodeId: childNode._id, title: childNode.title }];
+
         for (let j = 0; j < stars.length; j++) {
           const star = stars[j];
-          const starNode = new Node({
+          const starNodeData = {
             projectId: node.projectId,
             parentNodeId: childNode._id,
             kind: 'star',
@@ -1202,8 +1353,25 @@ router.post('/expand', optionalAuth, async (req, res) => {
             x: childNode.x + 180,
             y: childNode.y + (j - (stars.length - 1) / 2) * 70,
             depth: node.depth + 2
-          });
+          };
+          const starNode = new Node(starNodeData);
           await starNode.save();
+
+          // Assign identity
+          if (coreDoc) {
+            const starPath = [...childPath, { nodeId: starNode._id, title: starNode.title }];
+            starNode.coreId = coreDoc._id;
+            starNode.path = starPath;
+            starNode.stableId = identity.computeStableId(coreDoc._id, starPath);
+            starNode.essence = identity.freezeEssence(starNode);
+            starNode.derivation = {
+              kind: 'expand',
+              sourcePrompt: childNode.statement || childNode.title,
+              usedTrace: true
+            };
+            await starNode.save();
+          }
+
           ops.push({ op: 'createNode', nodeId: starNode._id.toString(), data: formatNodeForClient(starNode) });
 
           const starEdge = new Edge({
@@ -1243,6 +1411,9 @@ router.post('/expand', optionalAuth, async (req, res) => {
       // MODE B: Star-children expansion (lightweight)
       const contextNodes = await Node.find({ projectId: node.projectId }).limit(20).lean();
 
+      // Build trace for LLM context (grounding)
+      const traceString = await identity.evaluateTraceForExpansion(node);
+
       const llm = getLLM();
       const expandResult = await llm.expandStar(
         formatNodeForClient(node),
@@ -1253,7 +1424,8 @@ router.post('/expand', optionalAuth, async (req, res) => {
           parentNodeId: n.parentNodeId?.toString()
         })),
         1, // maxRetries
-        refinePrompt || null
+        refinePrompt || null,
+        traceString // Pass trace for grounding
       );
 
       const children = expandResult.children || [];
@@ -1307,10 +1479,11 @@ router.post('/expand', optionalAuth, async (req, res) => {
       }
 
       const CHILD_SPREAD = 80;
+      const parentPath = node.path || [];
 
       for (let i = 0; i < children.length; i++) {
         const child = children[i];
-        const childNode = new Node({
+        const childNodeData = {
           projectId: node.projectId,
           parentNodeId: node._id,
           kind: 'star',
@@ -1327,8 +1500,25 @@ router.post('/expand', optionalAuth, async (req, res) => {
           x: node.x + 180,
           y: node.y + (i - (children.length - 1) / 2) * CHILD_SPREAD,
           depth: node.depth + 1
-        });
+        };
+        const childNode = new Node(childNodeData);
         await childNode.save();
+
+        // Assign identity
+        if (coreDoc) {
+          const childPath = [...parentPath, { nodeId: childNode._id, title: childNode.title }];
+          childNode.coreId = coreDoc._id;
+          childNode.path = childPath;
+          childNode.stableId = identity.computeStableId(coreDoc._id, childPath);
+          childNode.essence = identity.freezeEssence(childNode);
+          childNode.derivation = {
+            kind: 'expand',
+            sourcePrompt: node.statement || node.title,
+            usedTrace: true
+          };
+          await childNode.save();
+        }
+
         ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
 
         const edge = new Edge({
@@ -1429,7 +1619,12 @@ function formatNodeForClient(node) {
     expanded: node.expanded || false,
     terminal: node.terminal || false,
     expansionType: node.expansionType || null,
-    subFrameType: node.subFrameType || null
+    subFrameType: node.subFrameType || null,
+    // Identity fields
+    coreId: node.coreId?.toString() || null,
+    stableId: node.stableId || null,
+    essence: node.essence || null,
+    derivation: node.derivation || null
   };
 }
 
