@@ -16,9 +16,11 @@ const Follow = require('../models/Follow');
 const Project = require('../models/Project');
 const Node = require('../models/Node');
 const Edge = require('../models/Edge');
+const Core = require('../models/Core');
 const User = require('../models/User');
 const { verifyToken } = require('../middleware/auth');
 const rateLimit = require('express-rate-limit');
+const identity = require('../services/identity');
 
 // Rate limiters
 const starLimiter = rateLimit({
@@ -155,6 +157,9 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       return res.status(404).json({ success: false, error: 'Map not found' });
     }
 
+    // Get source Core if exists (for origin tracking)
+    const sourceCore = await Core.findOne({ projectId: map.projectId });
+
     // Get user info
     const user = await User.findById(userId);
 
@@ -174,31 +179,58 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
 
     // Create nodes from snapshot
     const nodeIdMap = new Map(); // old ID -> new ID
+    const pathMap = new Map();   // old ID -> path in source (for rebuilding)
+    let coreNodeId = null;
 
-    // Create core node
+    // Create core node first
     if (map.snapshot.core) {
+      const snapCore = map.snapshot.core;
       const coreNode = new Node({
         projectId: project._id,
-        label: map.snapshot.core.label,
-        statement: map.snapshot.core.statement,
-        detail: map.snapshot.core.detail,
-        x: map.snapshot.core.x || 600,
-        y: map.snapshot.core.y || 400,
+        kind: 'core',
+        title: snapCore.title || snapCore.label,
+        label: snapCore.label,
+        statement: snapCore.statement,
+        detail: snapCore.detail,
+        body: snapCore.detail,
+        x: snapCore.x || 600,
+        y: snapCore.y || 400,
         depth: 0
       });
       await coreNode.save({ session });
-      nodeIdMap.set(map.snapshot.core._id.toString(), coreNode._id);
+      nodeIdMap.set(snapCore._id.toString(), coreNode._id);
+      coreNodeId = coreNode._id;
+
+      // Store path for core (just itself)
+      pathMap.set(snapCore._id.toString(), [{ nodeId: coreNode._id, title: coreNode.title }]);
     }
 
-    // Create other nodes
+    // Create other nodes (collect in order for path building)
+    const orderedNodes = [];
+    const nodesById = new Map();
     for (const snapNode of (map.snapshot.nodes || [])) {
+      nodesById.set(snapNode._id.toString(), snapNode);
+      orderedNodes.push(snapNode);
+    }
+
+    // Sort by depth for proper path building
+    orderedNodes.sort((a, b) => (a.depth || 0) - (b.depth || 0));
+
+    for (const snapNode of orderedNodes) {
+      const parentId = snapNode.parentNodeId?.toString();
+      const newParentId = parentId ? nodeIdMap.get(parentId) : null;
+
       const node = new Node({
         projectId: project._id,
-        parentNodeId: snapNode.parentNodeId ? nodeIdMap.get(snapNode.parentNodeId.toString()) : null,
+        parentNodeId: newParentId,
+        kind: snapNode.kind || 'star',
+        title: snapNode.title || snapNode.label,
         label: snapNode.label,
         statement: snapNode.statement,
         detail: snapNode.detail,
+        body: snapNode.detail,
         constellation: snapNode.constellation,
+        constellationLabel: snapNode.constellationLabel,
         stage: snapNode.stage,
         scores: snapNode.scores,
         confidence: snapNode.confidence,
@@ -207,11 +239,81 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
         status: snapNode.status,
         sources: snapNode.sources,
         depth: snapNode.depth,
+        expanded: snapNode.expanded,
+        terminal: snapNode.terminal,
+        expansionType: snapNode.expansionType,
+        subFrameType: snapNode.subFrameType,
         x: snapNode.x,
         y: snapNode.y
       });
       await node.save({ session });
       nodeIdMap.set(snapNode._id.toString(), node._id);
+
+      // Build path from parent's path
+      const parentPath = parentId ? pathMap.get(parentId) : pathMap.get(map.snapshot.core?._id?.toString());
+      const nodePath = parentPath ? [...parentPath, { nodeId: node._id, title: node.title }] : [{ nodeId: node._id, title: node.title }];
+      pathMap.set(snapNode._id.toString(), nodePath);
+    }
+
+    // Create Core document for forked project
+    const newCore = new Core({
+      projectId: project._id,
+      coreNodeId: coreNodeId,
+      premise: map.description || map.title,
+      classification: sourceCore?.classification || {
+        type: 'unknown',
+        confidence: 0.5,
+        alternates: [],
+        reasoning: 'Forked map'
+      },
+      frameMeta: sourceCore?.frameMeta || {},
+      stagesEnabled: sourceCore?.stagesEnabled ?? true,
+      origin: {
+        coreId: sourceCore?._id || null,
+        projectId: map.projectId || null,
+        forkedAt: new Date(),
+        forkedBy: userId
+      }
+    });
+    await newCore.save({ session });
+
+    // Now assign identity to all nodes (outside session for simplicity)
+    // Core node first
+    if (coreNodeId) {
+      const corePath = pathMap.get(map.snapshot.core._id.toString());
+      await Node.updateOne(
+        { _id: coreNodeId },
+        {
+          coreId: newCore._id,
+          path: corePath,
+          stableId: identity.computeStableId(newCore._id, corePath),
+          essence: { title: map.snapshot.core.title || map.snapshot.core.label, statement: map.snapshot.core.statement },
+          derivation: { kind: 'fork', sourcePrompt: null, usedTrace: false }
+        }
+      ).session(session);
+    }
+
+    // Other nodes
+    for (const snapNode of orderedNodes) {
+      const newNodeId = nodeIdMap.get(snapNode._id.toString());
+      const nodePath = pathMap.get(snapNode._id.toString());
+      if (newNodeId && nodePath) {
+        await Node.updateOne(
+          { _id: newNodeId },
+          {
+            coreId: newCore._id,
+            path: nodePath,
+            stableId: identity.computeStableId(newCore._id, nodePath),
+            essence: {
+              title: snapNode.title || snapNode.label,
+              statement: snapNode.statement,
+              constellation: snapNode.constellation,
+              constellationLabel: snapNode.constellationLabel
+            },
+            derivation: { kind: 'fork', sourcePrompt: null, usedTrace: false }
+          }
+        ).session(session);
+      }
     }
 
     // Create edges
@@ -221,8 +323,9 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       if (sourceId && targetId) {
         const edge = new Edge({
           projectId: project._id,
-          sourceId,
-          targetId
+          fromNodeId: sourceId,
+          toNodeId: targetId,
+          type: snapEdge.type || 'contains'
         });
         await edge.save({ session });
       }
@@ -247,7 +350,12 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       success: true,
       action: 'forked',
       projectId: project._id,
-      forkCount: map.forkCount + 1
+      coreId: newCore._id,
+      forkCount: map.forkCount + 1,
+      origin: sourceCore ? {
+        coreId: sourceCore._id,
+        projectId: map.projectId
+      } : null
     });
   } catch (err) {
     await session.abortTransaction();

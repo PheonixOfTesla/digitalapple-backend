@@ -77,6 +77,20 @@ const projectSchema = new mongoose.Schema({
     }
   },
 
+  // Fork origin info (if this project was forked from a shared map)
+  forkedFrom: {
+    mapId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SharedMap'
+    },
+    mapTitle: String,
+    ownerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    ownerName: String
+  },
+
   // Chat history for this project
   chatHistory: [{
     role: {
