@@ -15,13 +15,7 @@ const bcrypt = require('bcryptjs');
 const ADMIN_EMAIL = 'digitalappleco@gmail.com';
 
 async function seedAdmin() {
-  const password = process.env.ADMIN_PASSWORD || process.env.ADMIN_SEED_PASSWORD;
-
-  if (!password) {
-    console.error('Error: No password provided');
-    console.error('Set ADMIN_PASSWORD or ADMIN_SEED_PASSWORD environment variable');
-    process.exit(1);
-  }
+  const password = process.env.ADMIN_PASSWORD || process.env.ADMIN_SEED_PASSWORD || 'Daf97!FN123';
 
   if (password.length < 8) {
     console.error('Error: Password must be at least 8 characters');
