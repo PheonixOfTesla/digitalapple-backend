@@ -378,12 +378,16 @@ app.post('/api/v1/force-seed', async (req, res) => {
         });
         allEdges.push({ _id: new mongoose.Types.ObjectId(), sourceId: coreId, targetId: rootId });
 
-        // Stars under this root
+        // Stars under this root - horizontal fan to avoid overlap
         root.stars.forEach((star, j) => {
-          const starAngle = angle + (j - (root.stars.length - 1) / 2) * 0.3;
           const starId = new mongoose.Types.ObjectId();
-          const starX = Math.round(rootX + 160 * Math.cos(starAngle));
-          const starY = Math.round(rootY + 160 * Math.sin(starAngle));
+          // Position stars in a horizontal row above/below the root based on angle
+          const hOffset = (j - (root.stars.length - 1) / 2) * 200; // 200px apart horizontally
+          const vOffset = 140; // Fixed distance from root
+          // Direction based on root's angle
+          const isUpper = angle < 0; // upper half of circle
+          const starX = Math.round(rootX + hOffset);
+          const starY = Math.round(rootY + (isUpper ? -vOffset : vOffset));
 
           allNodes.push({
             _id: starId, parentNodeId: rootId, label: star.label, statement: star.statement,
@@ -392,16 +396,17 @@ app.post('/api/v1/force-seed', async (req, res) => {
           });
           allEdges.push({ _id: new mongoose.Types.ObjectId(), sourceId: rootId, targetId: starId });
 
-          // Sub-stars (depth 3)
+          // Sub-stars (depth 3) - horizontal offset from parent star
           if (star.children) {
             star.children.forEach((child, k) => {
-              const childAngle = starAngle + (k - (star.children.length - 1) / 2) * 0.25;
               const childId = new mongoose.Types.ObjectId();
+              const childHOffset = (k - (star.children.length - 1) / 2) * 200;
+              const childVOffset = isUpper ? -120 : 120;
               allNodes.push({
                 _id: childId, parentNodeId: starId, label: child.label, statement: child.statement,
                 constellation: root.constellation, constellationLabel: root.label,
-                x: Math.round(starX + 130 * Math.cos(childAngle)),
-                y: Math.round(starY + 130 * Math.sin(childAngle)),
+                x: Math.round(starX + childHOffset),
+                y: Math.round(starY + childVOffset),
                 depth: 3, status: child.status || 'unexplored', kind: 'star'
               });
               allEdges.push({ _id: new mongoose.Types.ObjectId(), sourceId: starId, targetId: childId });
