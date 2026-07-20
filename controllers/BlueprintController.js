@@ -1705,11 +1705,13 @@ router.post('/expand', optionalAuth, async (req, res) => {
 
       for (let i = 0; i < children.length; i++) {
         const child = children[i];
+        // Truncate title to 50 chars (schema max)
+        const childTitle = (child.statement || '').substring(0, 50);
         const childNodeData = {
           projectId: node.projectId,
           parentNodeId: node._id,
           kind: 'star',
-          title: child.statement,
+          title: childTitle,
           statement: child.statement,
           detail: child.detail,
           body: child.detail,
