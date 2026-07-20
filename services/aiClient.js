@@ -8,24 +8,26 @@
 
 const OpenAI = require('openai');
 
-// Provider configurations
+// Provider configurations with default models
 const providers = {
   moonshot: {
     key: process.env.MOONSHOT_API_KEY,
-    baseURL: 'https://api.moonshot.ai/v1'
+    baseURL: 'https://api.moonshot.ai/v1',
+    defaultModel: 'kimi-k2.6'
   },
   openai: {
     key: process.env.OPENAI_API_KEY,
-    baseURL: undefined
+    baseURL: undefined,
+    defaultModel: 'gpt-4o-mini'
   }
 };
 
-// Select provider from env, default to moonshot
-const providerName = process.env.AI_PROVIDER || 'moonshot';
-const providerConfig = providers[providerName] || providers.moonshot;
+// Select provider from env, default to openai (more reliable for structured output)
+const providerName = process.env.AI_PROVIDER || 'openai';
+const providerConfig = providers[providerName] || providers.openai;
 
-// Model from env (required)
-const model = process.env.AI_MODEL;
+// Model from env, or use provider's default
+const model = process.env.AI_MODEL || providerConfig.defaultModel;
 
 // Create OpenAI-compatible client with provider config
 const client = new OpenAI({
