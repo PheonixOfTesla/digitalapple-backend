@@ -716,8 +716,33 @@ Target: 6-14 total nodes for a short premise.`;
 /**
  * Expand a star into children.
  */
-async function expandStar(node, context, maxRetries = 1) {
-  const userPrompt = `Expand this node into 3-6 actionable child stars:
+async function expandStar(node, context, maxRetries = 1, refinePrompt = null) {
+  // Build the user prompt, optionally including a refine instruction
+  let userPrompt;
+
+  if (refinePrompt) {
+    // Refine mode: user is asking for specific changes or expansion
+    userPrompt = `Refine or expand this node based on the user's request:
+
+USER REQUEST:
+${refinePrompt}
+
+PARENT NODE:
+${JSON.stringify(node, null, 2)}
+
+CONTEXT (other nodes):
+${JSON.stringify(context.slice(0, 10), null, 2)}
+
+Based on the user's request:
+- If they ask to "make more specific" or "break down", create 3-6 child stars
+- If they ask to "rescore" or "update scores", adjust scores with new reasons
+- If they ask "what am I missing", add overlooked considerations as children
+- If they ask to refine the statement, create a more precise version
+
+Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
+  } else {
+    // Standard expansion mode
+    userPrompt = `Expand this node into 3-6 actionable child stars:
 
 PARENT NODE:
 ${JSON.stringify(node, null, 2)}
@@ -727,6 +752,7 @@ ${JSON.stringify(context.slice(0, 10), null, 2)}
 
 Each child should be one step more concrete than the parent.
 Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
+  }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {

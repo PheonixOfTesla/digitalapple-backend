@@ -1037,7 +1037,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
 router.post('/expand', optionalAuth, async (req, res) => {
   let quotaCheck = null;
   try {
-    const { nodeId } = req.body;
+    const { nodeId, refinePrompt } = req.body;
     if (!nodeId) {
       return res.status(400).json({ error: 'nodeId is required' });
     }
@@ -1080,11 +1080,13 @@ router.post('/expand', optionalAuth, async (req, res) => {
     // Get context nodes
     const contextNodes = await Node.find({ projectId: node.projectId }).limit(20).lean();
 
-    // Expand via LLM
+    // Expand via LLM (pass refinePrompt if provided)
     const llm = getLLM();
     const { children, reasoning, tokensUsed } = await llm.expandStar(
       formatNodeForClient(node),
-      contextNodes.map(n => ({ id: n._id.toString(), statement: n.statement || n.title, stage: n.stage }))
+      contextNodes.map(n => ({ id: n._id.toString(), statement: n.statement || n.title, stage: n.stage })),
+      1, // maxRetries
+      refinePrompt || null
     );
 
     // Create child nodes
