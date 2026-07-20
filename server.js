@@ -134,6 +134,113 @@ app.post('/api/v1/setup-once', async (req, res) => {
   }
 });
 
+// FORCE SEED - bypasses deduplication
+app.post('/api/v1/force-seed', async (req, res) => {
+  try {
+    const crypto = require('crypto');
+    const User = require('./models/User');
+    const Project = require('./models/Project');
+    const Node = require('./models/Node');
+    const SharedMap = require('./models/SharedMap');
+
+    // Get or create Clockwork user
+    let user = await User.findOne({ email: 'system@clockwork.app' });
+    if (!user) {
+      user = new User({
+        email: 'system@clockwork.app',
+        passwordHash: crypto.randomBytes(32).toString('hex'),
+        role: 'system',
+        emailVerified: true,
+        firstName: 'Clockwork',
+        lastName: 'Examples'
+      });
+      await user.save();
+    }
+
+    const topics = [
+      { category: 'business', premise: 'A boutique coffee roastery with direct-to-consumer subscriptions' },
+      { category: 'career', premise: 'Transition from software engineering to product management in 6 months' },
+      { category: 'product', premise: 'A privacy-first habit tracking app that works offline' },
+      { category: 'creative', premise: 'A documentary series exploring urban farming pioneers' },
+      { category: 'business', premise: 'A mobile car detailing service targeting residential neighborhoods' }
+    ];
+
+    const created = [];
+    for (const topic of topics) {
+      const project = new Project({
+        name: topic.premise.substring(0, 100),
+        premise: topic.premise,
+        ownerId: user._id
+      });
+      await project.save();
+
+      // Create core node
+      const coreId = new require('mongoose').Types.ObjectId();
+      await new Node({
+        _id: coreId,
+        projectId: project._id,
+        kind: 'core',
+        title: 'CORE',
+        statement: topic.premise,
+        x: 600, y: 400, depth: 0
+      }).save();
+
+      // Create constellation nodes
+      const constellations = ['offer', 'demand', 'delivery', 'economy'];
+      const nodeIds = [coreId];
+      for (let i = 0; i < constellations.length; i++) {
+        const angle = (2 * Math.PI * i / constellations.length) - Math.PI/2;
+        const nodeId = new require('mongoose').Types.ObjectId();
+        nodeIds.push(nodeId);
+        await new Node({
+          _id: nodeId,
+          projectId: project._id,
+          parentNodeId: coreId,
+          kind: 'constellation',
+          constellation: constellations[i],
+          title: constellations[i].charAt(0).toUpperCase() + constellations[i].slice(1),
+          statement: `${constellations[i]} dimension`,
+          status: Math.random() > 0.4 ? 'kept' : 'unexplored',
+          x: Math.round(600 + 180 * Math.cos(angle)),
+          y: Math.round(400 + 180 * Math.sin(angle)),
+          depth: 1
+        }).save();
+      }
+
+      // Create SharedMap
+      const nodes = await Node.find({ projectId: project._id }).lean();
+      const coreNode = nodes.find(n => n.kind === 'core');
+      const otherNodes = nodes.filter(n => n.kind !== 'core');
+
+      const sharedMap = new SharedMap({
+        projectId: project._id,
+        ownerId: user._id,
+        title: topic.premise.substring(0, 100),
+        description: topic.premise,
+        category: topic.category,
+        visibility: 'public',
+        coverage: Math.floor(Math.random() * 40) + 30,
+        nodeCount: nodes.length,
+        snapshot: {
+          core: { _id: coreNode._id, label: coreNode.title, statement: coreNode.statement, x: coreNode.x, y: coreNode.y },
+          nodes: otherNodes.map(n => ({ _id: n._id, parentNodeId: n.parentNodeId, label: n.title, statement: n.statement, constellation: n.constellation, status: n.status, depth: n.depth, x: n.x, y: n.y })),
+          edges: otherNodes.map(n => ({ _id: new require('mongoose').Types.ObjectId(), sourceId: coreNode._id, targetId: n._id }))
+        },
+        publishedAt: new Date(),
+        ownerName: 'Clockwork',
+        ownerHandle: 'clockwork',
+        isSeed: true
+      });
+      await sharedMap.save();
+      created.push(topic.premise.substring(0, 50));
+    }
+
+    res.json({ success: true, created });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
 // Root
 app.get('/', (req, res) => {
   res.json({
