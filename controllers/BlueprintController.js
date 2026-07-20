@@ -256,24 +256,21 @@ router.get('/projects/:id', optionalAuth, async (req, res) => {
       Edge.find({ projectId: project._id }).lean()
     ]);
 
+    // Calculate depth-relative coverage
+    const blueprint = getBlueprint();
+    const coverage = await blueprint.calculateProjectCoverage(project._id);
+
     res.json({
       success: true,
       project: {
         id: project._id,
         name: project.name,
         createdAt: project.createdAt,
-        updatedAt: project.updatedAt
+        updatedAt: project.updatedAt,
+        blueprint: project.blueprint
       },
-      nodes: nodes.map(n => ({
-        id: n._id,
-        kind: n.kind,
-        title: n.title,
-        body: n.body,
-        scores: n.scores,
-        x: n.x,
-        y: n.y,
-        kept: n.kept
-      })),
+      coverage,
+      nodes: nodes.map(formatNodeForClient),
       edges: edges.map(e => ({
         id: e._id,
         fromNodeId: e.fromNodeId,
@@ -481,6 +478,34 @@ router.delete('/nodes/:id', optionalAuth, async (req, res) => {
   } catch (error) {
     console.error('Delete node error:', error);
     res.status(500).json({ error: 'Failed to delete node' });
+  }
+});
+
+// Get node coverage (for sub-nebula depth view)
+router.get('/nodes/:id/coverage', optionalAuth, async (req, res) => {
+  try {
+    const node = await Node.findById(req.params.id);
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const project = await verifyOwnership(node.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const blueprint = getBlueprint();
+    const coverage = await blueprint.calculateNodeCoverage(node._id);
+
+    res.json({
+      success: true,
+      nodeId: node._id.toString(),
+      nodeTitle: node.title || node.statement,
+      coverage
+    });
+  } catch (error) {
+    console.error('Get node coverage error:', error);
+    res.status(500).json({ error: 'Failed to get node coverage' });
   }
 });
 
@@ -1030,14 +1055,17 @@ router.post('/nebula', optionalAuth, async (req, res) => {
 });
 
 /**
- * Expand a star into children
+ * Expand a node (infinite recursion engine)
  * POST /blueprint/expand
  * Costs: 3 units
+ *
+ * Mode A (sub-nebula): full classify → frame → nebula for domain-sized nodes
+ * Mode B (star-children): lightweight 2-4 children for point-sized nodes
  */
 router.post('/expand', optionalAuth, async (req, res) => {
   let quotaCheck = null;
   try {
-    const { nodeId, refinePrompt } = req.body;
+    const { nodeId, refinePrompt, forceExpand } = req.body;
     if (!nodeId) {
       return res.status(400).json({ error: 'nodeId is required' });
     }
@@ -1052,13 +1080,37 @@ router.post('/expand', optionalAuth, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Check expansion depth limit (prevent runaway cost)
-    const MAX_DEPTH = 5;
-    if (node.depth >= MAX_DEPTH) {
+    // Check if already expanded (unless refining)
+    if (node.expanded && !refinePrompt) {
       return res.status(400).json({
-        error: 'Maximum expansion depth reached',
-        message: `Nodes can only be expanded ${MAX_DEPTH} levels deep`
+        error: 'Node already expanded',
+        message: 'Use refine to modify an expanded node'
       });
+    }
+
+    // Get blueprint service for recursion logic
+    const blueprint = getBlueprint();
+
+    // Check termination (unless force-expanding or refining)
+    if (!forceExpand && !refinePrompt) {
+      const terminalResult = await blueprint.judgeTerminal(node);
+      if (terminalResult.terminal) {
+        // Mark as terminal, no expansion
+        node.terminal = true;
+        node.expanded = false;
+        await node.save();
+
+        return res.json({
+          success: true,
+          terminal: true,
+          reason: terminalResult.reason,
+          ops: [{
+            op: 'updateNode',
+            nodeId: node._id.toString(),
+            data: { terminal: true, expanded: false }
+          }]
+        });
+      }
     }
 
     // Check quota (expand = 3 units)
@@ -1077,73 +1129,277 @@ router.post('/expand', optionalAuth, async (req, res) => {
     // Pre-consume quota (will refund on failure)
     await consumeQuota(quotaCheck.query, 'expand');
 
-    // Get context nodes
-    const contextNodes = await Node.find({ projectId: node.projectId }).limit(20).lean();
+    // Decide expansion mode (A: sub-nebula or B: star-children)
+    // Refine/force always uses star-children mode
+    const forceStarChildren = !!refinePrompt || forceExpand;
+    const { mode, classification } = forceStarChildren
+      ? { mode: 'star-children' }
+      : await blueprint.decideExpansionMode(node);
 
-    // Expand via LLM (pass refinePrompt if provided)
-    const llm = getLLM();
-    const { children, reasoning, tokensUsed } = await llm.expandStar(
-      formatNodeForClient(node),
-      contextNodes.map(n => ({ id: n._id.toString(), statement: n.statement || n.title, stage: n.stage })),
-      1, // maxRetries
-      refinePrompt || null
-    );
-
-    // Create child nodes
     const ops = [];
-    const CHILD_SPREAD = 80;
+    let reasoning = '';
+    let tokensUsed = 0;
+    let prunedNodes = []; // Nodes removed by refine (for confirmation display)
 
-    for (let i = 0; i < children.length; i++) {
-      const child = children[i];
-      const childNode = new Node({
-        projectId: node.projectId,
-        parentNodeId: node._id,
-        kind: 'star',
-        title: child.statement,
-        statement: child.statement,
-        detail: child.detail,
-        body: child.detail,
-        scores: child.scores,
-        confidence: child.confidence,
-        stage: child.stage || node.stage,
-        status: child.status || 'unexplored',
-        cost: child.cost,
-        sources: child.sources || [],
-        x: node.x + 180,
-        y: node.y + (i - (children.length - 1) / 2) * CHILD_SPREAD,
-        depth: node.depth + 1
-      });
-      await childNode.save();
-      ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
+    if (mode === 'sub-nebula' && !forceStarChildren) {
+      // MODE A: Full sub-nebula expansion
+      const result = await blueprint.expandAsSubNebula(node, classification);
+      const nebula = result.nebula;
 
-      // Create edge
-      const edge = new Edge({
-        projectId: node.projectId,
-        fromNodeId: node._id,
-        toNodeId: childNode._id,
-        type: 'contains'
+      // Create root nodes from nebula
+      const CHILD_SPREAD = 100;
+      const roots = nebula.roots || [];
+
+      for (let i = 0; i < roots.length; i++) {
+        const root = roots[i];
+        const childNode = new Node({
+          projectId: node.projectId,
+          parentNodeId: node._id,
+          kind: 'constellation',
+          constellation: mapFrameIdToConstellation(root.frameId),
+          constellationLabel: root.label,
+          title: root.title || root.label,
+          statement: root.statement,
+          detail: root.detail,
+          body: root.detail,
+          scores: root.scores,
+          confidence: root.confidence,
+          stage: root.stage || node.stage,
+          status: root.status || 'unexplored',
+          x: node.x + 200,
+          y: node.y + (i - (roots.length - 1) / 2) * CHILD_SPREAD,
+          depth: node.depth + 1
+        });
+        await childNode.save();
+        ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
+
+        // Create edge
+        const edge = new Edge({
+          projectId: node.projectId,
+          fromNodeId: node._id,
+          toNodeId: childNode._id,
+          type: 'contains'
+        });
+        await edge.save();
+        ops.push({ op: 'createEdge', edgeId: edge._id.toString(), data: { fromNodeId: node._id.toString(), toNodeId: childNode._id.toString(), type: 'contains' } });
+
+        // Create star children under each root
+        const stars = root.stars || [];
+        for (let j = 0; j < stars.length; j++) {
+          const star = stars[j];
+          const starNode = new Node({
+            projectId: node.projectId,
+            parentNodeId: childNode._id,
+            kind: 'star',
+            title: star.title,
+            statement: star.statement,
+            detail: star.detail,
+            body: star.detail,
+            scores: star.scores,
+            confidence: star.confidence,
+            stage: star.stage || childNode.stage,
+            status: star.status || 'unexplored',
+            x: childNode.x + 180,
+            y: childNode.y + (j - (stars.length - 1) / 2) * 70,
+            depth: node.depth + 2
+          });
+          await starNode.save();
+          ops.push({ op: 'createNode', nodeId: starNode._id.toString(), data: formatNodeForClient(starNode) });
+
+          const starEdge = new Edge({
+            projectId: node.projectId,
+            fromNodeId: childNode._id,
+            toNodeId: starNode._id,
+            type: 'contains'
+          });
+          await starEdge.save();
+          ops.push({ op: 'createEdge', edgeId: starEdge._id.toString(), data: { fromNodeId: childNode._id.toString(), toNodeId: starNode._id.toString(), type: 'contains' } });
+        }
+      }
+
+      // Update parent node
+      node.expanded = true;
+      node.terminal = false;
+      node.expansionType = 'sub-nebula';
+      node.subFrameType = result.classification.type;
+      node.status = 'mapped';
+      await node.save();
+
+      ops.push({
+        op: 'updateNode',
+        nodeId: node._id.toString(),
+        data: {
+          expanded: true,
+          terminal: false,
+          expansionType: 'sub-nebula',
+          subFrameType: result.classification.type,
+          status: 'mapped'
+        }
       });
-      await edge.save();
-      ops.push({ op: 'createEdge', edgeId: edge._id.toString(), data: { fromNodeId: node._id.toString(), toNodeId: childNode._id.toString(), type: 'contains' } });
+
+      reasoning = `Expanded as sub-nebula (${result.classification.type}): ${roots.length} roots with ${roots.reduce((sum, r) => sum + (r.stars?.length || 0), 0)} stars`;
+
+    } else {
+      // MODE B: Star-children expansion (lightweight)
+      const contextNodes = await Node.find({ projectId: node.projectId }).limit(20).lean();
+
+      const llm = getLLM();
+      const expandResult = await llm.expandStar(
+        formatNodeForClient(node),
+        contextNodes.map(n => ({
+          id: n._id.toString(),
+          statement: n.statement || n.title,
+          stage: n.stage,
+          parentNodeId: n.parentNodeId?.toString()
+        })),
+        1, // maxRetries
+        refinePrompt || null
+      );
+
+      const children = expandResult.children || [];
+      reasoning = expandResult.reasoning || '';
+      tokensUsed = expandResult.tokensUsed || 0;
+
+      // Handle prune ops (refine may invalidate existing children)
+      const pruneIds = expandResult.prune || [];
+
+      if (pruneIds.length > 0) {
+        // Collect nodes to be pruned (for confirmation in response)
+        for (const pruneId of pruneIds) {
+          const prunedNode = await Node.findById(pruneId);
+          if (prunedNode && prunedNode.projectId.toString() === node.projectId.toString()) {
+            prunedNodes.push({
+              id: pruneId,
+              title: prunedNode.title || prunedNode.statement
+            });
+
+            // Cascade delete: find all descendants
+            const descendants = await getDescendants(pruneId);
+            const allToDelete = [pruneId, ...descendants.map(d => d._id.toString())];
+
+            // Delete edges
+            await Edge.deleteMany({
+              $or: [
+                { fromNodeId: { $in: allToDelete } },
+                { toNodeId: { $in: allToDelete } }
+              ]
+            });
+
+            // Delete nodes
+            await Node.deleteMany({ _id: { $in: allToDelete } });
+
+            // Add delete ops
+            for (const delId of allToDelete) {
+              ops.push({ op: 'deleteNode', nodeId: delId });
+            }
+          }
+        }
+      }
+
+      // Handle parent update (refine may update the parent itself)
+      if (expandResult.parentUpdate) {
+        const updates = expandResult.parentUpdate;
+        if (updates.statement) node.statement = updates.statement;
+        if (updates.title) node.title = updates.title;
+        if (updates.scores) node.scores = updates.scores;
+        if (updates.confidence) node.confidence = updates.confidence;
+        // Will be saved below
+      }
+
+      const CHILD_SPREAD = 80;
+
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        const childNode = new Node({
+          projectId: node.projectId,
+          parentNodeId: node._id,
+          kind: 'star',
+          title: child.statement,
+          statement: child.statement,
+          detail: child.detail,
+          body: child.detail,
+          scores: child.scores,
+          confidence: child.confidence,
+          stage: child.stage || node.stage,
+          status: child.status || 'unexplored',
+          cost: child.cost,
+          sources: child.sources || [],
+          x: node.x + 180,
+          y: node.y + (i - (children.length - 1) / 2) * CHILD_SPREAD,
+          depth: node.depth + 1
+        });
+        await childNode.save();
+        ops.push({ op: 'createNode', nodeId: childNode._id.toString(), data: formatNodeForClient(childNode) });
+
+        const edge = new Edge({
+          projectId: node.projectId,
+          fromNodeId: node._id,
+          toNodeId: childNode._id,
+          type: 'contains'
+        });
+        await edge.save();
+        ops.push({ op: 'createEdge', edgeId: edge._id.toString(), data: { fromNodeId: node._id.toString(), toNodeId: childNode._id.toString(), type: 'contains' } });
+      }
+
+      // Update parent node
+      node.expanded = true;
+      node.terminal = false;
+      node.expansionType = 'star-children';
+      node.status = 'mapped';
+      await node.save();
+
+      ops.push({
+        op: 'updateNode',
+        nodeId: node._id.toString(),
+        data: {
+          expanded: true,
+          terminal: false,
+          expansionType: 'star-children',
+          status: 'mapped'
+        }
+      });
     }
-
-    // Mark parent as expanded
-    node.status = 'mapped';
-    await node.save();
-    ops.push({ op: 'updateNode', nodeId: node._id.toString(), data: { status: 'mapped' } });
 
     res.json({
       success: true,
+      expansionType: mode,
       reasoning,
       ops,
-      tokensUsed
+      tokensUsed,
+      pruned: prunedNodes.length > 0 ? prunedNodes : undefined
     });
 
   } catch (error) {
     console.error('Expand error:', error);
+
+    // Refund quota on failure
+    if (quotaCheck?.query) {
+      try {
+        await refundQuota(quotaCheck.query, 'expand');
+      } catch (refundErr) {
+        console.error('Refund failed:', refundErr);
+      }
+    }
+
     res.status(500).json({ error: 'Failed to expand node', message: error.message });
   }
 });
+
+/**
+ * Map frameId to legacy constellation enum.
+ */
+function mapFrameIdToConstellation(frameId) {
+  const map = {
+    'who': 'demand',
+    'what': 'offer',
+    'where': 'delivery',
+    'when': null,
+    'why': 'economy',
+    'how': 'orchestration',
+    'risk': 'risk'
+  };
+  return map[frameId] || null;
+}
 
 // Format node for client response
 function formatNodeForClient(node) {
@@ -1168,8 +1424,34 @@ function formatNodeForClient(node) {
     x: node.x,
     y: node.y,
     depth: node.depth,
-    kept: node.kept
+    kept: node.kept,
+    // Infinite recursion fields
+    expanded: node.expanded || false,
+    terminal: node.terminal || false,
+    expansionType: node.expansionType || null,
+    subFrameType: node.subFrameType || null
   };
+}
+
+/**
+ * Get all descendants of a node (for cascade delete).
+ * Recursively finds all children and their children.
+ */
+async function getDescendants(nodeId) {
+  const descendants = [];
+  const queue = [nodeId];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    const children = await Node.find({ parentNodeId: currentId }).lean();
+
+    for (const child of children) {
+      descendants.push(child);
+      queue.push(child._id.toString());
+    }
+  }
+
+  return descendants;
 }
 
 // ============== EXPORTS (AUTH REQUIRED) ==============

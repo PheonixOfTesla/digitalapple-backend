@@ -97,7 +97,314 @@ async function previewClassification(premise) {
   };
 }
 
+// ============== INFINITE RECURSION ENGINE ==============
+
+/**
+ * Decide expansion mode: sub-nebula (A) or star-children (B).
+ *
+ * Biased heavily toward B (star-children). Sub-nebula only when:
+ * - Node statement is 10+ words AND
+ * - Node is at depth 0 or 1 AND
+ * - Classification returns confidence > 0.7 on a known type
+ *
+ * @param {object} node - The node to expand
+ * @returns {Promise<{mode: 'sub-nebula'|'star-children', classification?: object}>}
+ */
+async function decideExpansionMode(node) {
+  const statement = node.statement || node.title || '';
+  const wordCount = statement.trim().split(/\s+/).length;
+  const depth = node.depth || 0;
+
+  // Quick checks: bias toward star-children
+  if (wordCount < 10) {
+    console.log(`[Blueprint:Recursion] B (star-children): statement too short (${wordCount} words)`);
+    return { mode: 'star-children' };
+  }
+
+  if (depth > 1) {
+    console.log(`[Blueprint:Recursion] B (star-children): too deep (depth ${depth})`);
+    return { mode: 'star-children' };
+  }
+
+  // Depth 0-1 and 10+ words: check classification confidence
+  try {
+    const classification = await classifyPremise(statement);
+
+    if (classification.type !== 'unknown' && classification.confidence > 0.7) {
+      console.log(`[Blueprint:Recursion] A (sub-nebula): ${classification.type} @ ${classification.confidence}`);
+      return { mode: 'sub-nebula', classification };
+    }
+
+    console.log(`[Blueprint:Recursion] B (star-children): low confidence (${classification.confidence})`);
+    return { mode: 'star-children', classification };
+
+  } catch (err) {
+    console.error('[Blueprint:Recursion] Classification failed, defaulting to B:', err.message);
+    return { mode: 'star-children' };
+  }
+}
+
+/**
+ * Judge if a node is terminal (actionable, should not expand).
+ *
+ * A node is terminal when it's a specific, doable action — not a topic.
+ * Signals:
+ * - Already a concrete action (starts with verb, names specific task)
+ * - Very short and specific
+ * - Deep node that is already concrete
+ *
+ * @param {object} node - The node to judge
+ * @returns {Promise<{terminal: boolean, reason: string}>}
+ */
+async function judgeTerminal(node) {
+  const statement = node.statement || node.title || '';
+  const wordCount = statement.trim().split(/\s+/).length;
+  const depth = node.depth || 0;
+
+  // Very short statements at depth 2+ are likely actionable
+  if (wordCount <= 5 && depth >= 2) {
+    return {
+      terminal: true,
+      reason: 'Short specific statement at depth'
+    };
+  }
+
+  // Action verb patterns suggesting actionability
+  const actionPatterns = [
+    /^(apply|email|call|file|register|submit|send|book|schedule|contact|buy|order|sign|create|write|upload|download)/i,
+    /by\s+(january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2})/i,
+    /\$\d+/,  // contains dollar amount
+    /@\w+/,   // contains email/handle
+  ];
+
+  for (const pattern of actionPatterns) {
+    if (pattern.test(statement)) {
+      return {
+        terminal: true,
+        reason: 'Contains actionable specifics'
+      };
+    }
+  }
+
+  // Deep + short = likely terminal
+  if (depth >= 3 && wordCount <= 8) {
+    return {
+      terminal: true,
+      reason: 'Deep and specific'
+    };
+  }
+
+  return {
+    terminal: false,
+    reason: 'Expandable'
+  };
+}
+
+/**
+ * Expand a node as a sub-nebula (mode A).
+ * Runs the full classify → frame → nebula pipeline on the node's statement.
+ *
+ * @param {object} node - The node to expand
+ * @param {object} classification - Pre-computed classification (optional)
+ * @returns {Promise<object>} Generated sub-nebula
+ */
+async function expandAsSubNebula(node, classification = null) {
+  const premise = node.statement || node.title;
+
+  // Use provided classification or classify fresh
+  const classResult = classification || await classifyPremise(premise);
+
+  // Load frame for this type
+  const { frame, meta } = loadFrame(classResult);
+  console.log(`[Blueprint:SubNebula] Frame: ${frame.label}, type: ${classResult.type}`);
+
+  // Build nebula input
+  const frameInput = buildNebulaFrameInput(frame, premise);
+
+  // Generate the sub-nebula
+  const nebula = await generateFramedNebula(frameInput);
+
+  return {
+    nebula,
+    classification: classResult,
+    frame: {
+      type: meta.selectedType,
+      label: frame.label,
+      stagesEnabled: frame.stagesEnabled
+    }
+  };
+}
+
+/**
+ * Main entry point: expand a node using the appropriate mode.
+ *
+ * @param {object} node - The node to expand
+ * @param {boolean} forceStarChildren - Skip A/B decision, use star-children
+ * @returns {Promise<object>} Expansion result
+ */
+async function expandNode(node, forceStarChildren = false) {
+  // First check if terminal
+  const terminalResult = await judgeTerminal(node);
+  if (terminalResult.terminal) {
+    console.log(`[Blueprint:Recursion] Terminal: ${terminalResult.reason}`);
+    return {
+      terminal: true,
+      reason: terminalResult.reason,
+      children: [],
+      expansionType: null
+    };
+  }
+
+  // Decide expansion mode (unless forced to star-children)
+  if (forceStarChildren) {
+    return {
+      terminal: false,
+      expansionType: 'star-children',
+      // Actual children generation happens in controller via existing expandStar
+    };
+  }
+
+  const { mode, classification } = await decideExpansionMode(node);
+
+  if (mode === 'sub-nebula') {
+    const result = await expandAsSubNebula(node, classification);
+    return {
+      terminal: false,
+      expansionType: 'sub-nebula',
+      subFrameType: result.classification.type,
+      nebula: result.nebula,
+      frame: result.frame
+    };
+  }
+
+  // star-children mode
+  return {
+    terminal: false,
+    expansionType: 'star-children',
+    // Actual children generation happens in controller via existing expandStar
+  };
+}
+
+// ============== DEPTH-RELATIVE COVERAGE ==============
+
+const Node = require('../models/Node');
+
+/**
+ * Calculate coverage for a specific node's children.
+ * Coverage is computed on explored (expanded) nodes only.
+ *
+ * Formula: min(1, answered/3) × mean(confidence)
+ * - answered = children with confidence >= 0.5
+ * - mean confidence = average confidence of all children
+ * - Unexpanded children don't count against coverage
+ *
+ * @param {string} nodeId - The parent node ID
+ * @returns {Promise<{coverage: number, explored: number, total: number}>}
+ */
+async function calculateNodeCoverage(nodeId) {
+  // Get direct children of this node
+  const children = await Node.find({ parentNodeId: nodeId }).lean();
+
+  if (children.length === 0) {
+    return { coverage: 0, explored: 0, total: 0 };
+  }
+
+  // Only count expanded children (explored)
+  const exploredChildren = children.filter(c => c.expanded);
+
+  if (exploredChildren.length === 0) {
+    // No children explored yet - coverage is 0 but not "incomplete"
+    return {
+      coverage: 0,
+      explored: 0,
+      total: children.length,
+      unexplored: children.length
+    };
+  }
+
+  // Answered = children with confidence >= 0.5
+  const answered = exploredChildren.filter(c => (c.confidence?.value || 0) >= 0.5).length;
+
+  // Mean confidence of explored children
+  const confidenceSum = exploredChildren.reduce((sum, c) => sum + (c.confidence?.value || 0), 0);
+  const meanConfidence = confidenceSum / exploredChildren.length;
+
+  // Formula: min(1, answered/3) × meanConfidence
+  const coverage = Math.min(1, answered / 3) * meanConfidence;
+
+  return {
+    coverage,
+    explored: exploredChildren.length,
+    total: children.length,
+    unexplored: children.length - exploredChildren.length
+  };
+}
+
+/**
+ * Calculate coverage for a project's top-level roots.
+ * Same formula as calculateNodeCoverage but for depth 0 nodes.
+ *
+ * @param {string} projectId - The project ID
+ * @returns {Promise<object>} Coverage info
+ */
+async function calculateProjectCoverage(projectId) {
+  // Get all nodes at depth 0 and 1 (core + constellations)
+  const roots = await Node.find({
+    projectId,
+    kind: { $in: ['core', 'constellation'] }
+  }).lean();
+
+  const constellations = roots.filter(r => r.kind === 'constellation');
+
+  if (constellations.length === 0) {
+    return { coverage: 0, byConstellation: {}, explored: 0, total: 0 };
+  }
+
+  // Group by constellation
+  const byConstellation = {};
+  const constellationTypes = ['offer', 'demand', 'delivery', 'economy', 'orchestration', 'risk'];
+
+  for (const type of constellationTypes) {
+    const typeNodes = constellations.filter(c => c.constellation === type);
+
+    if (typeNodes.length === 0) {
+      byConstellation[type] = 0;
+      continue;
+    }
+
+    // Only count expanded nodes
+    const explored = typeNodes.filter(n => n.expanded);
+
+    if (explored.length === 0) {
+      byConstellation[type] = 0;
+      continue;
+    }
+
+    const answered = explored.filter(n => (n.confidence?.value || 0) >= 0.5).length;
+    const confidenceSum = explored.reduce((sum, n) => sum + (n.confidence?.value || 0), 0);
+    const meanConfidence = confidenceSum / explored.length;
+
+    byConstellation[type] = Math.min(1, answered / 3) * meanConfidence;
+  }
+
+  // Total coverage = mean of all constellations
+  const totalCoverage = Object.values(byConstellation).reduce((a, b) => a + b, 0) / constellationTypes.length;
+
+  return {
+    coverage: totalCoverage,
+    byConstellation,
+    explored: constellations.filter(c => c.expanded).length,
+    total: constellations.length
+  };
+}
+
 module.exports = {
   generateMap,
-  previewClassification
+  previewClassification,
+  decideExpansionMode,
+  judgeTerminal,
+  expandAsSubNebula,
+  expandNode,
+  calculateNodeCoverage,
+  calculateProjectCoverage
 };

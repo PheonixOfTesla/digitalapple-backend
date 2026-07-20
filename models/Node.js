@@ -162,6 +162,33 @@ const nodeSchema = new mongoose.Schema({
   depth: {
     type: Number,
     default: 0
+  },
+
+  // Expansion state (infinite recursion support)
+  expanded: {
+    type: Boolean,
+    default: false
+  },
+
+  // Terminal node (actionable, no further expansion)
+  terminal: {
+    type: Boolean,
+    default: false
+  },
+
+  // How this node was expanded
+  expansionType: {
+    type: String,
+    enum: ['sub-nebula', 'star-children', null],
+    default: null
+  },
+
+  // If sub-nebula: which premise frame type was used
+  subFrameType: {
+    type: String,
+    enum: ['venture', 'event', 'personal-goal', 'creative-work',
+           'life-transition', 'career', 'research', 'campaign', 'unknown', null],
+    default: null
   }
 }, {
   timestamps: true
@@ -174,6 +201,8 @@ nodeSchema.index({ projectId: 1, stage: 1 });
 nodeSchema.index({ projectId: 1, status: 1 });
 nodeSchema.index({ projectId: 1, parentNodeId: 1 });
 nodeSchema.index({ projectId: 1, constellation: 1 });
+nodeSchema.index({ projectId: 1, expanded: 1 });
+nodeSchema.index({ projectId: 1, terminal: 1 });
 
 // Virtual for getting children
 nodeSchema.virtual('children', {

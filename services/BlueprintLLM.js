@@ -722,6 +722,9 @@ async function expandStar(node, context, maxRetries = 1, refinePrompt = null) {
 
   if (refinePrompt) {
     // Refine mode: user is asking for specific changes or expansion
+    // Include existing children so the engine can suggest pruning if direction changes
+    const existingChildren = context.filter(n => n.parentNodeId === node.id);
+
     userPrompt = `Refine or expand this node based on the user's request:
 
 USER REQUEST:
@@ -729,6 +732,9 @@ ${refinePrompt}
 
 PARENT NODE:
 ${JSON.stringify(node, null, 2)}
+
+EXISTING CHILDREN (may be pruned if direction changes):
+${JSON.stringify(existingChildren, null, 2)}
 
 CONTEXT (other nodes):
 ${JSON.stringify(context.slice(0, 10), null, 2)}
@@ -738,6 +744,13 @@ Based on the user's request:
 - If they ask to "rescore" or "update scores", adjust scores with new reasons
 - If they ask "what am I missing", add overlooked considerations as children
 - If they ask to refine the statement, create a more precise version
+- If the refinement CHANGES DIRECTION (e.g., pivots the focus), include a "prune" array with the IDs of existing children that no longer apply
+
+Return JSON with:
+- "children": array of new/updated nodes
+- "reasoning": explanation of changes
+- "prune": array of node IDs to delete (only if refinement invalidates existing children)
+- "parentUpdate": optional object with updates to the parent node itself (statement, scores, etc.)
 
 Every score needs a reason. If unknown, mark confidence.basis='unknown'.`;
   } else {
