@@ -733,4 +733,20 @@ router.delete('/applications/:id', async (req, res) => {
   }
 });
 
+// ==================== SEED MAPS ====================
+
+// Trigger seed map generation (admin only)
+router.post('/seed-maps', async (req, res) => {
+  const count = Math.min(10, Math.max(1, parseInt(req.query.count) || 5));
+
+  try {
+    const { generateSeedMaps } = require('../jobs/seedMaps');
+    const result = await generateSeedMaps(count);
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Admin seed maps error:', error);
+    res.status(500).json({ error: 'Failed to generate seed maps', details: error.message });
+  }
+});
+
 module.exports = router;
