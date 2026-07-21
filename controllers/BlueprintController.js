@@ -2991,4 +2991,152 @@ router.get('/projects/:projectId/defining-questions', optionalAuth, async (req, 
   }
 });
 
+/**
+ * Validate gap-fill input before marking complete
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/validate-fill
+ *
+ * Checks:
+ * 1. RELEVANCE - Does input answer THIS node's question?
+ * 2. SPECIFICITY - Is it concrete/actionable (not vague)?
+ * 3. CONSISTENCY - Does it conflict with integrated plan?
+ *
+ * Gap marks COMPLETE only when relevance + specificity pass.
+ * Consistency conflicts are flagged but don't block.
+ */
+router.post('/projects/:projectId/nodes/:nodeId/validate-fill', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const { input } = req.body;
+    if (!input) {
+      return res.status(400).json({ error: 'input required' });
+    }
+
+    const node = await Node.findById(req.params.nodeId);
+    if (!node || node.projectId.toString() !== project._id.toString()) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const rescoping = getRescoping();
+
+    // Get all nodes and integration for context
+    const [nodes, coreDoc] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Core.findOne({ projectId: project._id }).lean()
+    ]);
+
+    // Generate integration for consistency check
+    let integration = null;
+    if (coreDoc) {
+      const edges = await Edge.find({ projectId: project._id }).lean();
+      integration = await rescoping.generateCoreIntegration(nodes, edges, coreDoc);
+    }
+
+    // Validate the input
+    const validation = rescoping.validateGapFill(node.toObject(), input, nodes, integration);
+
+    res.json({
+      success: true,
+      validation,
+      canComplete: validation.canComplete,
+      feedback: validation.feedback,
+      issues: validation.issues,
+      nodeId: node._id.toString(),
+      nodeTitle: node.title
+    });
+  } catch (error) {
+    console.error('Validate gap-fill error:', error);
+    res.status(500).json({ error: 'Failed to validate input' });
+  }
+});
+
+/**
+ * Fill a gap with validation
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/fill
+ *
+ * Validates input, then updates node if valid.
+ * Returns validation result and updated completeness.
+ */
+router.post('/projects/:projectId/nodes/:nodeId/fill', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const { input, forceComplete = false } = req.body;
+    if (!input) {
+      return res.status(400).json({ error: 'input required' });
+    }
+
+    const node = await Node.findById(req.params.nodeId);
+    if (!node || node.projectId.toString() !== project._id.toString()) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const rescoping = getRescoping();
+
+    // Get context
+    const [nodes, edges, coreDoc] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean(),
+      Core.findOne({ projectId: project._id }).lean()
+    ]);
+
+    // Generate integration for consistency check
+    let integration = null;
+    if (coreDoc) {
+      integration = await rescoping.generateCoreIntegration(nodes, edges, coreDoc);
+    }
+
+    // Validate
+    const validation = rescoping.validateGapFill(node.toObject(), input, nodes, integration);
+
+    // Update node based on validation
+    const updateData = {
+      detail: input,
+      updatedAt: new Date()
+    };
+
+    if (validation.canComplete || forceComplete) {
+      // Mark as specified/walled
+      updateData.liveness = 'walled';
+      updateData.confidence = { value: 0.8, basis: 'user-input' };
+    } else if (validation.partiallySpecified) {
+      // Mark as partially specified
+      updateData.liveness = 'live';
+      updateData.confidence = { value: 0.4, basis: 'partial' };
+    }
+    // else: keep as dormant/gap
+
+    await Node.findByIdAndUpdate(node._id, updateData);
+
+    // Get updated completeness
+    const updatedNodes = await Node.find({ projectId: project._id }).lean();
+    const completeness = rescoping.calculateCompleteness(updatedNodes, edges, coreDoc);
+
+    // Get next gap for auto-advance
+    const nextGap = rescoping.getNextGap(updatedNodes, edges);
+
+    res.json({
+      success: true,
+      validation,
+      filled: validation.canComplete || forceComplete,
+      completeness,
+      nextGap: nextGap ? {
+        nodeId: nextGap._id.toString(),
+        title: nextGap.title,
+        kind: nextGap.kind
+      } : null,
+      feedback: validation.feedback
+    });
+  } catch (error) {
+    console.error('Fill gap error:', error);
+    res.status(500).json({ error: 'Failed to fill gap' });
+  }
+});
+
 module.exports = router;
