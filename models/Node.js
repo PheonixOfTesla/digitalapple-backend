@@ -243,7 +243,63 @@ const nodeSchema = new mongoose.Schema({
     enum: ['venture', 'event', 'personal-goal', 'creative-work',
            'life-transition', 'career', 'research', 'campaign', 'unknown', null],
     default: null
+  },
+
+  // === SCOPING LAYER ===
+
+  // Node classification for scoping: component (decompose) vs decision (fork)
+  nodeKind: {
+    type: String,
+    enum: ['component', 'decision', null],
+    default: null
+  },
+
+  // For decision nodes: the scoped paths
+  scopedPaths: [{
+    label: { type: String, required: true, maxlength: 60 },
+    summary: { type: String, maxlength: 300 },
+    tradeoff: { type: String, maxlength: 200 },
+    scores: {
+      economy: {
+        value: { type: Number, min: 0, max: 10 },
+        reason: { type: String, maxlength: 200 }
+      },
+      orchestration: {
+        value: { type: Number, min: 0, max: 10 },
+        reason: { type: String, maxlength: 200 }
+      },
+      demand: {
+        value: { type: Number, min: 0, max: 10 },
+        reason: { type: String, maxlength: 200 }
+      }
+    },
+    confidence: {
+      value: { type: Number, min: 0, max: 1 },
+      basis: { type: String, enum: ['stated', 'inferred', 'unknown'] }
+    },
+    inferred: { type: Boolean, default: true },
+    chosen: { type: Boolean, default: false },
+    roadNotTaken: { type: Boolean, default: false },
+    chosenNodeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Node',
+      default: null
+    }
+  }],
+
+  // For decision nodes: the recommendation
+  scopeRecommendation: {
+    pathLabel: { type: String, maxlength: 60 },
+    reasoning: { type: String, maxlength: 500 }
+  },
+
+  // Whether this node has been scoped
+  scoped: {
+    type: Boolean,
+    default: false
   }
+
+  // === END SCOPING LAYER ===
 }, {
   timestamps: true
 });
