@@ -175,8 +175,36 @@ async function pickTopics(count = 5) {
   return topics;
 }
 
-// Generate a basic graph structure (simplified Blueprint without AI)
-function generateBasicGraph(premise, category) {
+// Detail templates by constellation type
+const DETAIL_TEMPLATES = {
+  offer: {
+    root: (premise) => `You're building something people will pay for. The core of your offer for "${premise.substring(0, 50)}..." needs to be clear, compelling, and differentiated. What exactly are you promising, and why would someone choose you over alternatives?`,
+    child: (premise) => `This is where the rubber meets the road. You'll need to define the specific features, benefits, or deliverables that make your offer tangible. Think about what your customer actually experiences.`
+  },
+  demand: {
+    root: (premise) => `Who actually wants this? For "${premise.substring(0, 50)}..." you need to identify real people with real problems, not imaginary ideal customers. Where are they, how do they buy, and what triggers their decision?`,
+    child: (premise) => `Understanding your customer's journey matters here. Map out how they discover solutions like yours, what objections they'll raise, and what ultimately convinces them to act.`
+  },
+  delivery: {
+    root: (premise) => `How does your offer actually reach customers? For "${premise.substring(0, 50)}..." you need reliable fulfillment — whether that's shipping products, delivering services, or providing access. What's your operational backbone?`,
+    child: (premise) => `The details of execution live here. Think about timing, quality control, customer touchpoints, and what happens when something goes wrong.`
+  },
+  economy: {
+    root: (premise) => `Follow the money. For "${premise.substring(0, 50)}..." you need to understand both what it costs to deliver and what people will pay. Unit economics determine whether this is sustainable or a money pit.`,
+    child: (premise) => `Dig into specific costs and revenue streams. What are your margins? What scales well and what doesn't? Where are the hidden expenses?`
+  },
+  orchestration: {
+    root: (premise) => `Who does what, and when? For "${premise.substring(0, 50)}..." you need to orchestrate people, tools, and processes. Even a solo operation has moving parts that need coordination.`,
+    child: (premise) => `This is about the day-to-day reality. What tools do you use? What skills do you need? What can be automated, delegated, or outsourced?`
+  },
+  risk: {
+    root: (premise) => `What could break this? For "${premise.substring(0, 50)}..." you need to honestly assess the threats — competitors, regulations, dependencies, market shifts. Being realistic now saves pain later.`,
+    child: (premise) => `Think about specific scenarios. What if a key supplier disappears? What if demand drops? What legal or compliance issues could arise?`
+  }
+};
+
+// Generate a graph with substantive detail
+function generateBasicGraphWithDetail(premise, category) {
   const nodes = [];
   const edges = [];
 
@@ -186,13 +214,13 @@ function generateBasicGraph(premise, category) {
     _id: coreId,
     label: 'CORE',
     statement: premise,
-    detail: `Breaking down: ${premise}`,
+    detail: `This is your starting point. "${premise}" represents an idea worth exploring — but ideas need structure to become reality. The constellations around this core break down the major dimensions you'll need to address.`,
     depth: 0,
     x: 600,
     y: 400
   });
 
-  // Generate 4-6 constellation nodes based on category
+  // Generate constellation nodes based on category
   const constellations = {
     business: ['offer', 'demand', 'delivery', 'economy', 'risk'],
     career: ['offer', 'demand', 'orchestration', 'economy'],
@@ -207,25 +235,26 @@ function generateBasicGraph(premise, category) {
   cons.forEach((constellation, i) => {
     const angle = angleStep * i - Math.PI / 2;
     const nodeId = new mongoose.Types.ObjectId();
+    const template = DETAIL_TEMPLATES[constellation] || DETAIL_TEMPLATES.offer;
 
     nodes.push({
       _id: nodeId,
       parentNodeId: coreId,
       label: constellation.charAt(0).toUpperCase() + constellation.slice(1),
-      statement: `${constellation} considerations for ${premise.substring(0, 50)}...`,
-      detail: `Exploring the ${constellation} dimension.`,
+      statement: `${constellation.charAt(0).toUpperCase() + constellation.slice(1)} dimension for this ${category}`,
+      detail: template.root(premise),
       constellation,
       stage: Math.floor(Math.random() * 3) + 1,
-      status: Math.random() > 0.3 ? 'kept' : 'unexplored',
+      status: 'mapped',
       depth: 1,
       x: Math.round(600 + radius * Math.cos(angle)),
       y: Math.round(400 + radius * Math.sin(angle)),
       scores: {
-        economy: { value: Math.floor(Math.random() * 4) + 5, reason: 'Initial assessment' },
-        orchestration: { value: Math.floor(Math.random() * 4) + 4, reason: 'Initial assessment' },
-        demand: { value: Math.floor(Math.random() * 4) + 5, reason: 'Initial assessment' }
+        economy: { value: Math.floor(Math.random() * 4) + 5, reason: `Initial ${constellation} economics assessment based on the premise scope.` },
+        orchestration: { value: Math.floor(Math.random() * 4) + 4, reason: `Operational complexity for ${constellation} appears moderate.` },
+        demand: { value: Math.floor(Math.random() * 4) + 5, reason: `Market signal for this ${constellation} approach shows promise.` }
       },
-      confidence: { value: Math.floor(Math.random() * 3) + 5, basis: 'inferred' }
+      confidence: { value: 0.6, basis: 'inferred' }
     });
 
     edges.push({
@@ -234,30 +263,30 @@ function generateBasicGraph(premise, category) {
       targetId: nodeId
     });
 
-    // Add 1-2 child nodes for some constellations
-    if (Math.random() > 0.4) {
+    // Add 1 child node for some constellations
+    if (Math.random() > 0.5) {
       const childId = new mongoose.Types.ObjectId();
-      const childAngle = angle + (Math.random() - 0.5) * 0.5;
+      const childAngle = angle + (Math.random() - 0.5) * 0.4;
       const childRadius = radius + 120;
 
       nodes.push({
         _id: childId,
         parentNodeId: nodeId,
-        label: 'Detail',
-        statement: `Specific aspect of ${constellation}`,
-        detail: `A deeper look at one element.`,
+        label: `${constellation} detail`,
+        statement: `A specific aspect of ${constellation} to consider`,
+        detail: template.child(premise),
         constellation,
         stage: Math.floor(Math.random() * 3) + 2,
-        status: Math.random() > 0.5 ? 'kept' : 'unexplored',
+        status: 'unexplored',
         depth: 2,
         x: Math.round(600 + childRadius * Math.cos(childAngle)),
         y: Math.round(400 + childRadius * Math.sin(childAngle)),
         scores: {
-          economy: { value: Math.floor(Math.random() * 3) + 5, reason: 'Detail assessment' },
-          orchestration: { value: Math.floor(Math.random() * 3) + 4, reason: 'Detail assessment' },
-          demand: { value: Math.floor(Math.random() * 3) + 5, reason: 'Detail assessment' }
+          economy: { value: Math.floor(Math.random() * 3) + 4, reason: 'Awaiting deeper analysis.' },
+          orchestration: { value: Math.floor(Math.random() * 3) + 4, reason: 'Execution details to be mapped.' },
+          demand: { value: Math.floor(Math.random() * 3) + 5, reason: 'Validation needed for this specific angle.' }
         },
-        confidence: { value: Math.floor(Math.random() * 3) + 4, basis: 'inferred' }
+        confidence: { value: 0.4, basis: 'inferred' }
       });
 
       edges.push({
@@ -442,7 +471,7 @@ function generatePreviewSvg(snapshot) {
   return `<svg viewBox="0 0 ${viewWidth} ${viewHeight}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">${edgePaths}${nodeCircles}</svg>`;
 }
 
-// Create a seed map using the real LLM engine
+// Create a seed map - try LLM, fallback to static
 async function createSeedMap(user, topic) {
   const { category, premise } = topic;
 
@@ -454,11 +483,22 @@ async function createSeedMap(user, topic) {
   });
   await project.save();
 
-  // Generate nebula via LLM for real substantive detail
-  const { nebula } = await BlueprintLLM.generateNebula(premise, {});
+  let nodes, edges;
 
-  // Convert nebula to nodes and edges
-  const { nodes, edges } = convertNebulaToGraph(nebula, category);
+  // Try LLM generation with 60s timeout
+  try {
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('LLM timeout')), 60000)
+    );
+    const llmPromise = BlueprintLLM.generateNebula(premise, {});
+    const { nebula } = await Promise.race([llmPromise, timeoutPromise]);
+    ({ nodes, edges } = convertNebulaToGraph(nebula, category));
+    console.log(`[SEED] LLM generation succeeded for: ${premise.substring(0, 40)}...`);
+  } catch (llmError) {
+    // Fallback to static generation with enriched detail
+    console.log(`[SEED] LLM fallback (${llmError.message}), using static generation`);
+    ({ nodes, edges } = generateBasicGraphWithDetail(premise, category));
+  }
 
   // Find core node to create Core document
   const coreNodeData = nodes.find(n => n.depth === 0);
