@@ -80,7 +80,16 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
         statement: coreNode.statement,
         detail: coreNode.detail,
         x: coreNode.x,
-        y: coreNode.y
+        y: coreNode.y,
+        // Identity fields for live rendering
+        coreId: coreNode.coreId,
+        path: coreNode.path,
+        stableId: coreNode.stableId,
+        essence: coreNode.essence,
+        derivation: coreNode.derivation,
+        liveness: coreNode.liveness,
+        terminal: coreNode.terminal,
+        scoping: coreNode.scoping
       } : null,
       nodes: otherNodes.map(n => ({
         _id: n._id,
@@ -98,7 +107,17 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
         sources: n.sources,
         depth: n.depth,
         x: n.x,
-        y: n.y
+        y: n.y,
+        // Identity fields for live rendering
+        coreId: n.coreId,
+        path: n.path,
+        stableId: n.stableId,
+        essence: n.essence,
+        derivation: n.derivation,
+        liveness: n.liveness,
+        terminal: n.terminal,
+        // Scoping fields
+        scoping: n.scoping
       })),
       edges: includedEdges.map(e => ({
         _id: e._id,
@@ -363,6 +382,34 @@ router.put('/:mapId', verifyToken, async (req, res) => {
   } catch (err) {
     console.error('Update share error:', err);
     res.status(500).json({ success: false, error: 'Failed to update' });
+  }
+});
+
+// GET /share/status/:projectId - Check if project is published to Atlas
+router.get('/status/:projectId', verifyToken, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ success: false, error: 'Project not found' });
+    }
+    if (project.ownerId?.toString() !== req.userId) {
+      return res.status(403).json({ success: false, error: 'Not your project' });
+    }
+
+    const sharedMap = await SharedMap.findOne({
+      projectId: req.params.projectId,
+      unpublishedAt: null
+    });
+
+    res.json({
+      success: true,
+      published: !!sharedMap,
+      mapId: sharedMap?._id,
+      publishedAt: sharedMap?.publishedAt
+    });
+  } catch (err) {
+    console.error('Status check error:', err);
+    res.status(500).json({ success: false, error: 'Failed to check status' });
   }
 });
 
