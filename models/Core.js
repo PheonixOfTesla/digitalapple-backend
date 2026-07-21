@@ -89,6 +89,32 @@ const coreSchema = new mongoose.Schema({
       ref: 'User',
       default: null
     }
+  },
+
+  // Resolved directions - defining questions that have been answered
+  // Tracks the decision tree navigated to reach current state
+  resolvedDirections: [{
+    nodeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Node'
+    },
+    nodeTitle: String,
+    chosenPath: String,
+    resolvedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+
+  // Dynamic summary that updates as plan develops
+  integratedSummary: {
+    type: String,
+    maxlength: 5000
+  },
+
+  // Last integration timestamp
+  lastIntegratedAt: {
+    type: Date
   }
 }, {
   timestamps: true

@@ -36,6 +36,15 @@ function getScoping() {
   return ScopingService;
 }
 
+// Rescoping service - lazy loaded
+let RescopingService = null;
+function getRescoping() {
+  if (!RescopingService) {
+    RescopingService = require('../services/rescoping');
+  }
+  return RescopingService;
+}
+
 // AI client - lazy loaded
 let AIClient = null;
 function getAIClient() {
@@ -2644,6 +2653,342 @@ router.get('/projects/:projectId/export', optionalAuth, async (req, res) => {
     authenticated: !!req.userId,
     formats
   });
+});
+
+// ============================================================================
+// SELF-RESCOPING DRAFTING ENGINE
+// Part 1-6: Gaps, completeness, readiness, fill-and-advance, integration
+// ============================================================================
+
+/**
+ * Get all gaps with priority weighting
+ * GET /blueprint/projects/:projectId/gaps
+ */
+router.get('/projects/:projectId/gaps', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const nodes = await Node.find({ projectId: project._id }).lean();
+    const rescoping = getRescoping();
+    const gaps = rescoping.getGapsWithPriority(nodes);
+
+    res.json({
+      success: true,
+      gaps,
+      totalGaps: gaps.length,
+      definingQuestions: gaps.filter(g => g.isDefiningQuestion).length
+    });
+  } catch (error) {
+    console.error('Get gaps error:', error);
+    res.status(500).json({ error: 'Failed to get gaps' });
+  }
+});
+
+/**
+ * Get completeness with downstream weighting
+ * GET /blueprint/projects/:projectId/completeness
+ */
+router.get('/projects/:projectId/completeness', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const [nodes, edges, coreDoc] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean(),
+      Core.findOne({ projectId: project._id }).lean()
+    ]);
+
+    const rescoping = getRescoping();
+    const completeness = rescoping.calculateCompleteness(nodes, edges, coreDoc);
+    const milestones = rescoping.checkMilestones(completeness);
+
+    res.json({
+      success: true,
+      completeness,
+      milestones,
+      message: completeness.message
+    });
+  } catch (error) {
+    console.error('Get completeness error:', error);
+    res.status(500).json({ error: 'Failed to get completeness' });
+  }
+});
+
+/**
+ * Get PDF/export readiness
+ * GET /blueprint/projects/:projectId/readiness
+ */
+router.get('/projects/:projectId/readiness', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const [nodes, edges, coreDoc] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean(),
+      Core.findOne({ projectId: project._id }).lean()
+    ]);
+
+    const rescoping = getRescoping();
+    const readiness = rescoping.checkPDFReadiness(nodes, edges, coreDoc);
+    const exportReadiness = rescoping.getExportReadiness(readiness);
+
+    res.json({
+      success: true,
+      readiness,
+      exportStatus: exportReadiness,
+      canExport: true, // Always allow export, just indicate completeness
+      recommendation: readiness.ready
+        ? 'Your blueprint is ready for export.'
+        : `Address ${readiness.blockers.length} blocker(s) for a complete export.`
+    });
+  } catch (error) {
+    console.error('Get readiness error:', error);
+    res.status(500).json({ error: 'Failed to get readiness' });
+  }
+});
+
+/**
+ * Get next gap for fill-and-advance
+ * GET /blueprint/projects/:projectId/next-gap
+ */
+router.get('/projects/:projectId/next-gap', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const [nodes, edges] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean()
+    ]);
+
+    const rescoping = getRescoping();
+    const nextGap = rescoping.getNextGap(nodes, edges);
+    const route = rescoping.routeToNextGap(nextGap, nodes, edges);
+
+    res.json({
+      success: true,
+      nextGap: nextGap ? {
+        nodeId: nextGap._id.toString(),
+        title: nextGap.title,
+        kind: nextGap.kind,
+        isDefiningQuestion: nextGap.kind === 'decision',
+        priority: nextGap.priority,
+        weight: nextGap.weight
+      } : null,
+      route,
+      complete: !nextGap
+    });
+  } catch (error) {
+    console.error('Get next gap error:', error);
+    res.status(500).json({ error: 'Failed to get next gap' });
+  }
+});
+
+/**
+ * Get or regenerate core integration
+ * GET /blueprint/projects/:projectId/integration
+ */
+router.get('/projects/:projectId/integration', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const [nodes, edges, coreDoc] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean(),
+      Core.findOne({ projectId: project._id })
+    ]);
+
+    const rescoping = getRescoping();
+
+    // Generate/update integration if stale or missing
+    const forceRegenerate = req.query.regenerate === 'true';
+    const isStale = !coreDoc?.lastIntegratedAt ||
+      new Date() - new Date(coreDoc.lastIntegratedAt) > 5 * 60 * 1000; // 5 min stale
+
+    let integration = coreDoc?.integratedSummary;
+
+    if (forceRegenerate || isStale || !integration) {
+      integration = await rescoping.generateCoreIntegration(nodes, edges, coreDoc);
+
+      // Persist if we have a core doc
+      if (coreDoc) {
+        coreDoc.integratedSummary = integration;
+        coreDoc.lastIntegratedAt = new Date();
+        await coreDoc.save();
+      }
+    }
+
+    // Get completeness for context
+    const completeness = rescoping.calculateCompleteness(nodes, edges, coreDoc);
+
+    res.json({
+      success: true,
+      integration,
+      premise: coreDoc?.premise || project.premise,
+      classification: coreDoc?.classification,
+      resolvedDirections: coreDoc?.resolvedDirections || [],
+      completeness: completeness.percent,
+      lastIntegratedAt: coreDoc?.lastIntegratedAt
+    });
+  } catch (error) {
+    console.error('Get integration error:', error);
+    res.status(500).json({ error: 'Failed to get integration' });
+  }
+});
+
+/**
+ * Choose a path on a defining question with conditional re-scoping
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/choose-defining
+ */
+router.post('/projects/:projectId/nodes/:nodeId/choose-defining', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const { chosenPathLabel } = req.body;
+    if (!chosenPathLabel) {
+      return res.status(400).json({ error: 'chosenPathLabel required' });
+    }
+
+    const node = await Node.findById(req.params.nodeId);
+    if (!node || node.projectId.toString() !== project._id.toString()) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    const rescoping = getRescoping();
+
+    // Verify this is a defining question
+    const nodes = await Node.find({ projectId: project._id }).lean();
+    const edges = await Edge.find({ projectId: project._id }).lean();
+
+    if (!rescoping.isDefiningQuestion(node.toObject(), nodes, edges)) {
+      return res.status(400).json({
+        error: 'Not a defining question',
+        message: 'This node does not have mutually exclusive branches with disjoint downstream requirements'
+      });
+    }
+
+    // Execute the re-scoping
+    const result = await rescoping.rescopeOnDefiningAnswer(
+      node._id,
+      project._id,
+      chosenPathLabel
+    );
+
+    // Update Core with resolved direction
+    const coreDoc = await Core.findOne({ projectId: project._id });
+    if (coreDoc) {
+      coreDoc.resolvedDirections.push({
+        nodeId: node._id,
+        nodeTitle: node.title,
+        chosenPath: chosenPathLabel,
+        resolvedAt: new Date()
+      });
+
+      // Update integrated summary
+      const updatedNodes = await Node.find({ projectId: project._id }).lean();
+      coreDoc.integratedSummary = await rescoping.generateCoreIntegration(updatedNodes, edges, coreDoc);
+      coreDoc.lastIntegratedAt = new Date();
+      await coreDoc.save();
+    }
+
+    // Get acknowledgment message
+    const acknowledgment = rescoping.buildAcknowledgment(node.title, chosenPathLabel, result);
+
+    // Get next gap for auto-advance
+    const updatedNodes = await Node.find({ projectId: project._id }).lean();
+    const nextGap = rescoping.getNextGap(updatedNodes, edges);
+
+    res.json({
+      success: true,
+      message: acknowledgment,
+      archived: result.archived,
+      archivedCount: result.archivedCount,
+      survivorIds: result.survivorIds,
+      nextGap: nextGap ? {
+        nodeId: nextGap._id.toString(),
+        title: nextGap.title,
+        kind: nextGap.kind
+      } : null
+    });
+  } catch (error) {
+    console.error('Choose defining error:', error);
+    res.status(500).json({ error: 'Failed to process choice' });
+  }
+});
+
+/**
+ * Get defining questions for a project
+ * GET /blueprint/projects/:projectId/defining-questions
+ */
+router.get('/projects/:projectId/defining-questions', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const [nodes, edges, coreDoc] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean(),
+      Core.findOne({ projectId: project._id }).lean()
+    ]);
+
+    const rescoping = getRescoping();
+    const definingQuestions = rescoping.getDefiningQuestions(nodes, edges);
+
+    // Separate resolved from unresolved
+    const resolvedIds = new Set(
+      (coreDoc?.resolvedDirections || []).map(d => d.nodeId.toString())
+    );
+
+    const unresolved = definingQuestions.filter(q => !resolvedIds.has(q._id.toString()));
+    const resolved = definingQuestions.filter(q => resolvedIds.has(q._id.toString()));
+
+    res.json({
+      success: true,
+      definingQuestions: unresolved.map(q => ({
+        nodeId: q._id.toString(),
+        title: q.title,
+        statement: q.statement,
+        branches: q.branches || [],
+        weight: q.weight,
+        priority: q.priority
+      })),
+      resolved: resolved.map(q => {
+        const resolution = coreDoc?.resolvedDirections?.find(
+          d => d.nodeId.toString() === q._id.toString()
+        );
+        return {
+          nodeId: q._id.toString(),
+          title: q.title,
+          chosenPath: resolution?.chosenPath,
+          resolvedAt: resolution?.resolvedAt
+        };
+      }),
+      totalUnresolved: unresolved.length,
+      totalResolved: resolved.length
+    });
+  } catch (error) {
+    console.error('Get defining questions error:', error);
+    res.status(500).json({ error: 'Failed to get defining questions' });
+  }
 });
 
 module.exports = router;
