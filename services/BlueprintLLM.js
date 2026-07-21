@@ -652,10 +652,10 @@ Target: 6-14 total nodes for a short premise.`;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      // Nebula: 6 roots + 0-2 children each = 6-18 nodes, target <4k output tokens
+      // Nebula: 6 roots + 0-2 children each = 6-18 nodes, now with detail fields ~10k+ tokens
       const requestParams = {
         model,
-        max_tokens: 6000,
+        max_tokens: 12000,
         messages: [
           { role: 'system', content: NEBULA_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt }
@@ -676,9 +676,9 @@ Target: 6-14 total nodes for a short premise.`;
         requestParams.response_format = { type: 'json_object' };
       }
 
-      // Safety net: retry with higher tokens (should rarely fire after payload reduction)
+      // Safety net: retry with higher tokens for detail-rich responses
       if (attempt > 0) {
-        requestParams.max_tokens = 8000;
+        requestParams.max_tokens = 16000;
       }
 
       const response = await client.chat.completions.create(requestParams);
