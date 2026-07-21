@@ -10,58 +10,36 @@ const { BLUEPRINT_SYSTEM_PREFIX, W_WORDS } = require('./blueprintPrompts');
 const { buildFrameLookups } = require('./frameLoader');
 
 const NEBULA_FRAME_INSTRUCTION = `
-You are given a frame with up to 7 roots. Each root has:
-- frameId: echo this back unchanged so we can match your response to the frame
-- label: the display name, or null if you must name it from the premise
-- covers: what this root is about
-- optional: if true, DROP this root entirely if the premise provides no grounding
+Return JSON with core + roots array. Each root: frameId (echo exactly), label, title (2-4 words), statement (1 sentence), territory (8 words max), confidence {value:0-1, basis:"stated|inferred|unknown"}, stage:0, status:"unexplored", stars array (0-2 items, same fields as root).
 
-OUTPUT FORMAT - Return JSON with this MINIMAL structure (keep it small):
-{
-  "core": {
-    "title": "short 2-4 word label",
-    "statement": "one sentence describing the premise"
-  },
-  "roots": [
-    {
-      "frameId": "echo the frameId from input",
-      "label": "domain-specific name",
-      "title": "short 2-4 word label",
-      "statement": "one sentence",
-      "territory": "brief phrase: what this area covers (8 words max)",
-      "confidence": { "value": 0-1, "basis": "stated|inferred|unknown" },
-      "stage": 0-9,
-      "status": "unexplored|mapped",
-      "stars": [
-        {
-          "title": "short label",
-          "statement": "one sentence",
-          "territory": "brief phrase (8 words max)",
-          "confidence": { "value": 0-1, "basis": "stated|inferred|unknown" },
-          "stage": 0-9,
-          "status": "unexplored"
-        }
-      ]
-    }
-  ]
-}
-
-KEEP IT SMALL. No scores, no detail paragraphs, no sub-aspects — those are derived later per-node.
-
-HARD RULES:
-1. Echo frameId exactly as provided.
-2. Never output raw W-words (who/what/where/when/why/how) as labels. Use domain-specific names.
-3. If label is null in the input, invent a domain-appropriate name from the premise.
-4. OPTIONAL roots with no grounding: omit entirely.
-5. REQUIRED roots with no grounding: include with empty stars and statement naming what's missing.
-6. Every node needs confidence + basis.
-7. If stagesEnabled is false, set all stage values to 0.
-8. Each root gets 0-2 stars maximum.
-9. Thin premise = small map. Never fabricate.
+Rules: Echo frameId exactly. Domain labels only (never who/what/why/how). Optional empty roots: omit. Required empty roots: placeholder. Keep small.
 `;
 
 // Byte-identical prefix from single source
 const NEBULA_SYSTEM = BLUEPRINT_SYSTEM_PREFIX + NEBULA_FRAME_INSTRUCTION;
+
+/**
+ * Extract JSON from LLM response (handles markdown code blocks).
+ */
+function extractJSON(content) {
+  // Try direct parse first
+  const trimmed = content.trim();
+  if (trimmed.startsWith('{')) {
+    return trimmed;
+  }
+  // Extract from markdown code block
+  const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (match) {
+    return match[1].trim();
+  }
+  // Last resort: find first { to last }
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    return trimmed.substring(start, end + 1);
+  }
+  return trimmed;
+}
 
 /**
  * Generate a nebula from a frame input.
@@ -75,14 +53,24 @@ async function generateFramedNebula(frameInput, retries = 2) {
           { role: 'system', content: NEBULA_SYSTEM },
           { role: 'user', content: JSON.stringify(frameInput) }
         ],
-        max_completion_tokens: 2500, // Small skeleton: titles + territories only
-        response_format: { type: "json_object" }
+        max_completion_tokens: 8192 // Generous limit to avoid truncation
+        // Note: response_format: json_object causes issues with some providers
       });
 
       const content = response.choices[0]?.message?.content;
+      const finishReason = response.choices[0]?.finish_reason;
+      console.log(`[Nebula] finish_reason: ${finishReason}, content_length: ${content?.length || 0}`);
+
+      if (finishReason === 'length') {
+        console.error(`[Nebula] TRUNCATED! Raw content (last 200 chars): ${content?.slice(-200)}`);
+        throw new Error('Response truncated (finish_reason: length)');
+      }
+
       if (!content) throw new Error('Empty response from nebula');
 
-      const result = JSON.parse(content);
+      // Extract JSON from markdown code blocks if present
+      const jsonContent = extractJSON(content);
+      const result = JSON.parse(jsonContent);
 
       // Validate basic structure before processing
       const validationError = validateNebulaShape(result);
