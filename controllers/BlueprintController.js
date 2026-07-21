@@ -2045,6 +2045,146 @@ router.post('/projects/:projectId/nodes/:nodeId/classify', optionalAuth, async (
 });
 
 /**
+ * Generate suggestive preview for a node (what it could become).
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/preview
+ * Free - no quota cost. Read-only suggestive content.
+ * Returns classification + sub-aspect suggestions for components.
+ */
+router.post('/projects/:projectId/nodes/:nodeId/preview', optionalAuth, async (req, res) => {
+  try {
+    const { projectId, nodeId } = req.params;
+
+    // Allow viewing any project (read-only preview)
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const node = await Node.findOne({ _id: nodeId, projectId });
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    // Check if already has preview data (cached)
+    if (node.suggestedSubAspects && node.suggestedSubAspects.length > 0) {
+      return res.json({
+        success: true,
+        cached: true,
+        nodeId: node._id,
+        nodeKind: node.nodeKind,
+        suggestedSubAspects: node.suggestedSubAspects,
+        guidance: getNodeGuidance(node)
+      });
+    }
+
+    // Classify the node first (pure function, no LLM)
+    const scoping = getScoping();
+    const classification = scoping.classifyNodeKind(node);
+    node.nodeKind = classification.kind;
+
+    // For component nodes, generate sub-aspect suggestions
+    let suggestedSubAspects = [];
+    if (classification.kind === 'component' && !node.terminal) {
+      // Get context from ancestry
+      const core = await Core.findOne({ projectId });
+      const premise = core?.premise || project.premise || '';
+      const nodeTitle = node.statement || node.title || node.label || '';
+      const nodeContext = node.detail || '';
+
+      // Quick LLM call for sub-aspects (use haiku for speed/cost)
+      const aiClient = getAIClient();
+      const prompt = `Given a business map with premise: "${premise}"
+
+The node "${nodeTitle}" is about: ${nodeContext || 'no additional context'}
+
+Suggest 2-3 brief sub-aspects this would decompose into. Each should be:
+- A single phrase (3-6 words)
+- An actionable or definable component
+- Specific to this context
+
+Return ONLY a JSON array of strings, nothing else:
+["First sub-aspect", "Second sub-aspect", "Third sub-aspect"]`;
+
+      try {
+        const aiResponse = await aiClient.sendMessage(prompt, {
+          maxTokens: 150,
+          temperature: 0.7
+        });
+
+        // Parse the response
+        const text = aiResponse.content?.[0]?.text || aiResponse.text || '';
+        const match = text.match(/\[[\s\S]*?\]/);
+        if (match) {
+          suggestedSubAspects = JSON.parse(match[0]).slice(0, 3);
+        }
+      } catch (aiErr) {
+        console.warn('Sub-aspect generation failed:', aiErr.message);
+        // Fall back to generic suggestions based on constellation
+        suggestedSubAspects = getGenericSubAspects(node);
+      }
+    }
+
+    // Cache on node if we own it
+    const isOwner = project.ownerId?.toString() === req.userId ||
+                    project.anonymousSessionId === req.anonymousSessionId;
+
+    if (isOwner && suggestedSubAspects.length > 0) {
+      node.suggestedSubAspects = suggestedSubAspects;
+      await node.save();
+    }
+
+    res.json({
+      success: true,
+      cached: false,
+      nodeId: node._id,
+      nodeKind: classification.kind,
+      suggestedSubAspects,
+      guidance: getNodeGuidance(node),
+      persisted: isOwner
+    });
+
+  } catch (error) {
+    console.error('Preview error:', error);
+    res.status(500).json({ error: 'Failed to generate preview', message: error.message });
+  }
+});
+
+/**
+ * Get generic sub-aspects based on constellation type
+ */
+function getGenericSubAspects(node) {
+  const constellation = node.constellation || node.constellationLabel || '';
+  const suggestions = {
+    offer: ['Core value proposition', 'Pricing model', 'Delivery format'],
+    delivery: ['Fulfillment process', 'Quality control', 'Timeline'],
+    orchestration: ['Resource allocation', 'Dependencies', 'Risk mitigation'],
+    risk: ['Mitigation strategy', 'Contingency plan', 'Monitoring approach'],
+    capital: ['Funding requirements', 'Unit economics', 'Cash flow'],
+    infrastructure: ['Technical stack', 'Operational capacity', 'Scalability']
+  };
+  return suggestions[constellation.toLowerCase()] || ['Key components', 'Requirements', 'Next steps'];
+}
+
+/**
+ * Get plain-language guidance for a node based on its state
+ */
+function getNodeGuidance(node) {
+  const liveness = node.terminal ? 'walled' : (node.confidence?.basis === 'unknown' ? 'dormant' : 'open');
+  const label = node.constellationLabel || node.constellation || 'this area';
+
+  switch (liveness) {
+    case 'dormant':
+      return `This ${label} hasn't been developed yet. Expand or refine to fill it in.`;
+    case 'open':
+      return `This has real content. Expand to go deeper, or scope to see alternative paths.`;
+    case 'walled':
+      return `This is actionable as-is — a concrete step you can take.`;
+    default:
+      return '';
+  }
+}
+
+/**
  * Scope a node: classify as component/decision and generate paths for decisions.
  * POST /blueprint/projects/:projectId/nodes/:nodeId/scope
  * Costs: 3 units

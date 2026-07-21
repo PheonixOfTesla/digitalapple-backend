@@ -297,7 +297,13 @@ const nodeSchema = new mongoose.Schema({
   scoped: {
     type: Boolean,
     default: false
-  }
+  },
+
+  // For component nodes: suggested sub-aspects (preview of expansion)
+  suggestedSubAspects: [{
+    type: String,
+    maxlength: 100
+  }]
 
   // === END SCOPING LAYER ===
 }, {
