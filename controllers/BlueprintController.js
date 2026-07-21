@@ -13,8 +13,19 @@ const Edge = require('../models/Edge');
 const Core = require('../models/Core');
 const UserQuota = require('../models/UserQuota');
 const User = require('../models/User');
+const SessionToken = require('../models/SessionToken');
+const TokenLedger = require('../models/TokenLedger');
 const { verifyToken } = require('../middleware/auth');
 const identity = require('../services/identity');
+
+// Token spending/refund (lazy loaded to avoid circular deps)
+let tokenOps = null;
+function getTokenOps() {
+  if (!tokenOps) {
+    tokenOps = require('./TokenController');
+  }
+  return tokenOps;
+}
 
 // Scoping service - lazy loaded
 let ScopingService = null;
@@ -83,7 +94,7 @@ function getResetTime() {
 }
 
 // Helper: check quota before operation (does NOT consume)
-// Note: Now lifetime-based for authenticated users, session-based for anonymous
+// Now with token integration: paid tokens first, then free tier fallback
 // Admin users are exempt from all quota limits
 async function checkQuota(userId, anonymousSessionId, operationType, userRole = null) {
   const isAuth = !!userId;
@@ -95,19 +106,48 @@ async function checkQuota(userId, anonymousSessionId, operationType, userRole = 
       adminExempt: true,
       projectsRemaining: Infinity,
       cost: 0,
-      query: { userId }
+      query: { userId },
+      source: 'admin_exempt'
     };
   }
-
-  const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
-  const unitCost = UNIT_COSTS[operationType] || 1;
 
   // Must have either userId or anonymousSessionId
   if (!userId && !anonymousSessionId) {
     return { allowed: false, error: 'No session identifier', isAuth };
   }
 
-  // Query without date - lifetime for auth users, session-based for anonymous
+  // For nebula operations, check token balance first
+  if (operationType === 'nebula') {
+    let tokenBalance = 0;
+
+    if (isAuth) {
+      const user = await User.findById(userId);
+      tokenBalance = user?.tokenBalance || 0;
+    } else {
+      const session = await SessionToken.findOne({
+        sessionId: anonymousSessionId,
+        claimedBy: null
+      });
+      tokenBalance = session?.tokenBalance || 0;
+    }
+
+    // If has paid tokens, use those (don't consume yet - just check)
+    if (tokenBalance > 0) {
+      return {
+        allowed: true,
+        tokenBalance,
+        cost: 1,
+        query: userId ? { userId } : { anonymousSessionId },
+        source: 'tokens',
+        isAuth
+      };
+    }
+  }
+
+  // Fall back to free tier quota
+  const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
+  const unitCost = UNIT_COSTS[operationType] || 1;
+
   const query = userId
     ? { userId }
     : { anonymousSessionId };
@@ -123,18 +163,15 @@ async function checkQuota(userId, anonymousSessionId, operationType, userRole = 
 
   // Check projects for nebula operations
   if (operationType === 'nebula' && projectsRemaining <= 0) {
-    // Different error message for authenticated vs anonymous users
-    const errorMsg = isAuth
-      ? `You've reached your project limit (${limits.projects} maps). Purchase more tokens for additional maps.`
-      : `Anonymous limit reached (${limits.projects} map). Sign up for ${QUOTA.authenticated.projects} free maps.`;
-
+    // Out of free tier AND no tokens - suggest purchase
     return {
       allowed: false,
       quotaType: 'projects',
       used: quota.projectsCreated || 0,
       limit: limits.projects,
       remaining: 0,
-      error: errorMsg,
+      error: 'out_of_tokens', // Frontend will show purchase modal
+      needsPurchase: true,
       isAuth
     };
   }
@@ -143,29 +180,67 @@ async function checkQuota(userId, anonymousSessionId, operationType, userRole = 
     allowed: true,
     projectsRemaining: operationType === 'nebula' ? projectsRemaining - 1 : projectsRemaining,
     cost: unitCost,
-    query, // Pass query for later consumption
+    query,
+    source: 'free_tier',
     isAuth
   };
 }
 
 // Helper: consume quota after successful operation
-async function consumeQuota(query, operationType) {
-  if (operationType === 'nebula') {
-    await UserQuota.updateOne(query, { $inc: { projectsCreated: 1 } });
+// quotaCheck contains: { source, query, tokenBalance, isAuth } from checkQuota()
+async function consumeQuota(quotaCheck, operationType, projectId = null) {
+  if (operationType !== 'nebula') {
+    // Other operations don't consume quota in the new lifetime model
+    // Unit budget is per-project, tracked on the Project document
+    return { success: true };
   }
-  // Other operations don't consume quota in the new lifetime model
-  // Unit budget is per-project, tracked on the Project document
+
+  // Admin exempt - no consumption needed
+  if (quotaCheck.source === 'admin_exempt') {
+    return { success: true, exempt: true };
+  }
+
+  // Token-based consumption
+  if (quotaCheck.source === 'tokens') {
+    const tokenOps = getTokenOps();
+    const userId = quotaCheck.query.userId || null;
+    const sessionId = quotaCheck.query.anonymousSessionId || null;
+    const result = await tokenOps.spendToken(userId, sessionId, projectId);
+    return result;
+  }
+
+  // Free tier consumption - increment project counter
+  await UserQuota.updateOne(quotaCheck.query, { $inc: { projectsCreated: 1 } });
+  return { success: true, source: 'free_tier' };
 }
 
 // Helper: refund quota on failure
-async function refundQuota(query, operationType) {
-  if (operationType === 'nebula') {
-    // Decrement but prevent negative values
-    await UserQuota.updateOne(
-      { ...query, projectsCreated: { $gt: 0 } },
-      { $inc: { projectsCreated: -1 } }
-    );
+// quotaCheck contains: { source, query } from checkQuota()
+async function refundQuota(quotaCheck, operationType, projectId = null, reason = 'provider_failure') {
+  if (operationType !== 'nebula') {
+    // Other operations don't consume quota, so nothing to refund
+    return;
   }
+
+  // Admin exempt - nothing to refund
+  if (quotaCheck.source === 'admin_exempt') {
+    return;
+  }
+
+  // Token-based refund
+  if (quotaCheck.source === 'tokens') {
+    const tokenOps = getTokenOps();
+    const userId = quotaCheck.query.userId || null;
+    const sessionId = quotaCheck.query.anonymousSessionId || null;
+    await tokenOps.refundToken(userId, sessionId, projectId, reason);
+    return;
+  }
+
+  // Free tier refund - decrement project counter
+  await UserQuota.updateOne(
+    { ...quotaCheck.query, projectsCreated: { $gt: 0 } },
+    { $inc: { projectsCreated: -1 } }
+  );
 }
 
 // Helper: verify project ownership
@@ -272,7 +347,7 @@ router.post('/projects', optionalAuth, async (req, res) => {
     await project.save();
 
     // Consume quota (project creation counts against project limit)
-    await consumeQuota(quotaCheck.query, 'nebula');
+    await consumeQuota(quotaCheck, 'nebula', project._id);
 
     res.json({
       success: true,
@@ -945,7 +1020,7 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
     }
 
     // Pre-consume quota (will refund on failure)
-    await consumeQuota(quotaCheck.query, 'chat');
+    await consumeQuota(quotaCheck, 'chat');
 
     // Get current canvas state for context
     const [nodes, edges] = await Promise.all([
@@ -996,7 +1071,7 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
     console.error('Chat error:', error);
     // Refund quota on LLM failure
     if (quotaCheck?.query) {
-      await refundQuota(quotaCheck.query, 'chat');
+      await refundQuota(quotaCheck, 'chat');
     }
     res.status(500).json({ error: 'Failed to process chat', message: error.message });
   }
@@ -1209,7 +1284,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     }
 
     // Pre-consume quota (will refund on failure)
-    await consumeQuota(quotaCheck.query, 'nebula');
+    await consumeQuota(quotaCheck, 'nebula', project._id);
 
     // Create project first so we can store classification on it
     project = new Project({
@@ -1417,9 +1492,9 @@ router.post('/nebula', optionalAuth, async (req, res) => {
 
   } catch (error) {
     console.error('Nebula generation error:', error);
-    // Refund quota on LLM failure
-    if (quotaCheck?.query) {
-      await refundQuota(quotaCheck.query, 'nebula');
+    // Refund quota/token on LLM failure
+    if (quotaCheck) {
+      await refundQuota(quotaCheck, 'nebula', project?._id, error.message || 'provider_failure');
     }
     // Clean up project if created
     if (project?._id) {
@@ -1524,7 +1599,7 @@ router.post('/expand', optionalAuth, async (req, res) => {
     }
 
     // Pre-consume quota (will refund on failure)
-    await consumeQuota(quotaCheck.query, 'expand');
+    await consumeQuota(quotaCheck, 'expand');
 
     // Decide expansion mode (A: sub-nebula or B: star-children)
     // Refine/force always uses star-children mode
@@ -1835,7 +1910,7 @@ router.post('/expand', optionalAuth, async (req, res) => {
     // Refund quota on failure
     if (quotaCheck?.query) {
       try {
-        await refundQuota(quotaCheck.query, 'expand');
+        await refundQuota(quotaCheck, 'expand');
       } catch (refundErr) {
         console.error('Refund failed:', refundErr);
       }
@@ -2261,7 +2336,7 @@ router.post('/projects/:projectId/nodes/:nodeId/scope', optionalAuth, async (req
     }
 
     // Pre-consume quota
-    await consumeQuota(quotaCheck.query, 'scope');
+    await consumeQuota(quotaCheck, 'scope');
 
     // Run scoping
     const scoping = getScoping();
@@ -2281,7 +2356,7 @@ router.post('/projects/:projectId/nodes/:nodeId/scope', optionalAuth, async (req
 
     // Refund quota on failure
     if (quotaCheck?.query) {
-      await refundQuota(quotaCheck.query, 'scope');
+      await refundQuota(quotaCheck, 'scope');
     }
 
     res.status(500).json({ error: 'Failed to scope node', message: error.message });

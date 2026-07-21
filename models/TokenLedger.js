@@ -8,12 +8,19 @@
 const mongoose = require('mongoose');
 
 const tokenLedgerSchema = new mongoose.Schema({
-  // User who owns this transaction
+  // User who owns this transaction (for authenticated users)
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
-    index: true
+    index: true,
+    sparse: true
+  },
+
+  // Session ID for anonymous users (mutually exclusive with userId)
+  sessionId: {
+    type: String,
+    index: true,
+    sparse: true
   },
 
   // Amount changed (positive for credit, negative for spend)
@@ -59,7 +66,22 @@ const tokenLedgerSchema = new mongoose.Schema({
 // Compound index for user history queries
 tokenLedgerSchema.index({ userId: 1, createdAt: -1 });
 
+// Compound index for session history queries
+tokenLedgerSchema.index({ sessionId: 1, createdAt: -1 });
+
 // Index for reconciliation by reason
 tokenLedgerSchema.index({ reason: 1, createdAt: -1 });
+
+// Index for idempotency on Stripe events
+tokenLedgerSchema.index({ 'metadata.stripeEventId': 1 }, { sparse: true, unique: true });
+
+// Validation: must have either userId or sessionId
+tokenLedgerSchema.pre('validate', function(next) {
+  if (!this.userId && !this.sessionId) {
+    next(new Error('TokenLedger must have either userId or sessionId'));
+  } else {
+    next();
+  }
+});
 
 module.exports = mongoose.model('TokenLedger', tokenLedgerSchema);

@@ -18,8 +18,12 @@ const BlueprintController = require('./controllers/BlueprintController');
 const EngagementController = require('./controllers/EngagementController');
 const CommentController = require('./controllers/CommentController');
 const ShareController = require('./controllers/ShareController');
+const TokenController = require('./controllers/TokenController');
 
 const app = express();
+
+// Stripe webhook needs raw body - MUST be before express.json()
+app.use('/api/v1/tokens/webhook', express.raw({ type: 'application/json' }));
 
 // Trust proxy for Railway deployment
 app.set('trust proxy', true);
@@ -124,6 +128,7 @@ app.use('/api/v1/blueprint', BlueprintController);
 app.use('/api/v1/engage', EngagementController);
 app.use('/api/v1/comments', CommentController);
 app.use('/api/v1/share', ShareController);
+app.use('/api/v1/tokens', TokenController);
 
 // ONE-TIME SETUP - REMOVE AFTER USE
 app.post('/api/v1/setup-once', async (req, res) => {
