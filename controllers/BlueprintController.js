@@ -1981,6 +1981,70 @@ async function getDescendants(nodeId) {
 // ============== SCOPING ==============
 
 /**
+ * Lazy classify a node as component or decision.
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/classify
+ * Free - no quota cost. Used when selecting a node to determine if scoping is available.
+ */
+router.post('/projects/:projectId/nodes/:nodeId/classify', optionalAuth, async (req, res) => {
+  try {
+    const { projectId, nodeId } = req.params;
+    const { persist = true } = req.body; // Default to persisting
+
+    // Allow viewing anyone's project for classification (read-only until persist)
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const node = await Node.findOne({ _id: nodeId, projectId });
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    // If already classified, return cached
+    if (node.nodeKind && node.nodeKind !== 'component') {
+      return res.json({
+        success: true,
+        cached: true,
+        nodeId: node._id,
+        nodeKind: node.nodeKind,
+        isDecision: node.nodeKind === 'decision',
+        canScope: node.nodeKind === 'decision' && !node.scoped
+      });
+    }
+
+    // Run classifier (pure function - no LLM call)
+    const scoping = getScoping();
+    const classification = scoping.classifyNodeKind(node);
+
+    // Persist if requested and user owns the project
+    const isOwner = project.ownerId?.toString() === req.userId ||
+                    project.anonymousSessionId === req.anonymousSessionId;
+
+    if (persist && isOwner && classification.kind !== node.nodeKind) {
+      node.nodeKind = classification.kind;
+      await node.save();
+    }
+
+    res.json({
+      success: true,
+      cached: false,
+      nodeId: node._id,
+      nodeKind: classification.kind,
+      confidence: classification.confidence,
+      signals: classification.signals,
+      isDecision: classification.kind === 'decision',
+      canScope: classification.kind === 'decision' && !node.scoped,
+      persisted: persist && isOwner
+    });
+
+  } catch (error) {
+    console.error('Classify error:', error);
+    res.status(500).json({ error: 'Failed to classify node', message: error.message });
+  }
+});
+
+/**
  * Scope a node: classify as component/decision and generate paths for decisions.
  * POST /blueprint/projects/:projectId/nodes/:nodeId/scope
  * Costs: 3 units

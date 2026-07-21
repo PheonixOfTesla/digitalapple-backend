@@ -195,7 +195,14 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
         body: snapCore.detail,
         x: snapCore.x || 600,
         y: snapCore.y || 400,
-        depth: 0
+        depth: 0,
+        // Identity fields from snapshot
+        liveness: snapCore.liveness,
+        nodeKind: snapCore.nodeKind,
+        terminal: snapCore.terminal,
+        scoped: snapCore.scoped,
+        scopedPaths: snapCore.scopedPaths,
+        scopeRecommendation: snapCore.scopeRecommendation
       });
       await coreNode.save({ session });
       nodeIdMap.set(snapCore._id.toString(), coreNode._id);
@@ -244,7 +251,14 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
         expansionType: snapNode.expansionType,
         subFrameType: snapNode.subFrameType,
         x: snapNode.x,
-        y: snapNode.y
+        y: snapNode.y,
+        // Identity fields from snapshot
+        liveness: snapNode.liveness,
+        nodeKind: snapNode.nodeKind,
+        // Scoping fields from snapshot (for already-scoped nodes)
+        scoped: snapNode.scoped,
+        scopedPaths: snapNode.scopedPaths,
+        scopeRecommendation: snapNode.scopeRecommendation
       });
       await node.save({ session });
       nodeIdMap.set(snapNode._id.toString(), node._id);
