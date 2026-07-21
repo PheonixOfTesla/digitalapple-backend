@@ -25,6 +25,7 @@ const Core = require('../models/Core');
 const User = require('../models/User');
 const NewsItem = require('../models/NewsItem');
 const identity = require('../services/identity');
+const BlueprintLLM = require('../services/BlueprintLLM');
 
 // System user email for seed maps
 const CLOCKWORK_EMAIL = 'system@clockwork.app';
@@ -278,6 +279,94 @@ function calculateCoverage(nodes) {
   return Math.round((kept / nonCore.length) * 100);
 }
 
+// Convert LLM nebula response to nodes/edges format
+function convertNebulaToGraph(nebula, category) {
+  const nodes = [];
+  const edges = [];
+
+  // Core node from nebula.core
+  const coreId = new mongoose.Types.ObjectId();
+  nodes.push({
+    _id: coreId,
+    label: 'CORE',
+    title: nebula.core.title || 'Core',
+    statement: nebula.core.statement,
+    detail: nebula.core.detail || '',
+    scores: nebula.core.scores,
+    confidence: nebula.core.confidence,
+    stage: nebula.core.stage || 0,
+    status: nebula.core.status || 'mapped',
+    depth: 0,
+    x: 600,
+    y: 400
+  });
+
+  // Constellation nodes
+  const angleStep = (2 * Math.PI) / nebula.constellations.length;
+  const radius = 180;
+
+  nebula.constellations.forEach((c, i) => {
+    const angle = angleStep * i - Math.PI / 2;
+    const consId = new mongoose.Types.ObjectId();
+
+    nodes.push({
+      _id: consId,
+      parentNodeId: coreId,
+      label: c.name || c.title,
+      title: c.title,
+      statement: c.statement,
+      detail: c.detail || '',
+      constellation: c.constellation,
+      constellationLabel: c.name,
+      scores: c.scores,
+      confidence: c.confidence,
+      stage: c.stage || 1,
+      status: c.status || 'mapped',
+      depth: 1,
+      x: Math.round(600 + radius * Math.cos(angle)),
+      y: Math.round(400 + radius * Math.sin(angle))
+    });
+
+    edges.push({
+      _id: new mongoose.Types.ObjectId(),
+      sourceId: coreId,
+      targetId: consId
+    });
+
+    // Children (stars)
+    const childRadius = radius + 120;
+    (c.children || []).forEach((child, j) => {
+      const childAngle = angle + (j - (c.children.length - 1) / 2) * 0.4;
+      const childId = new mongoose.Types.ObjectId();
+
+      nodes.push({
+        _id: childId,
+        parentNodeId: consId,
+        label: child.title,
+        title: child.title,
+        statement: child.statement,
+        detail: child.detail || '',
+        constellation: c.constellation,
+        scores: child.scores,
+        confidence: child.confidence,
+        stage: child.stage || 2,
+        status: child.status || 'unexplored',
+        depth: 2,
+        x: Math.round(600 + childRadius * Math.cos(childAngle)),
+        y: Math.round(400 + childRadius * Math.sin(childAngle))
+      });
+
+      edges.push({
+        _id: new mongoose.Types.ObjectId(),
+        sourceId: consId,
+        targetId: childId
+      });
+    });
+  });
+
+  return { nodes, edges };
+}
+
 // Generate preview SVG
 function generatePreviewSvg(snapshot) {
   const viewWidth = 420;
@@ -353,7 +442,7 @@ function generatePreviewSvg(snapshot) {
   return `<svg viewBox="0 0 ${viewWidth} ${viewHeight}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">${edgePaths}${nodeCircles}</svg>`;
 }
 
-// Create a seed map
+// Create a seed map using the real LLM engine
 async function createSeedMap(user, topic) {
   const { category, premise } = topic;
 
@@ -365,8 +454,11 @@ async function createSeedMap(user, topic) {
   });
   await project.save();
 
-  // Generate graph
-  const { nodes, edges } = generateBasicGraph(premise, category);
+  // Generate nebula via LLM for real substantive detail
+  const { nebula } = await BlueprintLLM.generateNebula(premise, {});
+
+  // Convert nebula to nodes and edges
+  const { nodes, edges } = convertNebulaToGraph(nebula, category);
 
   // Find core node to create Core document
   const coreNodeData = nodes.find(n => n.depth === 0);

@@ -130,18 +130,19 @@ const lightScoresSchema = {
   additionalProperties: false
 };
 
-// Light star for nebula: title (short label) + statement (full sentence)
+// Light star for nebula: title (short label) + statement (full sentence) + detail (substantive paragraph)
 const nebulaStarSchema = {
   type: 'object',
   properties: {
     title: { type: 'string', maxLength: 40 }, // Short label: 2-4 words
     statement: { type: 'string', maxLength: 150 }, // Full sentence
+    detail: { type: 'string', maxLength: 500 }, // Substantive 2-4 sentence paragraph
     scores: lightScoresSchema,
     confidence: confidenceSchema,
     stage: { type: 'integer', minimum: 0, maximum: 9 },
     status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] }
   },
-  required: ['title', 'statement', 'scores', 'confidence', 'stage', 'status'],
+  required: ['title', 'statement', 'detail', 'scores', 'confidence', 'stage', 'status'],
   additionalProperties: false
 };
 
@@ -153,13 +154,14 @@ const nebulaConstellationSchema = {
     name: { type: 'string', maxLength: 40 }, // Domain-specific label (e.g., "Roasting Operation" not "delivery")
     title: { type: 'string', maxLength: 40 }, // Short label for the root node
     statement: { type: 'string', maxLength: 150 },
+    detail: { type: 'string', maxLength: 500 }, // Substantive 2-4 sentence paragraph
     scores: lightScoresSchema,
     confidence: confidenceSchema,
     stage: { type: 'integer', minimum: 0, maximum: 9 },
     status: { type: 'string', enum: ['unexplored', 'mapped', 'kept', 'pruned', 'done'] },
     children: { type: 'array', items: nebulaStarSchema, maxItems: 2 }
   },
-  required: ['constellation', 'name', 'title', 'statement', 'scores', 'confidence', 'stage', 'status', 'children'],
+  required: ['constellation', 'name', 'title', 'statement', 'detail', 'scores', 'confidence', 'stage', 'status', 'children'],
   additionalProperties: false
 };
 
@@ -556,7 +558,7 @@ const NEBULA_SYSTEM_PROMPT = `You are Blueprint, an analyst that decomposes busi
 STAR SCHEMA (every node must have):
 {
   "statement": "Clear, actionable statement (max 200 chars)",
-  "detail": "Elaboration with specifics (max 1000 chars)",
+  "detail": "2-4 sentence paragraph in second person explaining what this means for THIS business, why it matters, and how it connects to the scores. Be specific to the premise — never generic filler.",
   "scores": {
     "economy": { "value": 0-10, "reason": "why this score" },
     "orchestration": { "value": 0-10, "reason": "why this score" },
@@ -569,6 +571,12 @@ STAR SCHEMA (every node must have):
   "stage": 0-9,
   "status": "unexplored" | "mapped" | "kept" | "pruned" | "done"
 }
+
+DETAIL FIELD (critical): The detail is where the real thinking lives. Write substantively:
+- Explain what this node is and why it matters to THIS specific premise
+- Connect the reasoning to the scores you assigned
+- Use plain second-person voice ("You'll need to...", "This matters because...")
+- Never write generic placeholder text like "Elaboration needed" or "Details to come"
 
 STAGE DEFINITIONS:
 0 = Premise, 1 = Formation, 2 = Proof, 3 = Rights & Obligations, 4 = Build,
@@ -617,6 +625,7 @@ FIELD REQUIREMENTS:
 - "name": Domain-specific label for each constellation root (e.g., "Roasting Operation", "Local Coffee Lovers", "Retail Channels"). NEVER use generic terms like "Offer", "Demand", "Delivery" or W-words (who/what/where/when/why/how).
 - "title": Short 2-4 word label for each node (e.g., "Bean sourcing", "Local vendors", "Event risk"). NOT a sentence.
 - "statement": Full sentence describing the node's scope or gap.
+- "detail": A substantive 2-4 sentence paragraph in plain second person ("you") explaining what this node means for THIS specific business, why it matters, and the reasoning behind the scores. Be specific to the premise — don't write generic filler. Connect the dots between this node and the founder's actual situation.
 
 STAGE ASSIGNMENT (0-9):
 - 0 Premise: The starting idea
