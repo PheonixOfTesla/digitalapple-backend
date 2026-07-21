@@ -327,12 +327,14 @@ router.post('/projects', optionalAuth, async (req, res) => {
     const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
-        error: 'Quota exceeded',
-        message: quotaCheck.error,
+        error: quotaCheck.error || 'Quota exceeded',
+        message: quotaCheck.needsPurchase ? 'Purchase tokens to create more maps.' : 'Quota limit reached.',
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.projectsRemaining || 0
+        remaining: quotaCheck.projectsRemaining || 0,
+        needsPurchase: quotaCheck.needsPurchase || false,
+        isAuth: quotaCheck.isAuth
       });
     }
 
@@ -1005,12 +1007,14 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
     quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
-        error: 'Quota exceeded',
-        message: quotaCheck.error,
+        error: quotaCheck.error || 'Quota exceeded',
+        message: quotaCheck.needsPurchase ? 'Purchase tokens to create more maps.' : 'Quota limit reached.',
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.projectsRemaining || 0
+        remaining: quotaCheck.projectsRemaining || 0,
+        needsPurchase: quotaCheck.needsPurchase || false,
+        isAuth: quotaCheck.isAuth
       });
     }
 
@@ -1268,12 +1272,13 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'nebula', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
-        error: 'Quota exceeded',
-        message: quotaCheck.error,
+        error: quotaCheck.error || 'Quota exceeded',
+        message: quotaCheck.needsPurchase ? 'Purchase tokens to create more maps.' : 'Map limit reached.',
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
         remaining: quotaCheck.projectsRemaining || 0,
+        needsPurchase: quotaCheck.needsPurchase || false,
         isAuth: quotaCheck.isAuth
       });
     }
@@ -1589,12 +1594,14 @@ router.post('/expand', optionalAuth, async (req, res) => {
     quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'expand', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
-        error: 'Quota exceeded',
-        message: quotaCheck.error,
+        error: quotaCheck.error || 'Quota exceeded',
+        message: quotaCheck.needsPurchase ? 'Purchase tokens to create more maps.' : 'Quota limit reached.',
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.projectsRemaining || 0
+        remaining: quotaCheck.projectsRemaining || 0,
+        needsPurchase: quotaCheck.needsPurchase || false,
+        isAuth: quotaCheck.isAuth
       });
     }
 
@@ -2326,12 +2333,14 @@ router.post('/projects/:projectId/nodes/:nodeId/scope', optionalAuth, async (req
     quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'scope', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
-        error: 'Quota exceeded',
-        message: quotaCheck.error,
+        error: quotaCheck.error || 'Quota exceeded',
+        message: quotaCheck.needsPurchase ? 'Purchase tokens to create more maps.' : 'Quota limit reached.',
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.projectsRemaining || 0
+        remaining: quotaCheck.projectsRemaining || 0,
+        needsPurchase: quotaCheck.needsPurchase || false,
+        isAuth: quotaCheck.isAuth
       });
     }
 
