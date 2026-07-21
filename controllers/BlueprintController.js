@@ -1936,7 +1936,9 @@ function formatNodeForClient(node) {
     coreId: node.coreId?.toString() || null,
     stableId: node.stableId || null,
     essence: node.essence || null,
-    derivation: node.derivation || null
+    derivation: node.derivation || null,
+    // Path for breadcrumb navigation (array of {nodeId, title})
+    path: node.path || []
   };
 }
 
