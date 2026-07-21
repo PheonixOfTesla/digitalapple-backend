@@ -16,6 +16,15 @@ const User = require('../models/User');
 const { verifyToken } = require('../middleware/auth');
 const identity = require('../services/identity');
 
+// Scoping service - lazy loaded
+let ScopingService = null;
+function getScoping() {
+  if (!ScopingService) {
+    ScopingService = require('../services/scoping');
+  }
+  return ScopingService;
+}
+
 // LLM service - lazy loaded to avoid startup errors if API key missing
 let BlueprintLLM = null;
 function getLLM() {
@@ -41,6 +50,7 @@ const router = express.Router();
 const UNIT_COSTS = {
   chat: 1,
   expand: 3,
+  scope: 3,
   nebula: 4
 };
 
@@ -1938,7 +1948,12 @@ function formatNodeForClient(node) {
     essence: node.essence || null,
     derivation: node.derivation || null,
     // Path for breadcrumb navigation (array of {nodeId, title})
-    path: node.path || []
+    path: node.path || [],
+    // Scoping fields
+    nodeKind: node.nodeKind || null,
+    scoped: node.scoped || false,
+    scopedPaths: node.scopedPaths || [],
+    scopeRecommendation: node.scopeRecommendation || null
   };
 }
 
@@ -1962,6 +1977,184 @@ async function getDescendants(nodeId) {
 
   return descendants;
 }
+
+// ============== SCOPING ==============
+
+/**
+ * Scope a node: classify as component/decision and generate paths for decisions.
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/scope
+ * Costs: 3 units
+ */
+router.post('/projects/:projectId/nodes/:nodeId/scope', optionalAuth, async (req, res) => {
+  let quotaCheck = null;
+  try {
+    const { projectId, nodeId } = req.params;
+
+    const project = await verifyOwnership(projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const node = await Node.findOne({ _id: nodeId, projectId });
+    if (!node) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+
+    // Already scoped? Return cached result
+    if (node.scoped && node.scopedPaths?.length > 0) {
+      return res.json({
+        success: true,
+        cached: true,
+        node: formatNodeForClient(node),
+        paths: node.scopedPaths,
+        recommendation: node.scopeRecommendation
+      });
+    }
+
+    // Check quota (scope = 3 units)
+    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'scope', req.userRole);
+    if (!quotaCheck.allowed) {
+      return res.status(429).json({
+        error: 'Quota exceeded',
+        message: quotaCheck.error,
+        quotaType: quotaCheck.quotaType,
+        used: quotaCheck.used,
+        limit: quotaCheck.limit,
+        remaining: quotaCheck.projectsRemaining || 0
+      });
+    }
+
+    // Pre-consume quota
+    await consumeQuota(quotaCheck.query, 'scope');
+
+    // Run scoping
+    const scoping = getScoping();
+    const result = await scoping.scopeNode(nodeId, projectId);
+
+    res.json({
+      success: true,
+      node: result.node,
+      paths: result.paths,
+      recommendation: result.recommendation,
+      classification: result.classification,
+      tokensUsed: result.tokensUsed
+    });
+
+  } catch (error) {
+    console.error('Scope error:', error);
+
+    // Refund quota on failure
+    if (quotaCheck?.query) {
+      await refundQuota(quotaCheck.query, 'scope');
+    }
+
+    res.status(500).json({ error: 'Failed to scope node', message: error.message });
+  }
+});
+
+/**
+ * Choose a path from a scoped decision node.
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/choose-path
+ * Creates chosen path as component child, marks others as road-not-taken.
+ * Idempotent: choosing again re-focuses, does not duplicate.
+ */
+router.post('/projects/:projectId/nodes/:nodeId/choose-path', optionalAuth, async (req, res) => {
+  try {
+    const { projectId, nodeId } = req.params;
+    const { pathLabel } = req.body;
+
+    if (!pathLabel) {
+      return res.status(400).json({ error: 'pathLabel is required' });
+    }
+
+    const project = await verifyOwnership(projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const scoping = getScoping();
+    const result = await scoping.choosePath(nodeId, projectId, pathLabel);
+
+    // Build ops for frontend
+    const ops = [
+      {
+        op: 'createNode',
+        nodeId: result.chosenNode.id,
+        data: result.chosenNode
+      },
+      {
+        op: 'updateNode',
+        nodeId: result.node.id,
+        data: {
+          expanded: true,
+          scopedPaths: result.node.scopedPaths
+        }
+      }
+    ];
+
+    res.json({
+      success: true,
+      chosenNode: result.chosenNode,
+      parentNode: result.node,
+      ops
+    });
+
+  } catch (error) {
+    console.error('Choose path error:', error);
+    res.status(500).json({ error: 'Failed to choose path', message: error.message });
+  }
+});
+
+/**
+ * Re-select a road-not-taken path (changing direction).
+ * POST /blueprint/projects/:projectId/nodes/:nodeId/reselect-path
+ * Previous choice marked road-not-taken, NOT deleted.
+ */
+router.post('/projects/:projectId/nodes/:nodeId/reselect-path', optionalAuth, async (req, res) => {
+  try {
+    const { projectId, nodeId } = req.params;
+    const { pathLabel } = req.body;
+
+    if (!pathLabel) {
+      return res.status(400).json({ error: 'pathLabel is required' });
+    }
+
+    const project = await verifyOwnership(projectId, req.userId, req.anonymousSessionId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const scoping = getScoping();
+    const result = await scoping.reselectPath(nodeId, projectId, pathLabel);
+
+    // Build ops for frontend
+    const ops = [
+      {
+        op: 'createNode',
+        nodeId: result.chosenNode.id,
+        data: result.chosenNode
+      },
+      {
+        op: 'updateNode',
+        nodeId: result.node.id,
+        data: {
+          scopedPaths: result.node.scopedPaths
+        }
+      }
+    ];
+
+    res.json({
+      success: true,
+      chosenNode: result.chosenNode,
+      parentNode: result.node,
+      ops
+    });
+
+  } catch (error) {
+    console.error('Reselect path error:', error);
+    res.status(500).json({ error: 'Failed to reselect path', message: error.message });
+  }
+});
 
 // ============== EXPORTS (AUTH REQUIRED) ==============
 
