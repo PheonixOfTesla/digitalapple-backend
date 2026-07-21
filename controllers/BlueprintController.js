@@ -2671,15 +2671,21 @@ router.get('/projects/:projectId/gaps', optionalAuth, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const nodes = await Node.find({ projectId: project._id }).lean();
+    const [nodes, edges] = await Promise.all([
+      Node.find({ projectId: project._id }).lean(),
+      Edge.find({ projectId: project._id }).lean()
+    ]);
+
     const rescoping = getRescoping();
-    const gaps = rescoping.getGapsWithPriority(nodes);
+    const gapData = rescoping.getGapsWithPriority(nodes, edges);
 
     res.json({
       success: true,
-      gaps,
-      totalGaps: gaps.length,
-      definingQuestions: gaps.filter(g => g.isDefiningQuestion).length
+      defining: gapData.defining,
+      detail: gapData.detail,
+      totalGaps: gapData.total,
+      definingCount: gapData.defining.length,
+      detailCount: gapData.detail.length
     });
   } catch (error) {
     console.error('Get gaps error:', error);
