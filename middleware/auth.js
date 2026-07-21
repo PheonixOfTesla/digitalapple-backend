@@ -25,25 +25,30 @@ function verifyToken(req, res, next) {
 }
 
 // Optional auth - extracts user if token present, continues if not
+// Also extracts X-Session-Id for anonymous session tracking
 function optionalAuth(req, res, next) {
   const authHeader = req.headers['authorization'];
 
-  if (!authHeader) {
-    return next(); // No token, continue as anonymous
+  if (authHeader) {
+    const token = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : authHeader;
+
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.userId = decoded.id;
+      req.userEmail = decoded.email;
+      req.userRole = decoded.role;
+    } catch (error) {
+      // Invalid token, continue as anonymous
+    }
   }
 
-  const token = authHeader.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : authHeader;
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.userId = decoded.id;
-    req.userEmail = decoded.email;
-    req.userRole = decoded.role;
-  } catch (error) {
-    // Invalid token, continue as anonymous
+  // Extract anonymous session ID from header (for token purchases without auth)
+  if (!req.userId) {
+    req.anonymousSessionId = req.headers['x-session-id'] || req.query.sessionId;
   }
+
   next();
 }
 
