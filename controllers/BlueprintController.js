@@ -25,6 +25,15 @@ function getScoping() {
   return ScopingService;
 }
 
+// AI client - lazy loaded
+let AIClient = null;
+function getAIClient() {
+  if (!AIClient) {
+    AIClient = require('../services/aiClient');
+  }
+  return AIClient;
+}
+
 // LLM service - lazy loaded to avoid startup errors if API key missing
 let BlueprintLLM = null;
 function getLLM() {
