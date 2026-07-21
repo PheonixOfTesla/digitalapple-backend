@@ -239,16 +239,20 @@ async function migrateProject(project) {
   let coreDoc = await Core.findOne({ projectId });
 
   if (!coreDoc && !DRY_RUN) {
+    // Build classification with required fields
+    const existingClassification = project.blueprint?.classification;
+    const classification = {
+      type: existingClassification?.type || 'unknown',
+      confidence: typeof existingClassification?.confidence === 'number' ? existingClassification.confidence : 0.5,
+      alternates: existingClassification?.alternates || [],
+      reasoning: existingClassification?.reasoning || 'Migrated - no classification available'
+    };
+
     coreDoc = new Core({
       projectId,
       coreNodeId: effectiveCoreNode._id,
       premise: project.premise || project.name || 'Migrated project',
-      classification: project.blueprint?.classification || {
-        type: 'unknown',
-        confidence: 0.5,
-        alternates: [],
-        reasoning: 'Migrated - no classification available'
-      },
+      classification,
       frameMeta: project.blueprint?.frameMeta || {},
       stagesEnabled: project.blueprint?.stagesEnabled ?? true
     });
@@ -303,7 +307,12 @@ async function migrateProject(project) {
           expanded: node.expanded ?? false,
           terminal: node.terminal ?? false,
           expansionType: node.expansionType ?? null,
-          subFrameType: node.subFrameType ?? null
+          subFrameType: node.subFrameType ?? null,
+          // Backfill scoping fields (scope-ready)
+          nodeKind: node.nodeKind ?? 'component',
+          scoped: node.scoped ?? false,
+          scopedPaths: node.scopedPaths ?? [],
+          scopeRecommendation: node.scopeRecommendation ?? null
         }
       );
     }
