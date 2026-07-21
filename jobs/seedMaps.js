@@ -224,7 +224,7 @@ function generateBasicGraph(premise, category) {
         orchestration: { value: Math.floor(Math.random() * 4) + 4, reason: 'Initial assessment' },
         demand: { value: Math.floor(Math.random() * 4) + 5, reason: 'Initial assessment' }
       },
-      confidence: { value: Math.floor(Math.random() * 3) + 5, basis: 'estimate' }
+      confidence: { value: Math.floor(Math.random() * 3) + 5, basis: 'inferred' }
     });
 
     edges.push({
@@ -256,7 +256,7 @@ function generateBasicGraph(premise, category) {
           orchestration: { value: Math.floor(Math.random() * 3) + 4, reason: 'Detail assessment' },
           demand: { value: Math.floor(Math.random() * 3) + 5, reason: 'Detail assessment' }
         },
-        confidence: { value: Math.floor(Math.random() * 3) + 4, basis: 'estimate' }
+        confidence: { value: Math.floor(Math.random() * 3) + 4, basis: 'inferred' }
       });
 
       edges.push({

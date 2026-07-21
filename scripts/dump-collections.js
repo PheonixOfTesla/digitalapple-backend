@@ -18,6 +18,7 @@ const Node = require('../models/Node');
 const Edge = require('../models/Edge');
 const Core = require('../models/Core');
 const UserQuota = require('../models/UserQuota');
+const SharedMap = require('../models/SharedMap');
 
 async function main() {
   console.log('[dump] Starting collection dump...');
@@ -44,7 +45,8 @@ async function main() {
     { name: 'nodes', model: Node },
     { name: 'edges', model: Edge },
     { name: 'cores', model: Core },
-    { name: 'userquotas', model: UserQuota }
+    { name: 'userquotas', model: UserQuota },
+    { name: 'sharedmaps', model: SharedMap }
   ];
 
   const stats = {};
@@ -81,6 +83,7 @@ async function main() {
   console.log(`[dump] Edges: ${stats.edges}`);
   console.log(`[dump] Cores: ${stats.cores}`);
   console.log(`[dump] UserQuotas: ${stats.userquotas}`);
+  console.log(`[dump] SharedMaps: ${stats.sharedmaps}`);
   console.log(`[dump] Total: ${summary.totalDocuments} documents`);
 
   await mongoose.disconnect();
