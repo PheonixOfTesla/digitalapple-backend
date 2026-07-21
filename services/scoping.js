@@ -9,9 +9,31 @@
  * scores, tradeoffs, and a recommendation.
  */
 
-const { client, model, provider } = require('./aiClient');
-const identity = require('./identity');
-const Node = require('../models/Node');
+// Lazy-load dependencies to allow pure function testing without full setup
+let aiClient = null;
+let identity = null;
+let Node = null;
+
+function getAIClient() {
+  if (!aiClient) {
+    aiClient = require('./aiClient');
+  }
+  return aiClient;
+}
+
+function getIdentity() {
+  if (!identity) {
+    identity = require('./identity');
+  }
+  return identity;
+}
+
+function getNode() {
+  if (!Node) {
+    Node = require('../models/Node');
+  }
+  return Node;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PURE FUNCTIONS - CLASSIFICATION
@@ -321,6 +343,7 @@ Return JSON with:
  * @returns {Promise<{ paths: Array, singlePath: boolean, tokensUsed: number }>}
  */
 async function scopeDecisionNode(node, traceString = '', siblingContext = []) {
+  const { client, model, provider } = getAIClient();
   const userPrompt = `Scope this decision node into 2-4 alternative paths:
 
 NODE TO SCOPE:
@@ -436,6 +459,8 @@ Every path needs:
  * @returns {Promise<{ node: Object, paths: Array, recommendation: Object, tokensUsed: number }>}
  */
 async function scopeNode(nodeId, projectId) {
+  const Node = getNode();
+  const identity = getIdentity();
   const node = await Node.findOne({ _id: nodeId, projectId });
   if (!node) {
     throw new Error('Node not found');
@@ -526,6 +551,8 @@ async function scopeNode(nodeId, projectId) {
  * @returns {Promise<{ chosenNode: Object, node: Object }>}
  */
 async function choosePath(nodeId, projectId, pathLabel) {
+  const Node = getNode();
+  const identity = getIdentity();
   const node = await Node.findOne({ _id: nodeId, projectId });
   if (!node) {
     throw new Error('Node not found');
@@ -619,6 +646,7 @@ async function choosePath(nodeId, projectId, pathLabel) {
  * @returns {Promise<{ chosenNode: Object, node: Object }>}
  */
 async function reselectPath(nodeId, projectId, pathLabel) {
+  const Node = getNode();
   const node = await Node.findOne({ _id: nodeId, projectId });
   if (!node) {
     throw new Error('Node not found');
