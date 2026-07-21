@@ -1315,6 +1315,8 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         confidence: root.confidence,
         stage: nebula.stagesEnabled ? (root.stage || 0) : undefined,
         status: root.status || 'mapped',
+        suggestedSubAspects: root.suggestedSubAspects || [],
+        nodeKind: 'component', // Default to component, can be changed via /preview
         x: rootPos?.x || 600,
         y: rootPos?.y || 400,
         depth: 1
@@ -1962,7 +1964,9 @@ function formatNodeForClient(node) {
     nodeKind: node.nodeKind || null,
     scoped: node.scoped || false,
     scopedPaths: node.scopedPaths || [],
-    scopeRecommendation: node.scopeRecommendation || null
+    scopeRecommendation: node.scopeRecommendation || null,
+    // Suggestive data
+    suggestedSubAspects: node.suggestedSubAspects || []
   };
 }
 

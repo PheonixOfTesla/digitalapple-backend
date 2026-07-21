@@ -20,7 +20,8 @@ OUTPUT FORMAT - Return JSON with this exact structure:
 {
   "core": {
     "title": "short 2-4 word label",
-    "statement": "full sentence describing the premise"
+    "statement": "full sentence describing the premise",
+    "detail": "2-4 sentence paragraph explaining what this premise means and why it matters"
   },
   "roots": [
     {
@@ -28,6 +29,7 @@ OUTPUT FORMAT - Return JSON with this exact structure:
       "label": "domain-specific name (use provided label or invent one if null)",
       "title": "short 2-4 word label",
       "statement": "full sentence",
+      "detail": "2-4 sentence paragraph in second person ('you') explaining what this area means for THIS specific premise, why it matters, and what questions need answering",
       "confidence": { "value": 0-1, "basis": "stated|inferred|unknown" },
       "scores": {
         "economy": { "value": 0-10, "reason": "why" },
@@ -36,10 +38,12 @@ OUTPUT FORMAT - Return JSON with this exact structure:
       },
       "stage": 0-9,
       "status": "unexplored|mapped|kept|pruned|done",
+      "suggestedSubAspects": ["2-4 short phrases showing what this could break down into"],
       "stars": [
         {
           "title": "short label",
           "statement": "full sentence",
+          "detail": "2-4 sentence paragraph specific to this star",
           "confidence": { "value": 0-1, "basis": "stated|inferred|unknown" },
           "scores": { same structure },
           "stage": 0-9,
@@ -49,6 +53,12 @@ OUTPUT FORMAT - Return JSON with this exact structure:
     }
   ]
 }
+
+DETAIL FIELD (critical): This is where the real thinking lives. For every node:
+- Explain what this area means for THIS specific premise (not generic)
+- Use second person ("you'll need to...", "this matters because...")
+- Connect the reasoning to the context
+- NEVER use placeholder text like "details to come" or "elaboration needed"
 
 HARD RULES:
 1. Echo frameId exactly as provided - we use this to match your response.
@@ -60,6 +70,7 @@ HARD RULES:
 7. If stagesEnabled is false in the input, set all stage values to 0.
 8. Each root gets 0-2 stars maximum. Only add stars where the premise provides grounding.
 9. Thin premise = small honest map. Never fabricate to fill the structure.
+10. Every node MUST have a detail field with substantive content.
 `;
 
 // Byte-identical prefix from single source
@@ -77,7 +88,7 @@ async function generateFramedNebula(frameInput, retries = 2) {
           { role: 'system', content: NEBULA_SYSTEM },
           { role: 'user', content: JSON.stringify(frameInput) }
         ],
-        max_completion_tokens: 4000,
+        max_completion_tokens: 8000, // Increased for detail + suggestedSubAspects
         response_format: { type: "json_object" }
       });
 
@@ -218,10 +229,12 @@ function enforceGuards(result, frameInput) {
           label: frameRoot.label || `[${frameId}]`,
           title: frameRoot.label || `[${frameId}]`,
           statement: `The premise does not provide information about ${frameRoot.covers || 'this area'}.`,
+          detail: `This area hasn't been explored yet. You'll need to provide more information about ${frameRoot.covers || 'this area'} to develop this part of your map. What do you know about this aspect of your premise?`,
           confidence: { value: 0, basis: 'unknown' },
           scores: createZeroScores(),
           stage: 0,
           status: 'unexplored',
+          suggestedSubAspects: [],
           stars: [createPlaceholderStar(frameRoot.label || frameId)]
         });
       }
@@ -255,6 +268,7 @@ function createPlaceholderStar(areaName) {
   return {
     title: `[Needs information]`,
     statement: `The premise does not provide enough detail about ${areaName}.`,
+    detail: `This area is waiting to be filled in. You'll need to provide more information about ${areaName} to develop this part of your map.`,
     confidence: { value: 0, basis: 'unknown' },
     scores: createZeroScores(),
     stage: 0,
@@ -274,7 +288,7 @@ function createZeroScores() {
 }
 
 /**
- * Ensure a node has valid scores structure.
+ * Ensure a node has valid scores structure and other required fields.
  */
 function ensureStarScores(node) {
   if (!node.scores) {
@@ -295,6 +309,12 @@ function ensureStarScores(node) {
 
   if (!node.confidence) {
     node.confidence = { value: 0, basis: 'unknown' };
+  }
+
+  // Ensure detail exists (even if placeholder for dormant nodes)
+  if (!node.detail) {
+    const label = node.label || node.title || 'this area';
+    node.detail = `This aspect of your premise needs more exploration. What do you know about ${label}?`;
   }
 
   return node;
