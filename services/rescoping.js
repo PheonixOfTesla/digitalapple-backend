@@ -102,23 +102,24 @@ function detectDisjointLabels(labels) {
 }
 
 /**
- * Get all defining questions in a project, sorted by importance.
+ * Get all defining questions from nodes array, sorted by importance.
  * Defining questions are surfaced BEFORE ordinary detail gaps.
  *
- * @param {string} projectId - Project ID
- * @returns {Promise<Array>} - Defining question nodes, sorted by depth (shallower first)
+ * @param {Array} allNodes - All nodes in the project
+ * @param {Array} edges - All edges (optional, for downstream analysis)
+ * @returns {Array} - Defining question nodes, sorted by depth (shallower first)
  */
-async function getDefiningQuestions(projectId) {
-  const allNodes = await Node.find({
-    projectId,
-    kind: { $ne: 'road-not-taken' },
-    nodeKind: 'decision',
-    scoped: true
-  }).lean();
+function getDefiningQuestions(allNodes, edges = []) {
+  // Filter to decision nodes that are scoped
+  const decisionNodes = allNodes.filter(n =>
+    n.nodeKind === 'decision' &&
+    n.kind !== 'road-not-taken' &&
+    n.scoped === true
+  );
 
   const defining = [];
-  for (const node of allNodes) {
-    const result = isDefiningQuestion(node, allNodes);
+  for (const node of decisionNodes) {
+    const result = isDefiningQuestion(node, allNodes, edges);
     if (result.isDefining) {
       // Only include if not yet answered (no chosen path)
       const hasChosenPath = (node.scopedPaths || []).some(p => p.chosen);
@@ -126,7 +127,9 @@ async function getDefiningQuestions(projectId) {
         defining.push({
           ...node,
           definingReason: result.reason,
-          branches: result.branches
+          branches: result.branches,
+          weight: calculateNodeWeight(node, allNodes, edges),
+          priority: (node.depth || 0) * -1 + (result.branches || 0) // Higher branches + shallower = higher priority
         });
       }
     }
@@ -143,23 +146,28 @@ async function getDefiningQuestions(projectId) {
 
 /**
  * Get all gap nodes (dormant/incomplete), with defining questions first.
- * @param {string} projectId - Project ID
- * @returns {Promise<{ defining: Array, detail: Array, total: number }>}
+ * @param {Array} allNodes - All nodes in the project
+ * @returns {{ defining: Array, detail: Array, total: number }}
  */
-async function getGapsWithPriority(projectId) {
-  const defining = await getDefiningQuestions(projectId);
+function getGapsWithPriority(allNodes, edges = []) {
+  const defining = getDefiningQuestions(allNodes, edges);
   const definingIds = new Set(defining.map(n => n._id.toString()));
 
-  // Get all dormant/incomplete nodes
-  const allGaps = await Node.find({
-    projectId,
-    kind: { $nin: ['core', 'road-not-taken', 'rejected'] },
-    $or: [
-      { liveness: 'dormant' },
-      { 'confidence.basis': 'unknown' },
-      { terminal: { $ne: true }, liveness: { $ne: 'walled' } }
-    ]
-  }).sort({ depth: 1 }).lean();
+  // Get all dormant/incomplete nodes that aren't core or road-not-taken
+  const activeNodes = allNodes.filter(n =>
+    n.kind !== 'core' &&
+    n.kind !== 'road-not-taken' &&
+    n.kind !== 'rejected'
+  );
+
+  const allGaps = activeNodes.filter(n =>
+    n.liveness === 'dormant' ||
+    n.confidence?.basis === 'unknown' ||
+    (n.terminal !== true && n.liveness !== 'walled')
+  );
+
+  // Sort by depth
+  allGaps.sort((a, b) => (a.depth || 0) - (b.depth || 0));
 
   // Split into defining vs detail
   const detail = allGaps.filter(n => !definingIds.has(n._id.toString()));
@@ -384,31 +392,17 @@ async function updateCoreSummary(projectId, decisionNode, chosenPathLabel) {
 
 /**
  * Build acknowledgment message from re-scope results.
+ * @param {string} nodeTitle - Title of the node being answered
  * @param {string} chosenLabel - Chosen path label
- * @param {Array} archived - Archived nodes
- * @param {Array} newGaps - New gap nodes
- * @param {string} projectId - Project ID
- * @returns {Promise<string>}
+ * @param {Object} result - Re-scope result
+ * @returns {string}
  */
-async function buildAcknowledgment(chosenLabel, archived, newGaps, projectId) {
-  // Get remaining gap count
-  const gaps = await getGapsWithPriority(projectId);
-  const remainingGaps = gaps.total;
+function buildAcknowledgment(nodeTitle, chosenLabel, result) {
+  let message = `Locked in: "${chosenLabel}" for ${nodeTitle}.`;
 
-  // Build message
-  let message = `Since it's ${chosenLabel}`;
-
-  if (archived.length > 0) {
-    const archivedLabels = [...new Set(archived.map(n => n.constellation || n.title))];
-    message += `, I've set aside ${archived.length} question${archived.length !== 1 ? 's' : ''} about ${archivedLabels.slice(0, 2).join(', ')}`;
+  if (result.archivedCount > 0) {
+    message += ` Set aside ${result.archivedCount} alternate path${result.archivedCount !== 1 ? 's' : ''}.`;
   }
-
-  if (newGaps.length > 0) {
-    const newLabels = newGaps.slice(0, 3).map(n => n.title);
-    message += ` and opened ${newGaps.length} new one${newGaps.length !== 1 ? 's' : ''}: ${newLabels.join(', ')}`;
-  }
-
-  message += `. ${remainingGaps} gap${remainingGaps !== 1 ? 's' : ''} left.`;
 
   return message;
 }
@@ -421,21 +415,28 @@ async function buildAcknowledgment(chosenLabel, archived, newGaps, projectId) {
  * Calculate completeness with downstream weighting.
  * Defining questions are weighted by their downstream impact.
  *
- * @param {string} projectId - Project ID
- * @returns {Promise<Object>} - Completeness data
+ * @param {Array} allNodes - All nodes in the project
+ * @param {Array} edges - All edges (optional)
+ * @param {Object} coreDoc - Core document (optional)
+ * @returns {Object} - Completeness data
  */
-async function calculateCompleteness(projectId) {
-  const allNodes = await Node.find({
-    projectId,
-    kind: { $nin: ['road-not-taken', 'rejected'] }
-  }).lean();
+function calculateCompleteness(allNodes, edges = [], coreDoc = null) {
+  // Filter out archived nodes
+  const activeNodes = allNodes.filter(n =>
+    n.kind !== 'road-not-taken' && n.kind !== 'rejected'
+  );
 
-  if (allNodes.length === 0) {
-    return { percentage: 0, gapCount: 0, specifiedCount: 0, totalWeight: 0 };
+  if (activeNodes.length === 0) {
+    return {
+      percent: 0,
+      gapCount: 0,
+      specifiedCount: 0,
+      totalWeight: 0,
+      message: 'No nodes yet'
+    };
   }
 
-  const coreNode = allNodes.find(n => n.kind === 'core');
-  const nonCoreNodes = allNodes.filter(n => n.kind !== 'core');
+  const nonCoreNodes = activeNodes.filter(n => n.kind !== 'core');
 
   // Calculate base completeness
   let totalWeight = 0;
@@ -445,7 +446,7 @@ async function calculateCompleteness(projectId) {
 
   for (const node of nonCoreNodes) {
     const isGap = isNodeAGap(node);
-    const weight = calculateNodeWeight(node, allNodes);
+    const weight = calculateNodeWeight(node, activeNodes, edges);
 
     totalWeight += weight;
 
@@ -458,21 +459,34 @@ async function calculateCompleteness(projectId) {
   }
 
   // Calculate percentage
-  const percentage = totalWeight > 0
+  const percent = totalWeight > 0
     ? Math.round((specifiedWeight / totalWeight) * 100)
     : 0;
 
-  // Check for milestones
-  const milestones = await checkMilestones(projectId, allNodes, percentage);
+  // Build message
+  let message = '';
+  if (percent === 0) {
+    message = 'Just getting started';
+  } else if (percent < 25) {
+    message = 'Foundation laid';
+  } else if (percent < 50) {
+    message = 'Making progress';
+  } else if (percent < 75) {
+    message = 'More than halfway';
+  } else if (percent < 100) {
+    message = 'Almost there';
+  } else {
+    message = 'Complete';
+  }
 
   return {
-    percentage,
+    percent,
     gapCount,
     specifiedCount,
     totalNodes: nonCoreNodes.length,
     totalWeight: Math.round(totalWeight * 100) / 100,
     specifiedWeight: Math.round(specifiedWeight * 100) / 100,
-    milestones
+    message
   };
 }
 
@@ -536,55 +550,31 @@ function calculateNodeWeight(node, allNodes) {
 
 /**
  * Check for milestone achievements.
- * @param {string} projectId - Project ID
- * @param {Array} allNodes - All nodes
- * @param {number} percentage - Current completion percentage
- * @returns {Promise<Array>}
+ * @param {Object} completeness - Completeness data
+ * @returns {Object}
  */
-async function checkMilestones(projectId, allNodes, percentage) {
-  const milestones = [];
-  const coreNode = allNodes.find(n => n.kind === 'core');
+function checkMilestones(completeness) {
+  const milestones = {
+    reached: [],
+    next: null
+  };
 
-  // Check constellation completion
-  const constellations = allNodes.filter(n => n.kind === 'constellation');
-  for (const cons of constellations) {
-    const children = allNodes.filter(n => n.parentNodeId?.toString() === cons._id.toString());
-    const allChildrenSpecified = children.length > 0 && children.every(c => !isNodeAGap(c));
-    const consSpecified = !isNodeAGap(cons);
+  const percent = completeness.percent || 0;
 
-    if (consSpecified && allChildrenSpecified) {
-      milestones.push({
-        type: 'constellation_complete',
-        message: `${cons.constellationLabel || cons.constellation || cons.title} is now complete`,
-        nodeId: cons._id
-      });
+  // Milestone thresholds
+  const thresholds = [
+    { at: 25, label: 'Foundation', message: 'Core structure defined' },
+    { at: 50, label: 'Halfway', message: 'Half specified' },
+    { at: 75, label: 'Most Done', message: 'Three-quarters complete' },
+    { at: 100, label: 'Complete', message: 'Fully specified' }
+  ];
+
+  for (const t of thresholds) {
+    if (percent >= t.at) {
+      milestones.reached.push(t);
+    } else if (!milestones.next) {
+      milestones.next = { ...t, remaining: t.at - percent };
     }
-  }
-
-  // Check percentage milestones
-  if (percentage >= 50) {
-    milestones.push({
-      type: 'half_complete',
-      message: 'Half your plan is specified'
-    });
-  }
-
-  // Check if only defining questions remain
-  const gaps = await getGapsWithPriority(projectId);
-  if (gaps.detail.length === 0 && gaps.defining.length > 0) {
-    milestones.push({
-      type: 'only_defining',
-      message: 'Only defining questions left'
-    });
-  }
-
-  // Check PDF readiness
-  const readiness = await checkPDFReadiness(projectId, allNodes);
-  if (readiness.ready) {
-    milestones.push({
-      type: 'pdf_ready',
-      message: 'Ready to export'
-    });
   }
 
   return milestones;
@@ -596,12 +586,13 @@ async function checkMilestones(projectId, allNodes, percentage) {
 
 /**
  * Get the next gap to fill, prioritizing defining questions.
- * @param {string} projectId - Project ID
+ * @param {Array} allNodes - All nodes
+ * @param {Array} edges - All edges
  * @param {string} currentNodeId - Current node (to skip)
- * @returns {Promise<Object|null>} - Next gap node or null if complete
+ * @returns {Object|null} - Next gap node or null if complete
  */
-async function getNextGap(projectId, currentNodeId = null) {
-  const gaps = await getGapsWithPriority(projectId);
+function getNextGap(allNodes, edges = [], currentNodeId = null) {
+  const gaps = getGapsWithPriority(allNodes, edges);
 
   // Filter out current node
   const allGaps = [...gaps.defining, ...gaps.detail]
@@ -619,27 +610,25 @@ async function getNextGap(projectId, currentNodeId = null) {
  * Route to next gap after filling one.
  * Returns routing data for frontend navigation.
  *
- * @param {string} projectId - Project ID
- * @param {string} filledNodeId - Node that was just filled
- * @returns {Promise<Object>}
+ * @param {Object} nextGap - Next gap node
+ * @param {Array} allNodes - All nodes
+ * @param {Array} edges - All edges
+ * @returns {Object}
  */
-async function routeToNextGap(projectId, filledNodeId) {
-  const nextGap = await getNextGap(projectId, filledNodeId);
-  const completeness = await calculateCompleteness(projectId);
-
+function routeToNextGap(nextGap, allNodes, edges = []) {
   if (!nextGap) {
     return {
       complete: true,
-      nextGap: null,
-      completeness,
-      message: 'All gaps filled — plan complete'
+      action: 'done',
+      message: 'All gaps filled'
     };
   }
 
-  const isDefining = isDefiningQuestion(nextGap, []);
+  const isDefining = isDefiningQuestion(nextGap, allNodes, edges);
 
   return {
     complete: false,
+    action: isDefining.isDefining ? 'define' : 'fill',
     nextGap: {
       id: nextGap._id,
       title: nextGap.title,
@@ -648,7 +637,6 @@ async function routeToNextGap(projectId, filledNodeId) {
       territory: nextGap.territory,
       invitation: nextGap.invitation
     },
-    completeness,
     message: isDefining.isDefining
       ? `Next: defining question — ${nextGap.title}`
       : `Next gap: ${nextGap.title}`
@@ -664,37 +652,32 @@ async function routeToNextGap(projectId, filledNodeId) {
  * Ready = all defining questions answered + core constellations specified.
  * NOT requiring 100% detail gaps.
  *
- * @param {string} projectId - Project ID
- * @param {Array} allNodes - Optional pre-fetched nodes
- * @returns {Promise<Object>}
+ * @param {Array} allNodes - All nodes in the project
+ * @param {Array} edges - All edges
+ * @param {Object} coreDoc - Core document (optional)
+ * @returns {Object}
  */
-async function checkPDFReadiness(projectId, allNodes = null) {
-  if (!allNodes) {
-    allNodes = await Node.find({
-      projectId,
-      kind: { $nin: ['road-not-taken', 'rejected'] }
-    }).lean();
+function checkPDFReadiness(allNodes, edges = [], coreDoc = null) {
+  // Filter active nodes
+  const activeNodes = allNodes.filter(n =>
+    n.kind !== 'road-not-taken' && n.kind !== 'rejected'
+  );
+
+  const coreNode = activeNodes.find(n => n.kind === 'core');
+  if (!coreNode) {
+    return { ready: false, status: 'not_ready', reason: 'no_core', blockers: ['No core node'] };
   }
 
-  const coreNode = allNodes.find(n => n.kind === 'core');
-  if (!coreNode) {
-    return { ready: false, status: 'not_ready', reason: 'no_core' };
-  }
+  const blockers = [];
 
   // Check 1: All defining questions answered
-  const definingQuestions = await getDefiningQuestions(projectId);
+  const definingQuestions = getDefiningQuestions(activeNodes, edges);
   if (definingQuestions.length > 0) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      reason: 'defining_questions_remain',
-      definingRemaining: definingQuestions.length,
-      message: `${definingQuestions.length} defining question${definingQuestions.length !== 1 ? 's' : ''} remaining`
-    };
+    blockers.push(`${definingQuestions.length} defining question${definingQuestions.length !== 1 ? 's' : ''} remaining`);
   }
 
   // Check 2: Core constellations specified
-  const constellations = allNodes.filter(n => n.kind === 'constellation');
+  const constellations = activeNodes.filter(n => n.kind === 'constellation');
   const coreConstellations = ['demand', 'offer', 'delivery', 'economy', 'orchestration'];
 
   const unspecifiedConstellations = constellations.filter(c => {
@@ -704,38 +687,38 @@ async function checkPDFReadiness(projectId, allNodes = null) {
   });
 
   if (unspecifiedConstellations.length > 0) {
+    blockers.push(`Core sections incomplete: ${unspecifiedConstellations.map(c => c.constellation || c.title).join(', ')}`);
+  }
+
+  // Determine status
+  if (blockers.length === 0) {
+    const gaps = getGapsWithPriority(activeNodes, edges);
     return {
-      ready: false,
-      status: 'getting_there',
-      reason: 'constellations_incomplete',
-      unspecifiedConstellations: unspecifiedConstellations.map(c => c.constellation || c.title),
-      message: `Core sections need specification: ${unspecifiedConstellations.map(c => c.constellation || c.title).join(', ')}`
+      ready: true,
+      status: 'ready',
+      message: 'Ready to export',
+      detailGapsRemaining: gaps.detail.length,
+      blockers: []
     };
   }
 
-  // Ready!
-  const gaps = await getGapsWithPriority(projectId);
   return {
-    ready: true,
-    status: 'ready',
-    message: 'Ready to export',
-    detailGapsRemaining: gaps.detail.length, // Info only, doesn't block
-    completeness: await calculateCompleteness(projectId)
+    ready: false,
+    status: definingQuestions.length > 0 ? 'not_ready' : 'getting_there',
+    reason: definingQuestions.length > 0 ? 'defining_questions_remain' : 'constellations_incomplete',
+    blockers,
+    message: blockers[0]
   };
 }
 
 /**
  * Get export readiness state for UI.
- * @param {string} projectId - Project ID
- * @returns {Promise<Object>}
+ * @param {Object} readiness - Readiness from checkPDFReadiness
+ * @returns {Object}
  */
-async function getExportReadiness(projectId) {
-  const readiness = await checkPDFReadiness(projectId);
-  const completeness = await calculateCompleteness(projectId);
-
+function getExportReadiness(readiness) {
   return {
     ...readiness,
-    completeness,
     canExport: true, // Always can export, just with gaps marked
     exportQuality: readiness.ready ? 'complete' :
                    readiness.status === 'getting_there' ? 'partial' : 'draft'
@@ -750,100 +733,76 @@ async function getExportReadiness(projectId) {
  * Generate core integration - the synthesis of all developed nodes.
  * This is what all exports render from.
  *
- * @param {string} projectId - Project ID
- * @returns {Promise<Object>} - Integrated plan data
+ * @param {Array} allNodes - All nodes in the project
+ * @param {Array} edges - All edges
+ * @param {Object} coreDoc - Core document
+ * @returns {string} - Integrated summary text
  */
-async function generateCoreIntegration(projectId) {
-  const allNodes = await Node.find({
-    projectId,
-    kind: { $nin: ['road-not-taken', 'rejected'] }
-  }).lean();
+function generateCoreIntegration(allNodes, edges = [], coreDoc = null) {
+  // Filter active nodes
+  const activeNodes = allNodes.filter(n =>
+    n.kind !== 'road-not-taken' && n.kind !== 'rejected'
+  );
 
-  const edges = await Edge.find({ projectId }).lean();
-  const core = await Core.findOne({ projectId }).lean();
-  const coreNode = allNodes.find(n => n.kind === 'core');
-
-  if (!coreNode || !core) {
-    return null;
+  const coreNode = activeNodes.find(n => n.kind === 'core');
+  if (!coreNode) {
+    return 'No core defined yet.';
   }
 
-  // Build constellation structure
-  const constellations = allNodes
+  // Build integration summary
+  const parts = [];
+
+  // Add premise
+  const premise = coreDoc?.premise || coreNode.statement;
+  parts.push(`PREMISE: ${premise}`);
+
+  // Add resolved directions
+  if (coreDoc?.resolvedDirections?.length > 0) {
+    parts.push('\nKEY DECISIONS:');
+    for (const dir of coreDoc.resolvedDirections) {
+      parts.push(`• ${dir.nodeTitle}: ${dir.chosenPath}`);
+    }
+  }
+
+  // Add constellation summaries
+  const constellations = activeNodes
     .filter(n => n.kind === 'constellation')
     .sort((a, b) => {
       const order = ['demand', 'offer', 'delivery', 'economy', 'orchestration', 'risk'];
       const ai = order.indexOf(a.constellation) >= 0 ? order.indexOf(a.constellation) : 99;
       const bi = order.indexOf(b.constellation) >= 0 ? order.indexOf(b.constellation) : 99;
       return ai - bi;
-    })
-    .map(cons => {
-      const children = allNodes.filter(n => n.parentNodeId?.toString() === cons._id.toString());
-      const grandchildren = [];
-      for (const child of children) {
-        const gc = allNodes.filter(n => n.parentNodeId?.toString() === child._id.toString());
-        grandchildren.push(...gc);
-      }
-
-      return {
-        id: cons._id,
-        constellation: cons.constellation,
-        constellationLabel: cons.constellationLabel,
-        title: cons.title,
-        statement: cons.statement,
-        detail: cons.detail,
-        confidence: cons.confidence,
-        liveness: cons.liveness,
-        isGap: isNodeAGap(cons),
-        children: children.map(child => ({
-          id: child._id,
-          title: child.title,
-          statement: child.statement,
-          detail: child.detail,
-          confidence: child.confidence,
-          liveness: child.liveness,
-          isGap: isNodeAGap(child),
-          isAction: child.terminal || child.liveness === 'walled',
-          children: allNodes
-            .filter(n => n.parentNodeId?.toString() === child._id.toString())
-            .map(gc => ({
-              id: gc._id,
-              title: gc.title,
-              statement: gc.statement,
-              detail: gc.detail,
-              confidence: gc.confidence,
-              liveness: gc.liveness,
-              isGap: isNodeAGap(gc),
-              isAction: gc.terminal || gc.liveness === 'walled'
-            }))
-        }))
-      };
     });
 
-  // Get completeness and readiness
-  const completeness = await calculateCompleteness(projectId);
-  const readiness = await checkPDFReadiness(projectId, allNodes);
-  const gaps = await getGapsWithPriority(projectId);
+  for (const cons of constellations) {
+    const label = cons.constellationLabel || cons.constellation || cons.title;
+    parts.push(`\n${label.toUpperCase()}:`);
 
-  return {
-    core: {
-      id: coreNode._id,
-      premise: core.premise || coreNode.statement,
-      classification: core.classification,
-      frameMeta: core.frameMeta,
-      resolvedDirections: core.resolvedDirections || [],
-      stagesEnabled: core.stagesEnabled
-    },
-    constellations,
-    completeness,
-    readiness,
-    gaps: {
-      defining: gaps.defining.length,
-      detail: gaps.detail.length,
-      total: gaps.total
-    },
-    nodeCount: allNodes.length,
-    generatedAt: new Date()
-  };
+    if (cons.statement) {
+      parts.push(cons.statement);
+    }
+
+    // Add children summaries
+    const children = activeNodes.filter(n =>
+      n.parentNodeId?.toString() === cons._id.toString()
+    );
+
+    for (const child of children) {
+      const isGap = isNodeAGap(child);
+      const status = isGap ? '[GAP]' : '';
+      if (child.statement || child.detail) {
+        parts.push(`  • ${child.title}${status}: ${child.statement || child.detail || ''}`);
+      } else {
+        parts.push(`  • ${child.title}${status}`);
+      }
+    }
+  }
+
+  // Add completeness
+  const completeness = calculateCompleteness(activeNodes, edges, coreDoc);
+  parts.push(`\nCOMPLETENESS: ${completeness.percent}%`);
+
+  return parts.join('\n');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
