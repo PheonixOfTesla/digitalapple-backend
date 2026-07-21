@@ -105,7 +105,9 @@ userSchema.methods.toPrivateProfile = function() {
     emailVerified: this.emailVerified,
     pendingEmail: this.pendingEmail,
     tokenBalance: this.tokenBalance,
-    createdAt: this.createdAt
+    createdAt: this.createdAt,
+    // Admin flag derived server-side - never expose role string to client
+    isAdmin: this.role === 'admin'
   };
 };
 
