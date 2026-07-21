@@ -1288,10 +1288,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       return res.status(400).json({ error: 'Premise is required' });
     }
 
-    // Pre-consume quota (will refund on failure)
-    await consumeQuota(quotaCheck, 'nebula', project._id);
-
-    // Create project first so we can store classification on it
+    // Create project first so we have an ID for quota tracking
     project = new Project({
       name: premise.substring(0, 100),
       premise: premise,
@@ -1299,6 +1296,9 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       anonymousSessionId: req.userId ? null : req.anonymousSessionId
     });
     await project.save();
+
+    // Consume quota (will refund on failure)
+    await consumeQuota(quotaCheck, 'nebula', project._id);
 
     // Generate nebula via frame-aware blueprint service
     const blueprint = getBlueprint();
