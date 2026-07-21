@@ -1232,16 +1232,15 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     const nodeMap = {}; // Track created node IDs
 
     // Create core node (without identity fields first - need _id)
+    // Note: detail/scores/suggestedSubAspects come from /preview lazily, not from nebula
     const corePos = layout.find(l => l.nodeRef === 'core');
     const coreNodeData = {
       projectId: project._id,
       kind: 'core',
       title: nebula.core?.title || premise.substring(0, 40),
       statement: nebula.core?.statement || premise,
-      detail: nebula.core?.detail,
-      body: nebula.core?.detail,
-      scores: nebula.core?.scores,
-      confidence: nebula.core?.confidence,
+      // Territory is a short phrase; detail comes from /preview
+      confidence: nebula.core?.confidence || { value: 0.5, basis: 'stated' },
       stage: nebula.stagesEnabled ? (nebula.core?.stage || 0) : undefined,
       status: nebula.core?.status || 'mapped',
       x: corePos?.x || 600,
@@ -1301,6 +1300,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         'when': null // No direct mapping
       };
 
+      // Note: detail/scores/suggestedSubAspects come from /preview lazily
       const rootNodeData = {
         projectId: project._id,
         parentNodeId: coreNode._id,
@@ -1309,14 +1309,10 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         constellationLabel: root.label, // Domain-specific label
         title: root.title || root.label,
         statement: root.statement,
-        detail: root.detail,
-        body: root.detail,
-        scores: root.scores,
-        confidence: root.confidence,
+        // Territory is short phrase for display; detail comes from /preview
+        confidence: root.confidence || { value: 0, basis: 'unknown' },
         stage: nebula.stagesEnabled ? (root.stage || 0) : undefined,
         status: root.status || 'mapped',
-        suggestedSubAspects: root.suggestedSubAspects || [],
-        nodeKind: 'component', // Default to component, can be changed via /preview
         x: rootPos?.x || 600,
         y: rootPos?.y || 400,
         depth: 1
@@ -1356,18 +1352,17 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         const star = stars[j];
         const starPos = layout.find(l => l.nodeRef === `star:${rootId}:${j}`);
 
+        // Note: detail/scores/suggestedSubAspects come from /preview lazily
         const starNodeData = {
           projectId: project._id,
           parentNodeId: rootNode._id,
           kind: 'star',
-          constellation: constellationMap[root.frameId] || null, // Map to legacy enum
+          constellation: constellationMap[root.frameId] || null,
           constellationLabel: root.label,
           title: star.title,
           statement: star.statement,
-          detail: star.detail,
-          body: star.detail,
-          scores: star.scores,
-          confidence: star.confidence,
+          // Territory is short phrase; detail comes from /preview
+          confidence: star.confidence || { value: 0, basis: 'unknown' },
           stage: nebula.stagesEnabled ? (star.stage || rootNode.stage) : undefined,
           status: star.status || 'unexplored',
           x: starPos?.x || rootNode.x + 100,
@@ -2078,13 +2073,17 @@ router.post('/projects/:projectId/nodes/:nodeId/preview', optionalAuth, async (r
       return res.status(404).json({ error: 'Node not found' });
     }
 
-    // Check if already has preview data (cached)
-    if (node.suggestedSubAspects && node.suggestedSubAspects.length > 0) {
+    // Check if already has preview data (cached) - need both detail AND subAspects
+    const hasDetail = node.detail && node.detail.length > 30;
+    const hasSubAspects = node.suggestedSubAspects && node.suggestedSubAspects.length > 0;
+
+    if (hasDetail && hasSubAspects) {
       return res.json({
         success: true,
         cached: true,
         nodeId: node._id,
         nodeKind: node.nodeKind,
+        detail: node.detail,
         suggestedSubAspects: node.suggestedSubAspects,
         guidance: getNodeGuidance(node)
       });
@@ -2095,47 +2094,63 @@ router.post('/projects/:projectId/nodes/:nodeId/preview', optionalAuth, async (r
     const classification = scoping.classifyNodeKind(node);
     node.nodeKind = classification.kind;
 
-    // For component nodes, generate sub-aspect suggestions
-    let suggestedSubAspects = [];
-    if (classification.kind === 'component' && !node.terminal) {
-      // Get context from ancestry
-      const core = await Core.findOne({ projectId });
-      const premise = core?.premise || project.premise || '';
-      const nodeTitle = node.statement || node.title || node.label || '';
-      const nodeContext = node.detail || '';
+    // Get context from ancestry for LLM calls
+    const core = await Core.findOne({ projectId });
+    const premise = core?.premise || project.premise || '';
+    const nodeTitle = node.statement || node.title || node.label || '';
+    const constellation = node.constellationLabel || node.constellation || '';
 
-      // Quick LLM call for sub-aspects (use fast model)
+    // Build trace context from node path
+    const pathContext = (node.path || []).map(p => p.title).join(' → ');
+
+    let detail = node.detail || '';
+    let suggestedSubAspects = node.suggestedSubAspects || [];
+
+    // Generate detail + sub-aspects in ONE LLM call (efficient)
+    if (!hasDetail || !hasSubAspects) {
       const { client, model } = getAIClient();
-      const prompt = `Given a business map with premise: "${premise}"
 
-The node "${nodeTitle}" is about: ${nodeContext || 'no additional context'}
+      const prompt = `Given a business map:
+Premise: "${premise}"
+Path: ${pathContext || 'root'}
+Current node: "${nodeTitle}" (${constellation || 'general'})
 
-Suggest 2-3 brief sub-aspects this would decompose into. Each should be:
-- A single phrase (3-6 words)
-- An actionable or definable component
-- Specific to this context
+Generate BOTH:
+1. "detail": A 2-3 sentence paragraph in second person ("you") explaining what this node means for THIS specific premise, why it matters, and what questions it raises. Be specific, not generic.
+2. "subAspects": 2-3 brief phrases (3-6 words each) showing what this could break down into.
 
-Return ONLY a JSON array of strings, nothing else:
-["First sub-aspect", "Second sub-aspect", "Third sub-aspect"]`;
+Return JSON only:
+{"detail": "Your detail paragraph...", "subAspects": ["First aspect", "Second aspect", "Third aspect"]}`;
 
       try {
         const response = await client.chat.completions.create({
           model: model || 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 150,
+          max_tokens: 300,
           temperature: 0.7
         });
 
-        // Parse the response
         const text = response.choices?.[0]?.message?.content || '';
-        const match = text.match(/\[[\s\S]*?\]/);
-        if (match) {
-          suggestedSubAspects = JSON.parse(match[0]).slice(0, 3);
+        // Parse JSON from response
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (!hasDetail && parsed.detail) {
+            detail = parsed.detail;
+          }
+          if (!hasSubAspects && parsed.subAspects) {
+            suggestedSubAspects = parsed.subAspects.slice(0, 3);
+          }
         }
       } catch (aiErr) {
-        console.warn('Sub-aspect generation failed:', aiErr.message);
-        // Fall back to generic suggestions based on constellation
-        suggestedSubAspects = getGenericSubAspects(node);
+        console.warn('Preview generation failed:', aiErr.message);
+        // Fall back to generic detail and sub-aspects
+        if (!hasDetail) {
+          detail = `This ${constellation || 'area'} of your premise needs exploration. Consider what "${nodeTitle}" means specifically for "${premise.substring(0, 50)}..." and what questions you need to answer.`;
+        }
+        if (!hasSubAspects) {
+          suggestedSubAspects = getGenericSubAspects(node);
+        }
       }
     }
 
@@ -2143,8 +2158,9 @@ Return ONLY a JSON array of strings, nothing else:
     const isOwner = project.ownerId?.toString() === req.userId ||
                     project.anonymousSessionId === req.anonymousSessionId;
 
-    if (isOwner && suggestedSubAspects.length > 0) {
-      node.suggestedSubAspects = suggestedSubAspects;
+    if (isOwner && (detail || suggestedSubAspects.length > 0)) {
+      if (detail) node.detail = detail;
+      if (suggestedSubAspects.length > 0) node.suggestedSubAspects = suggestedSubAspects;
       await node.save();
     }
 
@@ -2153,6 +2169,7 @@ Return ONLY a JSON array of strings, nothing else:
       cached: false,
       nodeId: node._id,
       nodeKind: classification.kind,
+      detail,
       suggestedSubAspects,
       guidance: getNodeGuidance(node),
       persisted: isOwner

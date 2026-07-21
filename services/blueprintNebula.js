@@ -16,61 +16,48 @@ You are given a frame with up to 7 roots. Each root has:
 - covers: what this root is about
 - optional: if true, DROP this root entirely if the premise provides no grounding
 
-OUTPUT FORMAT - Return JSON with this exact structure:
+OUTPUT FORMAT - Return JSON with this MINIMAL structure (keep it small):
 {
   "core": {
     "title": "short 2-4 word label",
-    "statement": "full sentence describing the premise",
-    "detail": "2-4 sentence paragraph explaining what this premise means and why it matters"
+    "statement": "one sentence describing the premise"
   },
   "roots": [
     {
       "frameId": "echo the frameId from input",
-      "label": "domain-specific name (use provided label or invent one if null)",
+      "label": "domain-specific name",
       "title": "short 2-4 word label",
-      "statement": "full sentence",
-      "detail": "2-4 sentence paragraph in second person ('you') explaining what this area means for THIS specific premise, why it matters, and what questions need answering",
+      "statement": "one sentence",
+      "territory": "brief phrase: what this area covers (8 words max)",
       "confidence": { "value": 0-1, "basis": "stated|inferred|unknown" },
-      "scores": {
-        "economy": { "value": 0-10, "reason": "why" },
-        "orchestration": { "value": 0-10, "reason": "why" },
-        "demand": { "value": 0-10, "reason": "why" }
-      },
       "stage": 0-9,
-      "status": "unexplored|mapped|kept|pruned|done",
-      "suggestedSubAspects": ["2-4 short phrases showing what this could break down into"],
+      "status": "unexplored|mapped",
       "stars": [
         {
           "title": "short label",
-          "statement": "full sentence",
-          "detail": "2-4 sentence paragraph specific to this star",
+          "statement": "one sentence",
+          "territory": "brief phrase (8 words max)",
           "confidence": { "value": 0-1, "basis": "stated|inferred|unknown" },
-          "scores": { same structure },
           "stage": 0-9,
-          "status": "unexplored|mapped|kept|pruned|done"
+          "status": "unexplored"
         }
       ]
     }
   ]
 }
 
-DETAIL FIELD (critical): This is where the real thinking lives. For every node:
-- Explain what this area means for THIS specific premise (not generic)
-- Use second person ("you'll need to...", "this matters because...")
-- Connect the reasoning to the context
-- NEVER use placeholder text like "details to come" or "elaboration needed"
+KEEP IT SMALL. No scores, no detail paragraphs, no sub-aspects — those are derived later per-node.
 
 HARD RULES:
-1. Echo frameId exactly as provided - we use this to match your response.
+1. Echo frameId exactly as provided.
 2. Never output raw W-words (who/what/where/when/why/how) as labels. Use domain-specific names.
 3. If label is null in the input, invent a domain-appropriate name from the premise.
-4. OPTIONAL roots with no grounding: omit entirely from your response.
-5. REQUIRED roots with no grounding: include with empty stars array and statement naming what's missing.
-6. Every node needs confidence + basis. Guesses are labeled as guesses.
-7. If stagesEnabled is false in the input, set all stage values to 0.
-8. Each root gets 0-2 stars maximum. Only add stars where the premise provides grounding.
-9. Thin premise = small honest map. Never fabricate to fill the structure.
-10. Every node MUST have a detail field with substantive content.
+4. OPTIONAL roots with no grounding: omit entirely.
+5. REQUIRED roots with no grounding: include with empty stars and statement naming what's missing.
+6. Every node needs confidence + basis.
+7. If stagesEnabled is false, set all stage values to 0.
+8. Each root gets 0-2 stars maximum.
+9. Thin premise = small map. Never fabricate.
 `;
 
 // Byte-identical prefix from single source
@@ -88,7 +75,7 @@ async function generateFramedNebula(frameInput, retries = 2) {
           { role: 'system', content: NEBULA_SYSTEM },
           { role: 'user', content: JSON.stringify(frameInput) }
         ],
-        max_completion_tokens: 8000, // Increased for detail + suggestedSubAspects
+        max_completion_tokens: 2500, // Small skeleton: titles + territories only
         response_format: { type: "json_object" }
       });
 
@@ -208,18 +195,18 @@ function enforceGuards(result, frameInput) {
       root.stars = [createPlaceholderStar(root.label || frameRoot?.label || 'this area')];
     }
 
-    // Ensure all stars have scores (model might skip them)
+    // Ensure all stars have minimal fields
     if (root.stars) {
-      root.stars = root.stars.map(star => ensureStarScores(star));
+      root.stars = root.stars.map(star => ensureNodeFields(star));
     }
 
-    // Ensure root has scores
-    root = ensureStarScores(root);
+    // Ensure root has minimal fields
+    root = ensureNodeFields(root);
 
     return true;
   });
 
-  // Add missing required roots with placeholders
+  // Add missing required roots with placeholders (minimal)
   for (const frameId of requiredIds) {
     if (!seenRequired.has(frameId)) {
       const frameRoot = byFrameId.get(frameId);
@@ -228,13 +215,11 @@ function enforceGuards(result, frameInput) {
           frameId,
           label: frameRoot.label || `[${frameId}]`,
           title: frameRoot.label || `[${frameId}]`,
-          statement: `The premise does not provide information about ${frameRoot.covers || 'this area'}.`,
-          detail: `This area hasn't been explored yet. You'll need to provide more information about ${frameRoot.covers || 'this area'} to develop this part of your map. What do you know about this aspect of your premise?`,
+          statement: `No information about ${frameRoot.covers || 'this area'} yet.`,
+          territory: `${frameRoot.label || frameId} — waiting for input`,
           confidence: { value: 0, basis: 'unknown' },
-          scores: createZeroScores(),
           stage: 0,
           status: 'unexplored',
-          suggestedSubAspects: [],
           stars: [createPlaceholderStar(frameRoot.label || frameId)]
         });
       }
@@ -262,59 +247,33 @@ function enforceGuards(result, frameInput) {
 }
 
 /**
- * Create a placeholder star for required-but-empty roots.
+ * Create a placeholder star for required-but-empty roots (minimal).
  */
 function createPlaceholderStar(areaName) {
   return {
     title: `[Needs information]`,
-    statement: `The premise does not provide enough detail about ${areaName}.`,
-    detail: `This area is waiting to be filled in. You'll need to provide more information about ${areaName} to develop this part of your map.`,
+    statement: `No detail about ${areaName} yet.`,
+    territory: `${areaName} — waiting for input`,
     confidence: { value: 0, basis: 'unknown' },
-    scores: createZeroScores(),
     stage: 0,
     status: 'unexplored'
   };
 }
 
 /**
- * Create zeroed scores with "no information" basis.
+ * Ensure a node has minimal required fields (no scores or detail - those come from /preview).
  */
-function createZeroScores() {
-  return {
-    economy: { value: 0, reason: 'No information provided' },
-    orchestration: { value: 0, reason: 'No information provided' },
-    demand: { value: 0, reason: 'No information provided' }
-  };
-}
-
-/**
- * Ensure a node has valid scores structure and other required fields.
- */
-function ensureStarScores(node) {
-  if (!node.scores) {
-    node.scores = createZeroScores();
-  } else {
-    // Fill in any missing score axes
-    for (const axis of ['economy', 'orchestration', 'demand']) {
-      if (!node.scores[axis]) {
-        node.scores[axis] = { value: 0, reason: 'No information provided' };
-      } else if (typeof node.scores[axis].value !== 'number') {
-        node.scores[axis].value = 0;
-      }
-      if (!node.scores[axis].reason) {
-        node.scores[axis].reason = 'No reason provided';
-      }
-    }
-  }
-
+function ensureNodeFields(node) {
+  // Confidence is the only required field we enforce
   if (!node.confidence) {
     node.confidence = { value: 0, basis: 'unknown' };
   }
 
-  // Ensure detail exists (even if placeholder for dormant nodes)
-  if (!node.detail) {
-    const label = node.label || node.title || 'this area';
-    node.detail = `This aspect of your premise needs more exploration. What do you know about ${label}?`;
+  // Territory is a short phrase - use statement as fallback
+  if (!node.territory && node.statement) {
+    node.territory = node.statement.length > 60
+      ? node.statement.substring(0, 57) + '...'
+      : node.statement;
   }
 
   return node;
