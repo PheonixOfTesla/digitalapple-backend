@@ -12,6 +12,7 @@ const Node = require('../models/Node');
 const Edge = require('../models/Edge');
 const Core = require('../models/Core');
 const UserQuota = require('../models/UserQuota');
+const User = require('../models/User');
 const { verifyToken } = require('../middleware/auth');
 const identity = require('../services/identity');
 
@@ -64,14 +65,27 @@ function getResetTime() {
 
 // Helper: check quota before operation (does NOT consume)
 // Note: Now lifetime-based for authenticated users, session-based for anonymous
-async function checkQuota(userId, anonymousSessionId, operationType) {
+// Admin users are exempt from all quota limits
+async function checkQuota(userId, anonymousSessionId, operationType, userRole = null) {
   const isAuth = !!userId;
+
+  // Admin exemption: skip all quota checks
+  if (isAuth && userRole === 'admin') {
+    return {
+      allowed: true,
+      adminExempt: true,
+      projectsRemaining: Infinity,
+      cost: 0,
+      query: { userId }
+    };
+  }
+
   const limits = isAuth ? QUOTA.authenticated : QUOTA.anonymous;
   const unitCost = UNIT_COSTS[operationType] || 1;
 
   // Must have either userId or anonymousSessionId
   if (!userId && !anonymousSessionId) {
-    return { allowed: false, error: 'No session identifier' };
+    return { allowed: false, error: 'No session identifier', isAuth };
   }
 
   // Query without date - lifetime for auth users, session-based for anonymous
@@ -90,13 +104,19 @@ async function checkQuota(userId, anonymousSessionId, operationType) {
 
   // Check projects for nebula operations
   if (operationType === 'nebula' && projectsRemaining <= 0) {
+    // Different error message for authenticated vs anonymous users
+    const errorMsg = isAuth
+      ? `You've reached your project limit (${limits.projects} maps). Purchase more tokens for additional maps.`
+      : `Anonymous limit reached (${limits.projects} map). Sign up for ${QUOTA.authenticated.projects} free maps.`;
+
     return {
       allowed: false,
       quotaType: 'projects',
       used: quota.projectsCreated || 0,
       limit: limits.projects,
       remaining: 0,
-      error: `Project limit (${limits.projects}) reached`
+      error: errorMsg,
+      isAuth
     };
   }
 
@@ -104,7 +124,8 @@ async function checkQuota(userId, anonymousSessionId, operationType) {
     allowed: true,
     projectsRemaining: operationType === 'nebula' ? projectsRemaining - 1 : projectsRemaining,
     cost: unitCost,
-    query // Pass query for later consumption
+    query, // Pass query for later consumption
+    isAuth
   };
 }
 
@@ -147,7 +168,7 @@ async function verifyOwnership(projectId, userId, anonymousSessionId) {
   return null;
 }
 
-// Optional auth middleware - extracts user if token present
+// Optional auth middleware - extracts user if token present, loads role for quota checks
 async function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -156,6 +177,10 @@ async function optionalAuth(req, res, next) {
       const jwt = require('jsonwebtoken');
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       req.userId = decoded.id;
+
+      // Load user role for admin exemption checks
+      const user = await User.findById(decoded.id).select('role').lean();
+      req.userRole = user?.role || 'user';
     } catch (e) {
       // Invalid token, continue as anonymous
     }
@@ -205,7 +230,7 @@ router.get('/projects', optionalAuth, async (req, res) => {
 router.post('/projects', optionalAuth, async (req, res) => {
   try {
     // Manual project creation counts as 1 unit + 1 project
-    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    const quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
         error: 'Quota exceeded',
@@ -883,7 +908,7 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
     }
 
     // Check quota (chat = 1 unit)
-    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat');
+    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'chat', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
         error: 'Quota exceeded',
@@ -1146,7 +1171,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
   let project = null;
   try {
     // Check quota (nebula = 4 units + 1 project)
-    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'nebula');
+    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'nebula', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
         error: 'Quota exceeded',
@@ -1154,7 +1179,8 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         quotaType: quotaCheck.quotaType,
         used: quotaCheck.used,
         limit: quotaCheck.limit,
-        remaining: quotaCheck.projectsRemaining || 0
+        remaining: quotaCheck.projectsRemaining || 0,
+        isAuth: quotaCheck.isAuth
       });
     }
 
@@ -1469,7 +1495,7 @@ router.post('/expand', optionalAuth, async (req, res) => {
     }
 
     // Check quota (expand = 3 units)
-    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'expand');
+    quotaCheck = await checkQuota(req.userId, req.anonymousSessionId, 'expand', req.userRole);
     if (!quotaCheck.allowed) {
       return res.status(429).json({
         error: 'Quota exceeded',
