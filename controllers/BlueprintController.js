@@ -2100,8 +2100,8 @@ router.post('/projects/:projectId/nodes/:nodeId/preview', optionalAuth, async (r
       const nodeTitle = node.statement || node.title || node.label || '';
       const nodeContext = node.detail || '';
 
-      // Quick LLM call for sub-aspects (use haiku for speed/cost)
-      const aiClient = getAIClient();
+      // Quick LLM call for sub-aspects (use fast model)
+      const { client, model } = getAIClient();
       const prompt = `Given a business map with premise: "${premise}"
 
 The node "${nodeTitle}" is about: ${nodeContext || 'no additional context'}
@@ -2115,13 +2115,15 @@ Return ONLY a JSON array of strings, nothing else:
 ["First sub-aspect", "Second sub-aspect", "Third sub-aspect"]`;
 
       try {
-        const aiResponse = await aiClient.sendMessage(prompt, {
-          maxTokens: 150,
+        const response = await client.chat.completions.create({
+          model: model || 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 150,
           temperature: 0.7
         });
 
         // Parse the response
-        const text = aiResponse.content?.[0]?.text || aiResponse.text || '';
+        const text = response.choices?.[0]?.message?.content || '';
         const match = text.match(/\[[\s\S]*?\]/);
         if (match) {
           suggestedSubAspects = JSON.parse(match[0]).slice(0, 3);
