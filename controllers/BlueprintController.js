@@ -7,6 +7,7 @@
  */
 
 const express = require('express');
+const mongoose = require('mongoose');
 const Project = require('../models/Project');
 const Node = require('../models/Node');
 const Edge = require('../models/Edge');
