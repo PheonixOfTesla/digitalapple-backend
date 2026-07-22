@@ -2729,20 +2729,21 @@ router.get('/projects/:projectId/export/csv', optionalAuth, requireAuthForExport
 
     const nodes = await Node.find({ projectId: project._id }).sort({ stage: 1, createdAt: 1 }).lean();
 
-    // CSV header
-    const header = 'Stage,Title,Statement,Economy,Orchestration,Demand,Confidence,Status\n';
+    // CSV header - includes Terminal column for actionable items
+    const header = 'Stage,Title,Statement,Terminal,Economy,Orchestration,Demand,Confidence,Status\n';
     const rows = nodes.map(n => {
       const econ = n.scores?.economy?.value ?? '';
       const orch = n.scores?.orchestration?.value ?? '';
       const dem = n.scores?.demand?.value ?? '';
       const conf = n.confidence?.value ? Math.round(n.confidence.value * 100) + '%' : '';
+      const terminal = n.terminal ? 'Yes' : '';
       // Detect and replace filler in statement
       let statement = n.statement || '';
       if (hasFiller(statement)) {
         const label = n.constellationLabel || n.title || 'this area';
         statement = `What should we know about ${label.toLowerCase()}?`;
       }
-      return `${n.stage},"${(n.title || '').replace(/"/g, '""')}","${statement.replace(/"/g, '""')}",${econ},${orch},${dem},${conf},${n.status}`;
+      return `${n.stage},"${(n.title || '').replace(/"/g, '""')}","${statement.replace(/"/g, '""')}",${terminal},${econ},${orch},${dem},${conf},${n.status}`;
     }).join('\n');
 
     res.setHeader('Content-Type', 'text/csv');
@@ -2750,6 +2751,65 @@ router.get('/projects/:projectId/export/csv', optionalAuth, requireAuthForExport
     res.send(header + rows);
   } catch (error) {
     console.error('Export CSV error:', error);
+    res.status(500).json({ error: 'Failed to export' });
+  }
+});
+
+/**
+ * Export project as action list (terminal nodes only)
+ * GET /blueprint/projects/:projectId/export/actions
+ */
+router.get('/projects/:projectId/export/actions', optionalAuth, requireAuthForExport, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project || project.ownerId?.toString() !== req.userId) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const rateCheck = checkExportRateLimit(req.userId);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({ error: 'Export limit reached', used: rateCheck.used, limit: rateCheck.limit });
+    }
+
+    // Get only terminal (actionable) nodes
+    const nodes = await Node.find({ projectId: project._id, terminal: true }).lean();
+
+    if (nodes.length === 0) {
+      // Return a message if no terminal nodes
+      const text = `# Action List: ${project.name}\n\nNo actionable items yet. Keep expanding your map until terminal actions are identified.\n`;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-z0-9]/gi, '_')}_actions.txt"`);
+      return res.send(text);
+    }
+
+    // Group by constellation/area
+    const grouped = {};
+    nodes.forEach(n => {
+      const area = n.constellationLabel || n.constellation || 'General';
+      if (!grouped[area]) grouped[area] = [];
+      grouped[area].push(n);
+    });
+
+    // Build action list text
+    let text = `# Action List: ${project.name}\n`;
+    text += `Generated: ${new Date().toLocaleDateString()}\n`;
+    text += `Total Actions: ${nodes.length}\n\n`;
+
+    for (const [area, areaNodes] of Object.entries(grouped)) {
+      text += `## ${area}\n`;
+      areaNodes.forEach((n, i) => {
+        const statement = n.statement || n.title || 'Action';
+        const detail = n.detail ? `\n   ${n.detail}` : '';
+        text += `${i + 1}. ${statement}${detail}\n`;
+      });
+      text += '\n';
+    }
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-z0-9]/gi, '_')}_actions.txt"`);
+    res.send(text);
+  } catch (error) {
+    console.error('Export actions error:', error);
     res.status(500).json({ error: 'Failed to export' });
   }
 });
@@ -2784,6 +2844,7 @@ router.get('/projects/:projectId/export', optionalAuth, async (req, res) => {
   const formats = [
     { format: 'json', name: 'Raw JSON', available: true, description: 'Complete map data for developers' },
     { format: 'csv', name: 'Sequence CSV', available: true, description: 'Timeline view for spreadsheets' },
+    { format: 'actions', name: 'Action List', available: true, description: 'Actionable items checklist (terminal nodes only)' },
     { format: 'pdf', name: 'PDF Brief', available: false, description: 'Executive summary document' },
     { format: 'xlsx', name: 'Model XLSX', available: false, description: 'Financial model template' },
     { format: 'formation-pack', name: 'Formation Pack', available: false, description: 'Complete founding documents' },
