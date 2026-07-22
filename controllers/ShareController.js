@@ -76,9 +76,12 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
     snapshot: {
       core: coreNode ? {
         _id: coreNode._id,
+        kind: coreNode.kind || 'core',
         label: coreNode.label,
+        title: coreNode.title,
         statement: coreNode.statement,
         detail: coreNode.detail,
+        territory: coreNode.territory,
         x: coreNode.x,
         y: coreNode.y,
         // Identity fields for live rendering
@@ -94,10 +97,15 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
       nodes: otherNodes.map(n => ({
         _id: n._id,
         parentNodeId: n.parentNodeId,
+        kind: n.kind || (n.constellation ? 'constellation' : 'star'),
+        nodeKind: n.nodeKind,           // decision/component
         label: n.label,
+        title: n.title,                 // Separate from label
         statement: n.statement,
         detail: n.detail,
+        territory: n.territory,         // Short coverage phrase
         constellation: n.constellation,
+        constellationLabel: n.constellationLabel,
         stage: n.stage,
         scores: n.scores,
         confidence: n.confidence,
@@ -117,7 +125,10 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
         liveness: n.liveness,
         terminal: n.terminal,
         // Scoping fields
-        scoping: n.scoping
+        scoping: n.scoping,
+        scoped: n.scoped,
+        scopedPaths: n.scopedPaths,
+        suggestedSubAspects: n.suggestedSubAspects
       })),
       edges: includedEdges.map(e => ({
         _id: e._id,

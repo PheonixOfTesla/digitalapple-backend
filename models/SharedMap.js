@@ -79,20 +79,36 @@ const sharedMapSchema = new mongoose.Schema({
     // Core node
     core: {
       _id: mongoose.Schema.Types.ObjectId,
+      kind: { type: String, default: 'core' },
       label: String,
+      title: String,
       statement: String,
       detail: String,
+      territory: String,
       x: Number,
-      y: Number
+      y: Number,
+      // Identity fields
+      coreId: mongoose.Schema.Types.ObjectId,
+      path: [{ nodeId: mongoose.Schema.Types.ObjectId, title: String }],
+      stableId: String,
+      essence: { title: String, statement: String },
+      derivation: { type: String },
+      liveness: String,
+      terminal: Boolean,
+      scoping: { type: mongoose.Schema.Types.Mixed }
     },
 
     // Included nodes (excluded branches physically absent)
     nodes: [{
       _id: mongoose.Schema.Types.ObjectId,
       parentNodeId: mongoose.Schema.Types.ObjectId,
+      kind: String,           // core/constellation/star
+      nodeKind: String,       // decision/component
       label: String,
+      title: String,          // Separate from label
       statement: String,
       detail: String,
+      territory: String,      // Short coverage phrase
       constellation: String,
       constellationLabel: String,
       stage: Number,
@@ -108,7 +124,20 @@ const sharedMapSchema = new mongoose.Schema({
       sources: [String],
       depth: Number,
       x: Number,
-      y: Number
+      y: Number,
+      // Identity fields for live rendering
+      coreId: mongoose.Schema.Types.ObjectId,
+      path: [{ nodeId: mongoose.Schema.Types.ObjectId, title: String }],
+      stableId: String,
+      essence: { title: String, statement: String },
+      derivation: { type: String },
+      liveness: String,
+      terminal: Boolean,
+      // Scoping fields
+      scoping: { type: mongoose.Schema.Types.Mixed },
+      scoped: Boolean,
+      scopedPaths: [{ type: mongoose.Schema.Types.Mixed }],
+      suggestedSubAspects: [String]
     }],
 
     // Edges between included nodes
