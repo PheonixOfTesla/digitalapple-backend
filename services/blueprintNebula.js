@@ -111,17 +111,17 @@ const CONTENT_SYSTEM = BLUEPRINT_SYSTEM_PREFIX + CONTENT_INSTRUCTION;
  *
  * @param {object} node - The node to evaluate
  * @param {number} depth - The depth level (0=core, 1=root, 2=star)
- * @returns {object} { terminal: boolean, reason: string }
+ * @returns {object} { terminal: boolean, reason: string, action: string|null }
  */
 function judgeNodeTerminal(node, depth = 0) {
   // Core nodes are never terminal
   if (depth === 0) {
-    return { terminal: false, reason: 'Core node' };
+    return { terminal: false, reason: 'Core node', action: null };
   }
 
   // Nodes that need input are not terminal
   if (node.needsInput) {
-    return { terminal: false, reason: 'Needs user input' };
+    return { terminal: false, reason: 'Needs user input', action: null };
   }
 
   const statement = node.statement || node.title || '';
@@ -152,46 +152,68 @@ function judgeNodeTerminal(node, depth = 0) {
   // Check for specificity markers
   const specificityScore = specificityPatterns.filter(p => p.test(combined)).length;
 
+  // Extract action text: statement + relevant detail (truncate if needed)
+  const extractAction = () => {
+    let action = statement;
+    if (detail && detail.length < 200) {
+      action += ' — ' + detail.split('.')[0] + '.';
+    }
+    return action.length > 300 ? action.substring(0, 297) + '...' : action;
+  };
+
   // Terminal conditions:
   // 1. Has action verb + at least 1 specificity marker
   if (hasActionVerb && specificityScore >= 1) {
-    return { terminal: true, reason: 'Action with specifics' };
+    return { terminal: true, reason: 'Action with specifics', action: extractAction() };
   }
 
   // 2. Depth 2 (star) with 2+ specificity markers (even without explicit action verb)
   if (depth >= 2 && specificityScore >= 2) {
-    return { terminal: true, reason: 'Leaf with multiple specifics' };
+    return { terminal: true, reason: 'Leaf with multiple specifics', action: extractAction() };
   }
 
   // 3. Short, concrete statement at depth 2+
   const wordCount = statement.trim().split(/\s+/).length;
   if (depth >= 2 && wordCount <= 12 && specificityScore >= 1) {
-    return { terminal: true, reason: 'Concise actionable leaf' };
+    return { terminal: true, reason: 'Concise actionable leaf', action: extractAction() };
   }
 
-  return { terminal: false, reason: 'Can be expanded further' };
+  return { terminal: false, reason: 'Can be expanded further', action: null };
 }
 
 /**
- * Mark all terminal nodes in a nebula.
+ * Mark all terminal nodes in a nebula and set action/question fields.
  *
  * @param {object} nebula - The nebula to process
- * @returns {object} The nebula with terminal flags set
+ * @returns {object} The nebula with terminal flags and action/question fields set
  */
 function markTerminalNodes(nebula) {
   // Core is never terminal
   if (nebula.core) {
     nebula.core.terminal = false;
+    nebula.core.action = null;
   }
 
   // Process roots and their stars
   for (const root of (nebula.roots || [])) {
     const rootResult = judgeNodeTerminal(root, 1);
     root.terminal = rootResult.terminal;
+    root.action = rootResult.action;
+
+    // If root needs input, ensure question field is set
+    if (root.needsInput && !root.question) {
+      root.question = root.statement || `What should we know about ${root.label || 'this area'}?`;
+    }
 
     for (const star of (root.stars || [])) {
       const starResult = judgeNodeTerminal(star, 2);
       star.terminal = starResult.terminal;
+      star.action = starResult.action;
+
+      // If star needs input, ensure question field is set
+      if (star.needsInput && !star.question) {
+        star.question = star.statement || `What should we know about ${star.title || 'this'}?`;
+      }
     }
   }
 
@@ -296,21 +318,24 @@ async function generateSkeleton(frameInput, retries) {
 }
 
 /**
- * Generate content for all roots in parallel.
+ * Generate content for all roots with rate-limit aware batching.
+ * Starts with full parallel, falls back to batches of 2 on 429.
  */
 async function generateContentParallel(frameInput, skeleton, retries) {
   const { premise, roots: frameRoots } = frameInput;
   const { byFrameId } = buildFrameLookups(frameRoots);
 
-  const contentPromises = skeleton.roots.map(async (skeletonRoot) => {
+  // Build content input for each root
+  const contentInputs = skeleton.roots.map(skeletonRoot => {
     const frameRoot = byFrameId.get(skeletonRoot.frameId);
     if (!frameRoot) {
       console.warn(`[Nebula:Content] No frame for ${skeletonRoot.frameId}, skipping`);
       return null;
     }
-
-    try {
-      const contentInput = {
+    return {
+      skeletonRoot,
+      frameRoot,
+      contentInput: {
         premise,
         root: {
           frameId: skeletonRoot.frameId,
@@ -318,29 +343,63 @@ async function generateContentParallel(frameInput, skeleton, retries) {
           covers: frameRoot.covers
         },
         starTitles: skeletonRoot.starTitles || []
-      };
+      }
+    };
+  }).filter(Boolean);
 
-      return await generateRootContent(contentInput, retries);
+  // Try to generate content with rate-limit aware batching
+  const results = new Array(skeleton.roots.length).fill(null);
+  let batchSize = contentInputs.length; // Start full parallel
+  let rateLimitHit = false;
 
-    } catch (err) {
-      console.error(`[Nebula:Content] Failed for ${skeletonRoot.frameId}:`, err.message);
-      // Return question state for failed root
-      return createQuestionRoot(skeletonRoot, frameRoot, premise);
+  for (let i = 0; i < contentInputs.length; i += batchSize) {
+    const batch = contentInputs.slice(i, Math.min(i + batchSize, contentInputs.length));
+
+    const batchPromises = batch.map(async ({ skeletonRoot, frameRoot, contentInput }) => {
+      try {
+        return { frameId: skeletonRoot.frameId, result: await generateRootContent(contentInput, retries) };
+      } catch (err) {
+        // Detect rate limit
+        if (err.message?.includes('429') || err.message?.includes('rate')) {
+          rateLimitHit = true;
+        }
+        console.error(`[Nebula:Content] Failed for ${skeletonRoot.frameId}:`, err.message);
+        return { frameId: skeletonRoot.frameId, result: createQuestionRoot(skeletonRoot, frameRoot, premise) };
+      }
+    });
+
+    // Run batch with timeout
+    const batchResults = await Promise.all(
+      batchPromises.map(p =>
+        Promise.race([
+          p,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Content timeout')), 20000))
+        ]).catch(err => {
+          console.error('[Nebula:Content] Timeout or error:', err.message);
+          return null;
+        })
+      )
+    );
+
+    // Map results back
+    for (const br of batchResults) {
+      if (br && br.frameId) {
+        const idx = skeleton.roots.findIndex(r => r.frameId === br.frameId);
+        if (idx !== -1) results[idx] = br.result;
+      }
     }
-  });
 
-  // Run all content calls in parallel with timeout
-  const results = await Promise.all(
-    contentPromises.map(p =>
-      Promise.race([
-        p,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Content timeout')), 15000))
-      ]).catch(err => {
-        console.error('[Nebula:Content] Timeout or error:', err.message);
-        return null;
-      })
-    )
-  );
+    // If rate limited, switch to smaller batches and wait
+    if (rateLimitHit && batchSize > 2) {
+      console.log('[Nebula:Content] Rate limited, switching to batches of 2...');
+      batchSize = 2;
+      await new Promise(r => setTimeout(r, 2000)); // Wait 2s before next batch
+      rateLimitHit = false;
+    } else if (rateLimitHit) {
+      await new Promise(r => setTimeout(r, 1500)); // Wait between small batches
+      rateLimitHit = false;
+    }
+  }
 
   return results;
 }
@@ -445,6 +504,49 @@ function generateSpecificQuestion(premise, label, covers) {
 }
 
 /**
+ * Synthesize core detail from all roots (advisory integration).
+ * Confidence-weighted: terminal/stated = full, inferred = partial, unknown = gap.
+ */
+function synthesizeCoreDetail(roots, premise) {
+  if (!roots || roots.length === 0) {
+    return `This plan explores ${premise}. Each section below covers a key dimension.`;
+  }
+
+  // Collect key points from resolved roots
+  const highlights = [];
+  let terminalCount = 0;
+  let totalNodes = 0;
+
+  for (const root of roots) {
+    totalNodes++;
+    const label = root.label || root.title;
+
+    // Check if root has real content (not a question)
+    if (!root.needsInput && root.statement && !root.statement.startsWith('What ')) {
+      highlights.push(`${label}: ${root.statement.split('.')[0]}.`);
+    }
+
+    // Count terminal actions
+    if (root.terminal) terminalCount++;
+    for (const star of (root.stars || [])) {
+      totalNodes++;
+      if (star.terminal) terminalCount++;
+    }
+  }
+
+  // Build integration summary
+  if (highlights.length === 0) {
+    return `This plan explores ${premise}. Input needed to scope the key dimensions.`;
+  }
+
+  const actionSummary = terminalCount > 0
+    ? ` ${terminalCount} actionable steps identified so far.`
+    : ' Keep expanding to reach actionable steps.';
+
+  return highlights.slice(0, 4).join(' ') + actionSummary;
+}
+
+/**
  * Assemble the full nebula from skeleton + content results.
  */
 function assembleNebula(skeleton, contentResults, frameInput) {
@@ -452,7 +554,7 @@ function assembleNebula(skeleton, contentResults, frameInput) {
     core: {
       title: skeleton.core.title,
       statement: `Mapping: ${frameInput.premise}`,
-      detail: `This plan explores ${frameInput.premise}. Each section below covers a key dimension.`,
+      detail: '', // Will be synthesized after roots are assembled
       territory: skeleton.core.title,
       scores: { economy: 5, orchestration: 5, demand: 5 },
       confidence: { value: 0.5, basis: 'inferred' },
@@ -499,15 +601,17 @@ function assembleNebula(skeleton, contentResults, frameInput) {
     // Add stars
     for (const star of content.stars) {
       if (star.needsInput) {
-        // Star is a question
+        // Star is a question — set question field
+        const questionText = star.question || star.statement || `What should we know about ${star.title}?`;
         assembledRoot.stars.push({
           title: star.title,
-          statement: star.question || star.statement,
-          detail: star.whyItMatters || star.detail,
+          statement: questionText,
+          detail: star.whyItMatters || star.detail || 'Your input is needed here.',
           territory: `${star.title} — needs input`,
           scores: { economy: 5, orchestration: 5, demand: 5 },
           confidence: { value: 0, basis: 'unknown' },
           needsInput: true,
+          question: questionText,
           stage: 0,
           status: 'mapped'
         });
@@ -528,6 +632,9 @@ function assembleNebula(skeleton, contentResults, frameInput) {
 
     nebula.roots.push(assembledRoot);
   }
+
+  // Synthesize core detail from assembled roots
+  nebula.core.detail = synthesizeCoreDetail(nebula.roots, frameInput.premise);
 
   return nebula;
 }

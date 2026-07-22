@@ -155,7 +155,7 @@ const nodeSchema = new mongoose.Schema({
     value: { type: Number, min: 0, max: 10, default: 5 },
     basis: {
       type: String,
-      enum: ['stated', 'inferred', 'unknown'],
+      enum: ['stated', 'inferred', 'unknown', 'confirmed'],
       default: 'unknown'
     }
   },
@@ -230,6 +230,13 @@ const nodeSchema = new mongoose.Schema({
     default: false
   },
 
+  // Action field (present when terminal=true) — the concrete doable step
+  action: {
+    type: String,
+    maxlength: 500,
+    default: null
+  },
+
   // How this node was expanded
   expansionType: {
     type: String,
@@ -241,7 +248,8 @@ const nodeSchema = new mongoose.Schema({
   subFrameType: {
     type: String,
     enum: ['venture', 'event', 'personal-goal', 'creative-work',
-           'life-transition', 'career', 'research', 'campaign', 'unknown', null],
+           'life-transition', 'career', 'research', 'campaign',
+           'procedure', 'unknown', null],
     default: null
   },
 
@@ -309,6 +317,13 @@ const nodeSchema = new mongoose.Schema({
   needsInput: {
     type: Boolean,
     default: false
+  },
+
+  // Question field (present when needsInput=true) — the specific question to ask
+  question: {
+    type: String,
+    maxlength: 500,
+    default: null
   }
 
   // === END SCOPING LAYER ===

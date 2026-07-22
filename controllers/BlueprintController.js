@@ -2137,7 +2137,11 @@ function formatNodeForClient(node) {
     // Suggestive data
     suggestedSubAspects: node.suggestedSubAspects || [],
     // Question state - node needs user input to scope
-    needsInput: node.needsInput || false
+    needsInput: node.needsInput || false,
+    // Action field (present when terminal=true)
+    action: node.action || null,
+    // Question field (present when needsInput=true)
+    question: node.question || null
   };
 }
 
