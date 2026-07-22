@@ -64,8 +64,8 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
   const includedNodeIds = new Set(includedNodes.map(n => n._id.toString()));
   const allEdges = await Edge.find({ projectId }).lean();
   const includedEdges = allEdges.filter(e =>
-    includedNodeIds.has(e.sourceId.toString()) &&
-    includedNodeIds.has(e.targetId.toString())
+    includedNodeIds.has(e.fromNodeId.toString()) &&
+    includedNodeIds.has(e.toNodeId.toString())
   );
 
   // Calculate coverage (simplified: % of nodes with status !== 'unexplored')
@@ -132,8 +132,8 @@ async function buildSnapshot(projectId, excludedBranchRoots = []) {
       })),
       edges: includedEdges.map(e => ({
         _id: e._id,
-        sourceId: e.sourceId,
-        targetId: e.targetId
+        sourceId: e.fromNodeId,
+        targetId: e.toNodeId
       }))
     },
     nodeCount: includedNodes.length,
