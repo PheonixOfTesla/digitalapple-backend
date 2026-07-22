@@ -19,8 +19,21 @@ const scoping = require('./scoping');
 const Node = require('../models/Node');
 const Edge = require('../models/Edge');
 const Core = require('../models/Core');
-const { client, model } = require('./aiClient');
-const { BLUEPRINT_SYSTEM_PREFIX } = require('./blueprintPrompts');
+
+// Lazy-load AI client to avoid module load failures if API key is missing
+let aiClient = null;
+let aiModel = null;
+let BLUEPRINT_SYSTEM_PREFIX = null;
+
+function getAIClient() {
+  if (!aiClient) {
+    const ai = require('./aiClient');
+    aiClient = ai.client;
+    aiModel = ai.model;
+    BLUEPRINT_SYSTEM_PREFIX = require('./blueprintPrompts').BLUEPRINT_SYSTEM_PREFIX;
+  }
+  return { client: aiClient, model: aiModel, prefix: BLUEPRINT_SYSTEM_PREFIX };
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PART 1: DEFINING-QUESTION DETECTION
@@ -813,7 +826,10 @@ async function generateCoreIntegration(allNodes, edges = [], coreDoc = null) {
   // Build compact prompt
   const snapshotText = JSON.stringify(snapshot, null, 0);
 
-  const systemPrompt = BLUEPRINT_SYSTEM_PREFIX + `You are Clockwork — a sharp, plain-spoken advisor who thinks with users about their plans.
+  // Lazy-load AI client
+  const { client, model, prefix } = getAIClient();
+
+  const systemPrompt = prefix + `You are Clockwork — a sharp, plain-spoken advisor who thinks with users about their plans.
 
 VOICE RULES:
 - Second person: "you", "your" — never "the user" or "one"
