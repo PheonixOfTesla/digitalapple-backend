@@ -2118,7 +2118,9 @@ function formatNodeForClient(node) {
     scopedPaths: node.scopedPaths || [],
     scopeRecommendation: node.scopeRecommendation || null,
     // Suggestive data
-    suggestedSubAspects: node.suggestedSubAspects || []
+    suggestedSubAspects: node.suggestedSubAspects || [],
+    // Question state - node needs user input to scope
+    needsInput: node.needsInput || false
   };
 }
 

@@ -303,7 +303,13 @@ const nodeSchema = new mongoose.Schema({
   suggestedSubAspects: [{
     type: String,
     maxlength: 100
-  }]
+  }],
+
+  // Question state - node needs user input to scope (cannot be inferred)
+  needsInput: {
+    type: Boolean,
+    default: false
+  }
 
   // === END SCOPING LAYER ===
 }, {
