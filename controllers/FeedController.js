@@ -333,28 +333,50 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
       baseConditions.category = category;
     }
 
-    let query;
-    let sortBy;
+    let maps;
 
     if (search && search.trim()) {
       const searchTerm = search.trim();
+      const parsedLimit = parseInt(limit);
+      const parsedOffset = parseInt(offset);
 
-      // Search uses $or: text index search OR ownerName regex match
-      // This allows searching by content (title, description via text index)
-      // or by creator name (ownerName regex since it's not in text index)
-      query = {
-        ...baseConditions,
-        $or: [
-          { $text: { $search: searchTerm } },
-          { ownerName: { $regex: searchTerm, $options: 'i' } }
-        ]
-      };
+      // MongoDB doesn't allow $text inside $or, so we run two queries:
+      // 1. Text index search (title, description)
+      // 2. OwnerName regex search (creator name)
+      // Then merge and deduplicate results
 
-      // When searching, sort by text relevance score first
-      sortBy = { score: { $meta: 'textScore' }, publishedAt: -1 };
+      const textQuery = { ...baseConditions, $text: { $search: searchTerm } };
+      const ownerQuery = { ...baseConditions, ownerName: { $regex: searchTerm, $options: 'i' } };
+
+      const [textResults, ownerResults] = await Promise.all([
+        SharedMap.find(textQuery)
+          .sort({ score: { $meta: 'textScore' }, publishedAt: -1 })
+          .limit(parsedLimit + parsedOffset) // Fetch extra for dedup
+          .select('-snapshot')
+          .lean(),
+        SharedMap.find(ownerQuery)
+          .sort({ publishedAt: -1 })
+          .limit(parsedLimit + parsedOffset)
+          .select('-snapshot')
+          .lean()
+      ]);
+
+      // Merge and deduplicate (text results first for relevance)
+      const seen = new Set();
+      const merged = [];
+      for (const map of [...textResults, ...ownerResults]) {
+        const id = map._id.toString();
+        if (!seen.has(id)) {
+          seen.add(id);
+          merged.push(map);
+        }
+      }
+
+      // Apply offset and limit
+      maps = merged.slice(parsedOffset, parsedOffset + parsedLimit);
     } else {
       // No search - use standard query
-      query = baseConditions;
+      const query = baseConditions;
 
       // Sort options - default to forks (usefulness)
       // isSeed: 1 ensures real user maps rank above seeds when engagement is equal
@@ -365,16 +387,16 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
         newest: { publishedAt: -1, isSeed: 1 }
       };
 
-      sortBy = sortOptions[sort] || sortOptions.forks;
-    }
+      const sortBy = sortOptions[sort] || sortOptions.forks;
 
-    // Fetch maps
-    const maps = await SharedMap.find(query)
-      .sort(sortBy)
-      .skip(parseInt(offset))
-      .limit(parseInt(limit))
-      .select('-snapshot') // Don't send full snapshot in list view
-      .lean();
+      // Fetch maps
+      maps = await SharedMap.find(query)
+        .sort(sortBy)
+        .skip(parseInt(offset))
+        .limit(parseInt(limit))
+        .select('-snapshot') // Don't send full snapshot in list view
+        .lean();
+    }
 
     // If user is logged in, check which maps they've starred/followed
     let userStars = new Set();
@@ -397,7 +419,23 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
       isFollowing: userFollows.has(map.ownerId?.toString())
     }));
 
-    const total = await SharedMap.countDocuments(query);
+    // Get total count - for search, use the merged count; otherwise query base conditions
+    let total;
+    if (search && search.trim()) {
+      // For search, we already have all unique results in merged array
+      // Use the pre-dedup merged array length or just count both queries
+      const searchTerm = search.trim();
+      const textQuery = { ...baseConditions, $text: { $search: searchTerm } };
+      const ownerQuery = { ...baseConditions, ownerName: { $regex: searchTerm, $options: 'i' } };
+      const [textCount, ownerCount] = await Promise.all([
+        SharedMap.countDocuments(textQuery),
+        SharedMap.countDocuments(ownerQuery)
+      ]);
+      // Approximate - may have some overlap but close enough for pagination
+      total = Math.max(textCount, ownerCount);
+    } else {
+      total = await SharedMap.countDocuments(baseConditions);
+    }
 
     res.json({
       success: true,
