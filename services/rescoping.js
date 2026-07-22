@@ -779,13 +779,16 @@ function buildPlanSnapshot(allNodes, edges = [], coreDoc = null) {
 }
 
 /**
- * Generate core integration - LLM synthesis of all developed nodes.
+ * Generate core integration - Clockwork's advisory consultation on this plan.
  * Called with regenerate=true after each gap fill.
+ *
+ * Voice: Sharp, plain-spoken advisor. Second person ("you"). Names the real
+ * decision and the first move. Never generic, never a premise restatement.
  *
  * @param {Array} allNodes - All nodes in the project
  * @param {Array} edges - All edges
  * @param {Object} coreDoc - Core document
- * @returns {Promise<string>} - Synthesized summary text
+ * @returns {Promise<string>} - Advisory synthesis in Clockwork's voice
  */
 async function generateCoreIntegration(allNodes, edges = [], coreDoc = null) {
   const snapshot = buildPlanSnapshot(allNodes, edges, coreDoc);
@@ -794,30 +797,53 @@ async function generateCoreIntegration(allNodes, edges = [], coreDoc = null) {
     return 'No core defined yet.';
   }
 
-  // For very early plans with nothing specified, return template
-  if (snapshot.constellations.every(c => c.specified.length === 0)) {
-    return `Planning "${snapshot.premise}" — ${snapshot.gapCount} questions to answer.`;
+  // For very early plans with nothing specified, give initial advisory
+  const hasSpecified = snapshot.constellations.some(c => c.specified.length > 0);
+  const gapLabels = snapshot.constellations
+    .filter(c => c.gapCount > 0)
+    .map(c => c.label)
+    .slice(0, 3);
+
+  if (!hasSpecified) {
+    // Early plan — point to the pivotal first question
+    const firstGap = gapLabels[0] || 'the basics';
+    return `You have the seed of an idea here. The shape isn't clear yet — ${snapshot.gapCount} questions will define what this actually becomes. Start with ${firstGap}. That's where the real choices live.`;
   }
 
   // Build compact prompt
   const snapshotText = JSON.stringify(snapshot, null, 0);
 
-  const systemPrompt = BLUEPRINT_SYSTEM_PREFIX + `You synthesize plan states into clear summaries.`;
+  const systemPrompt = BLUEPRINT_SYSTEM_PREFIX + `You are Clockwork — a sharp, plain-spoken advisor who thinks with users about their plans.
 
-  const userPrompt = `Given this plan snapshot, write a 2-3 sentence summary of what the plan currently IS (not what's missing). Focus on the specified parts — what has been decided or filled in. Be concrete, not meta.
+VOICE RULES:
+- Second person: "you", "your" — never "the user" or "one"
+- Direct and specific to THIS plan — never generic templates
+- Name what the plan IS and its current shape (don't just repeat the premise)
+- Identify the PIVOTAL open decision — the thing that drives everything downstream
+- Tell them what to tackle FIRST and why
+- Plain-spoken, no jargon, no filler
+- 2-4 sentences max
 
-SNAPSHOT:
+EXAMPLE (coffee shop with location decided but customers open):
+"Your downtown Sarasota coffee shop has a clear shape, but the pieces that decide whether it works are still open. You know where — downtown foot traffic — but not who. That choice drives everything else. Start here: who's walking past your door, and which of them are you actually for?"
+
+EXAMPLE (after filling customers = remote workers):
+"Good — now it's a remote-worker café, and that reshapes the plan. Storefront throughput matters less; dwell time, wifi, and whether a $5 latte for three hours pencils out matter more. Your central risk now: can the unit economics work on low-turnover seats?"`;
+
+  const userPrompt = `Consult on this plan. What's its current shape? What's the pivotal open decision? What should they tackle first?
+
+PLAN STATE:
 ${snapshotText}
 
-Return ONLY the summary paragraph, no preamble.`;
+Respond ONLY with your advisory paragraph (2-4 sentences). No preamble, no labels.`;
 
   try {
     const startTime = Date.now();
 
     const response = await client.chat.completions.create({
       model,
-      max_tokens: 200,
-      temperature: 0.3,
+      max_tokens: 250,
+      temperature: 0.4,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
@@ -828,11 +854,15 @@ Return ONLY the summary paragraph, no preamble.`;
     const elapsed = Date.now() - startTime;
     console.log(`[Rescoping:integration] generated in ${elapsed}ms`);
 
-    return summary || `Planning "${snapshot.premise}" — ${snapshot.completeness}% complete.`;
+    if (!summary) {
+      return `Your plan is taking shape. ${snapshot.gapCount} questions remain — start with ${gapLabels[0] || 'the first gap'} to see where this leads.`;
+    }
+
+    return summary;
   } catch (error) {
     console.error('[Rescoping:integration] LLM error:', error.message);
-    // Fallback to template on error
-    return `Planning "${snapshot.premise}" — ${snapshot.completeness}% complete, ${snapshot.gapCount} gaps remaining.`;
+    // Fallback with advisory tone
+    return `Your plan is taking shape. ${snapshot.gapCount} questions remain — start with ${gapLabels[0] || 'the first gap'} to see where this leads.`;
   }
 }
 
