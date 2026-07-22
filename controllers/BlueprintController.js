@@ -254,6 +254,15 @@ async function refundQuota(quotaCheck, operationType, projectId = null, reason =
 
 // Helper: verify project ownership
 async function verifyOwnership(projectId, userId, anonymousSessionId) {
+  // Guard against invalid/undefined projectId
+  if (!projectId || projectId === 'undefined' || projectId === 'null') {
+    return null;
+  }
+  // Validate ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(projectId)) {
+    return null;
+  }
+
   const project = await Project.findById(projectId);
   if (!project) return null;
 
