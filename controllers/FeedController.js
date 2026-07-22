@@ -317,30 +317,56 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
       sort = 'forks',
       category,
       limit = 30,
-      offset = 0
+      offset = 0,
+      search
     } = req.query;
 
-    // Build query - only public, published maps
-    const query = {
+    // Base conditions for all queries
+    const baseConditions = {
       visibility: 'public',
       publishedAt: { $ne: null },
       unpublishedAt: null
     };
 
+    // Add category filter if present
     if (category && category !== 'all') {
-      query.category = category;
+      baseConditions.category = category;
     }
 
-    // Sort options - default to forks (usefulness)
-    // isSeed: 1 ensures real user maps rank above seeds when engagement is equal
-    const sortOptions = {
-      forks: { forkCount: -1, isSeed: 1, publishedAt: -1 },
-      stars: { starCount: -1, isSeed: 1, publishedAt: -1 },
-      coverage: { coverage: -1, isSeed: 1, publishedAt: -1 },
-      newest: { publishedAt: -1, isSeed: 1 }
-    };
+    let query;
+    let sortBy;
 
-    const sortBy = sortOptions[sort] || sortOptions.forks;
+    if (search && search.trim()) {
+      const searchTerm = search.trim();
+
+      // Search uses $or: text index search OR ownerName regex match
+      // This allows searching by content (title, description via text index)
+      // or by creator name (ownerName regex since it's not in text index)
+      query = {
+        ...baseConditions,
+        $or: [
+          { $text: { $search: searchTerm } },
+          { ownerName: { $regex: searchTerm, $options: 'i' } }
+        ]
+      };
+
+      // When searching, sort by text relevance score first
+      sortBy = { score: { $meta: 'textScore' }, publishedAt: -1 };
+    } else {
+      // No search - use standard query
+      query = baseConditions;
+
+      // Sort options - default to forks (usefulness)
+      // isSeed: 1 ensures real user maps rank above seeds when engagement is equal
+      const sortOptions = {
+        forks: { forkCount: -1, isSeed: 1, publishedAt: -1 },
+        stars: { starCount: -1, isSeed: 1, publishedAt: -1 },
+        coverage: { coverage: -1, isSeed: 1, publishedAt: -1 },
+        newest: { publishedAt: -1, isSeed: 1 }
+      };
+
+      sortBy = sortOptions[sort] || sortOptions.forks;
+    }
 
     // Fetch maps
     const maps = await SharedMap.find(query)
