@@ -1321,14 +1321,16 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     const nodeMap = {}; // Track created node IDs
 
     // Create core node (without identity fields first - need _id)
-    // Note: detail/scores/suggestedSubAspects come from /preview lazily, not from nebula
+    // Full scoping: core includes detail and scores from generation
     const corePos = layout.find(l => l.nodeRef === 'core');
     const coreNodeData = {
       projectId: project._id,
       kind: 'core',
       title: nebula.core?.title || premise.substring(0, 40),
       statement: nebula.core?.statement || premise,
-      // Territory is a short phrase; detail comes from /preview
+      detail: nebula.core?.detail || `This is the central premise: ${premise}`,
+      territory: nebula.core?.territory || premise.substring(0, 60),
+      scores: normalizeScores(nebula.core?.scores),
       confidence: nebula.core?.confidence || { value: 0.5, basis: 'stated' },
       stage: nebula.stagesEnabled ? (nebula.core?.stage || 0) : undefined,
       status: nebula.core?.status || 'mapped',
@@ -1390,6 +1392,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       };
 
       // Note: detail/scores/suggestedSubAspects come from /preview lazily
+      // Full scoping: root nodes arrive with detail, scores, and inferred confidence
       const rootNodeData = {
         projectId: project._id,
         parentNodeId: coreNode._id,
@@ -1398,8 +1401,13 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         constellationLabel: root.label, // Domain-specific label
         title: root.title || root.label,
         statement: root.statement,
-        // Territory is short phrase for display; detail comes from /preview
-        confidence: root.confidence || { value: 0, basis: 'unknown' },
+        detail: root.detail || null, // Full explanation from generation
+        territory: root.territory || null,
+        scores: normalizeScores(root.scores),
+        confidence: root.confidence || { value: 0.4, basis: 'inferred' },
+        scopedPaths: normalizeScopedPaths(root.scopedPaths),
+        nodeKind: root.isDecisionPoint ? 'decision' : 'component',
+        scoped: root.isDecisionPoint || false,
         stage: nebula.stagesEnabled ? (root.stage || 0) : undefined,
         status: root.status || 'mapped',
         x: rootPos?.x || 600,
@@ -1441,7 +1449,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         const star = stars[j];
         const starPos = layout.find(l => l.nodeRef === `star:${rootId}:${j}`);
 
-        // Note: detail/scores/suggestedSubAspects come from /preview lazily
+        // Full scoping: star nodes arrive with detail, scores, and inferred confidence
         const starNodeData = {
           projectId: project._id,
           parentNodeId: rootNode._id,
@@ -1450,10 +1458,15 @@ router.post('/nebula', optionalAuth, async (req, res) => {
           constellationLabel: root.label,
           title: star.title,
           statement: star.statement,
-          // Territory is short phrase; detail comes from /preview
-          confidence: star.confidence || { value: 0, basis: 'unknown' },
+          detail: star.detail || null, // Full explanation from generation
+          territory: star.territory || null,
+          scores: normalizeScores(star.scores),
+          confidence: star.confidence || { value: 0.4, basis: 'inferred' },
+          scopedPaths: normalizeScopedPaths(star.scopedPaths),
+          nodeKind: star.isDecisionPoint ? 'decision' : 'component',
+          scoped: star.isDecisionPoint || false,
           stage: nebula.stagesEnabled ? (star.stage || rootNode.stage) : undefined,
-          status: star.status || 'unexplored',
+          status: star.status || 'mapped',
           x: starPos?.x || rootNode.x + 100,
           y: starPos?.y || rootNode.y + j * 60,
           depth: 2
@@ -1950,6 +1963,49 @@ function mapFrameIdToConstellation(frameId) {
     'risk': 'risk'
   };
   return map[frameId] || null;
+}
+
+/**
+ * Normalize scores from LLM format to schema format.
+ * LLM returns: {economy: 5, orchestration: 7, demand: 6}
+ * Schema wants: {economy: {value: 5}, orchestration: {value: 7}, demand: {value: 6}}
+ */
+function normalizeScores(scores) {
+  if (!scores) return { economy: { value: 5 }, orchestration: { value: 5 }, demand: { value: 5 } };
+
+  // Already in schema format
+  if (scores.economy?.value !== undefined) return scores;
+
+  // Convert from simple format
+  return {
+    economy: { value: scores.economy || 5, reason: scores.economyReason || null },
+    orchestration: { value: scores.orchestration || 5, reason: scores.orchestrationReason || null },
+    demand: { value: scores.demand || 5, reason: scores.demandReason || null }
+  };
+}
+
+/**
+ * Normalize scopedPaths from LLM format to schema format.
+ * LLM returns: [{label, summary, econ:5, orch:7, dem:6, recommended:true}]
+ * Schema wants: [{label, summary, scores:{...}, confidence:{...}}]
+ */
+function normalizeScopedPaths(paths) {
+  if (!paths || !Array.isArray(paths)) return null;
+
+  return paths.map(p => ({
+    label: p.label,
+    summary: p.summary || '',
+    tradeoff: p.tradeoff || '',
+    scores: {
+      economy: { value: p.econ || p.economy || 5 },
+      orchestration: { value: p.orch || p.orchestration || 5 },
+      demand: { value: p.dem || p.demand || 5 }
+    },
+    confidence: { value: 0.4, basis: 'inferred' },
+    inferred: true,
+    chosen: false,
+    recommended: p.recommended || false
+  }));
 }
 
 // Territory descriptions and invitation questions by constellation

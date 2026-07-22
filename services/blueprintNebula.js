@@ -10,9 +10,30 @@ const { BLUEPRINT_SYSTEM_PREFIX, W_WORDS } = require('./blueprintPrompts');
 const { buildFrameLookups } = require('./frameLoader');
 
 const NEBULA_FRAME_INSTRUCTION = `
-Return JSON with core + roots array. Each root: frameId (echo exactly), label, title (2-4 words), statement (1 sentence), territory (8 words max), confidence {value:0-1, basis:"stated|inferred|unknown"}, stage:0, status:"unexplored", stars array (0-2 items, same fields as root).
+Return JSON with core + roots array. FULLY SCOPE every node — no placeholders or gaps.
 
-Rules: Echo frameId exactly. Domain labels only (never who/what/why/how). Optional empty roots: omit. Required empty roots: placeholder. Keep small.
+Each node (core, root, star) MUST have:
+- title: 2-5 words, specific to this premise
+- statement: 1 sentence, concrete and actionable
+- detail: 2-3 sentences explaining the specifics (WHO, WHAT, HOW for this exact premise)
+- territory: 8 words max (short phrase summarizing coverage)
+- scores: {economy:0-10, orchestration:0-10, demand:0-10} — realistic estimates
+- confidence: {value:0.3-0.7, basis:"inferred"} — never "unknown", always "inferred"
+- stage: 0
+- status: "mapped"
+
+For DECISION nodes (where user has real choices to make), add:
+- scopedPaths: [{label:"Option A", summary:"1 sentence", tradeoff:"short", econ:1-10, orch:1-10, dem:1-10, recommended:bool}, ...] (2-3 options max)
+- isDecisionPoint: true
+
+CRITICAL RULES:
+1. Echo frameId exactly.
+2. Domain labels only (never who/what/why/how).
+3. Optional empty roots: omit entirely.
+4. Required empty roots: STILL fully scope them with inferred content.
+5. Every star array must have 1-3 REAL stars with full content — no "[Needs information]".
+6. Mark EVERYTHING as basis:"inferred" — user sees this is the engine's draft, not fact.
+7. Be SPECIFIC to the premise — "coffee roaster in Sarasota" gets Sarasota-specific content, not generic.
 `;
 
 // Byte-identical prefix from single source
@@ -194,21 +215,25 @@ function enforceGuards(result, frameInput) {
     return true;
   });
 
-  // Add missing required roots with placeholders (minimal)
+  // Add missing required roots with fully-scoped inferred content (not gaps)
   for (const frameId of requiredIds) {
     if (!seenRequired.has(frameId)) {
       const frameRoot = byFrameId.get(frameId);
       if (frameRoot) {
+        const label = frameRoot.label || `[${frameId}]`;
+        const covers = frameRoot.covers || 'this area';
         result.roots.push({
           frameId,
-          label: frameRoot.label || `[${frameId}]`,
-          title: frameRoot.label || `[${frameId}]`,
-          statement: `No information about ${frameRoot.covers || 'this area'} yet.`,
-          territory: `${frameRoot.label || frameId} — waiting for input`,
-          confidence: { value: 0, basis: 'unknown' },
+          label,
+          title: label,
+          statement: `The ${covers.toLowerCase()} aspects of this plan.`,
+          detail: `This covers the ${covers.toLowerCase()} dimension. The engine has inferred a baseline — refine based on your specific context and knowledge.`,
+          territory: `${label} — inferred baseline`,
+          scores: { economy: 5, orchestration: 5, demand: 5 },
+          confidence: { value: 0.35, basis: 'inferred' },
           stage: 0,
-          status: 'unexplored',
-          stars: [createPlaceholderStar(frameRoot.label || frameId)]
+          status: 'mapped',
+          stars: [createPlaceholderStar(label)]
         });
       }
     }
@@ -235,26 +260,36 @@ function enforceGuards(result, frameInput) {
 }
 
 /**
- * Create a placeholder star for required-but-empty roots (minimal).
+ * Create a fully-scoped placeholder for required-but-empty roots.
+ * Even placeholders are inferred content, not gaps.
  */
 function createPlaceholderStar(areaName) {
   return {
-    title: `[Needs information]`,
-    statement: `No detail about ${areaName} yet.`,
-    territory: `${areaName} — waiting for input`,
-    confidence: { value: 0, basis: 'unknown' },
+    title: `${areaName} details`,
+    statement: `Key aspects of ${areaName} that will shape the plan.`,
+    detail: `This area covers the ${areaName.toLowerCase()} dimension. The specifics depend on your context — refine this to match your situation.`,
+    territory: `${areaName} — inferred baseline`,
+    scores: { economy: 5, orchestration: 5, demand: 5 },
+    confidence: { value: 0.3, basis: 'inferred' },
     stage: 0,
-    status: 'unexplored'
+    status: 'mapped'
   };
 }
 
 /**
- * Ensure a node has minimal required fields (no scores or detail - those come from /preview).
+ * Ensure a node has all required fields for full scoping.
+ * Missing fields get sensible inferred defaults.
  */
 function ensureNodeFields(node) {
-  // Confidence is the only required field we enforce
-  if (!node.confidence) {
-    node.confidence = { value: 0, basis: 'unknown' };
+  // Confidence MUST be inferred, never unknown (that creates gaps)
+  if (!node.confidence || node.confidence.basis === 'unknown') {
+    node.confidence = { value: 0.4, basis: 'inferred' };
+  }
+
+  // Ensure confidence basis is never 'unknown' — force to 'inferred'
+  if (node.confidence.basis === 'unknown') {
+    node.confidence.basis = 'inferred';
+    node.confidence.value = Math.max(node.confidence.value || 0, 0.3);
   }
 
   // Territory is a short phrase - use statement as fallback
@@ -262,6 +297,21 @@ function ensureNodeFields(node) {
     node.territory = node.statement.length > 60
       ? node.statement.substring(0, 57) + '...'
       : node.statement;
+  }
+
+  // Detail must exist - generate from statement if missing
+  if (!node.detail && node.statement) {
+    node.detail = `This covers: ${node.statement}. Specifics to be refined based on your context.`;
+  }
+
+  // Scores must exist - default to middle values
+  if (!node.scores) {
+    node.scores = { economy: 5, orchestration: 5, demand: 5 };
+  }
+
+  // Status should be 'mapped' not 'unexplored'
+  if (node.status === 'unexplored') {
+    node.status = 'mapped';
   }
 
   return node;
