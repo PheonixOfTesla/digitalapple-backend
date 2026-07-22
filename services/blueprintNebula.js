@@ -101,8 +101,15 @@ async function generateFramedNebula(frameInput, retries = 1) {
 
   // Step 1: Generate skeleton (structure only)
   console.log('[Nebula] Step 1: Generating skeleton...');
-  const skeleton = await generateSkeleton(frameInput, retries);
-  console.log(`[Nebula] Skeleton complete: ${skeleton.roots.length} roots`);
+  let skeleton;
+  try {
+    skeleton = await generateSkeleton(frameInput, retries);
+    console.log(`[Nebula] Skeleton complete: ${skeleton.roots.length} roots`);
+  } catch (err) {
+    console.error('[Nebula] Skeleton generation failed, using fallback structure:', err.message);
+    // Fallback: create skeleton from frame roots directly
+    skeleton = createFallbackSkeleton(frameInput);
+  }
 
   // Step 2: Generate content for each root in parallel
   console.log('[Nebula] Step 2: Generating content for each root in parallel...');
@@ -391,6 +398,29 @@ function assembleNebula(skeleton, contentResults, frameInput) {
   }
 
   return nebula;
+}
+
+// ============== FALLBACKS ==============
+
+/**
+ * Create a fallback skeleton when AI fails completely.
+ * Uses frame roots directly as structure.
+ */
+function createFallbackSkeleton(frameInput) {
+  const premiseShort = frameInput.premise.length > 40
+    ? frameInput.premise.substring(0, 40) + '...'
+    : frameInput.premise;
+
+  return {
+    core: {
+      title: premiseShort
+    },
+    roots: frameInput.roots.map(root => ({
+      frameId: root.frameId,
+      label: root.label || root.frameId,
+      starTitles: [`Key aspect of ${root.label || root.covers}`]
+    }))
+  };
 }
 
 // ============== GUARDS & UTILITIES ==============
