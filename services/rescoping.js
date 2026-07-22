@@ -19,6 +19,8 @@ const scoping = require('./scoping');
 const Node = require('../models/Node');
 const Edge = require('../models/Edge');
 const Core = require('../models/Core');
+const { client, model } = require('./aiClient');
+const { BLUEPRINT_SYSTEM_PREFIX } = require('./blueprintPrompts');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PART 1: DEFINING-QUESTION DETECTION
@@ -726,83 +728,112 @@ function getExportReadiness(readiness) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PART 6: CORE INTEGRATION
+// PART 6: CORE INTEGRATION (LLM-SYNTHESIZED)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Generate core integration - the synthesis of all developed nodes.
- * This is what all exports render from.
- *
- * @param {Array} allNodes - All nodes in the project
- * @param {Array} edges - All edges
- * @param {Object} coreDoc - Core document
- * @returns {string} - Integrated summary text
+ * Build compact snapshot of current plan state for LLM synthesis.
+ * Keeps it small for fast generation.
  */
-function generateCoreIntegration(allNodes, edges = [], coreDoc = null) {
-  // Filter active nodes
+function buildPlanSnapshot(allNodes, edges = [], coreDoc = null) {
   const activeNodes = allNodes.filter(n =>
     n.kind !== 'road-not-taken' && n.kind !== 'rejected'
   );
 
   const coreNode = activeNodes.find(n => n.kind === 'core');
-  if (!coreNode) {
+  if (!coreNode) return null;
+
+  const premise = coreDoc?.premise || coreNode.statement || '';
+  const completeness = calculateCompleteness(activeNodes, edges, coreDoc);
+
+  // Build constellation summaries (compact)
+  const constellations = activeNodes
+    .filter(n => n.kind === 'constellation')
+    .map(cons => {
+      const children = activeNodes.filter(n =>
+        n.parentNodeId?.toString() === cons._id.toString()
+      );
+      const specified = children.filter(c => !isNodeAGap(c));
+      const gaps = children.filter(c => isNodeAGap(c));
+
+      return {
+        label: cons.constellationLabel || cons.constellation || cons.title,
+        statement: cons.statement || cons.detail || '',
+        specified: specified.map(c => `${c.title}: ${c.detail || c.statement || ''}`).slice(0, 5),
+        gapCount: gaps.length
+      };
+    });
+
+  // Key decisions
+  const decisions = (coreDoc?.resolvedDirections || []).map(d =>
+    `${d.nodeTitle}: ${d.chosenPath}`
+  );
+
+  return {
+    premise,
+    decisions,
+    constellations,
+    completeness: completeness.percent,
+    gapCount: completeness.gapCount
+  };
+}
+
+/**
+ * Generate core integration - LLM synthesis of all developed nodes.
+ * Called with regenerate=true after each gap fill.
+ *
+ * @param {Array} allNodes - All nodes in the project
+ * @param {Array} edges - All edges
+ * @param {Object} coreDoc - Core document
+ * @returns {Promise<string>} - Synthesized summary text
+ */
+async function generateCoreIntegration(allNodes, edges = [], coreDoc = null) {
+  const snapshot = buildPlanSnapshot(allNodes, edges, coreDoc);
+
+  if (!snapshot) {
     return 'No core defined yet.';
   }
 
-  // Build integration summary
-  const parts = [];
-
-  // Add premise
-  const premise = coreDoc?.premise || coreNode.statement;
-  parts.push(`PREMISE: ${premise}`);
-
-  // Add resolved directions
-  if (coreDoc?.resolvedDirections?.length > 0) {
-    parts.push('\nKEY DECISIONS:');
-    for (const dir of coreDoc.resolvedDirections) {
-      parts.push(`• ${dir.nodeTitle}: ${dir.chosenPath}`);
-    }
+  // For very early plans with nothing specified, return template
+  if (snapshot.constellations.every(c => c.specified.length === 0)) {
+    return `Planning "${snapshot.premise}" — ${snapshot.gapCount} questions to answer.`;
   }
 
-  // Add constellation summaries
-  const constellations = activeNodes
-    .filter(n => n.kind === 'constellation')
-    .sort((a, b) => {
-      const order = ['demand', 'offer', 'delivery', 'economy', 'orchestration', 'risk'];
-      const ai = order.indexOf(a.constellation) >= 0 ? order.indexOf(a.constellation) : 99;
-      const bi = order.indexOf(b.constellation) >= 0 ? order.indexOf(b.constellation) : 99;
-      return ai - bi;
+  // Build compact prompt
+  const snapshotText = JSON.stringify(snapshot, null, 0);
+
+  const systemPrompt = BLUEPRINT_SYSTEM_PREFIX + `You synthesize plan states into clear summaries.`;
+
+  const userPrompt = `Given this plan snapshot, write a 2-3 sentence summary of what the plan currently IS (not what's missing). Focus on the specified parts — what has been decided or filled in. Be concrete, not meta.
+
+SNAPSHOT:
+${snapshotText}
+
+Return ONLY the summary paragraph, no preamble.`;
+
+  try {
+    const startTime = Date.now();
+
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 200,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ]
     });
 
-  for (const cons of constellations) {
-    const label = cons.constellationLabel || cons.constellation || cons.title;
-    parts.push(`\n${label.toUpperCase()}:`);
+    const summary = response.choices?.[0]?.message?.content?.trim();
+    const elapsed = Date.now() - startTime;
+    console.log(`[Rescoping:integration] generated in ${elapsed}ms`);
 
-    if (cons.statement) {
-      parts.push(cons.statement);
-    }
-
-    // Add children summaries
-    const children = activeNodes.filter(n =>
-      n.parentNodeId?.toString() === cons._id.toString()
-    );
-
-    for (const child of children) {
-      const isGap = isNodeAGap(child);
-      const status = isGap ? '[GAP]' : '';
-      if (child.statement || child.detail) {
-        parts.push(`  • ${child.title}${status}: ${child.statement || child.detail || ''}`);
-      } else {
-        parts.push(`  • ${child.title}${status}`);
-      }
-    }
+    return summary || `Planning "${snapshot.premise}" — ${snapshot.completeness}% complete.`;
+  } catch (error) {
+    console.error('[Rescoping:integration] LLM error:', error.message);
+    // Fallback to template on error
+    return `Planning "${snapshot.premise}" — ${snapshot.completeness}% complete, ${snapshot.gapCount} gaps remaining.`;
   }
-
-  // Add completeness
-  const completeness = calculateCompleteness(activeNodes, edges, coreDoc);
-  parts.push(`\nCOMPLETENESS: ${completeness.percent}%`);
-
-  return parts.join('\n');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
