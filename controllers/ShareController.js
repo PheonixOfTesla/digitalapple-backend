@@ -15,6 +15,19 @@ const Edge = require('../models/Edge');
 const User = require('../models/User');
 const { verifyToken } = require('../middleware/auth');
 
+// Helper: validate ObjectId - returns true if valid, sends 400 and returns false if not
+function validateId(id, res, label = 'ID') {
+  if (!id || id === 'undefined' || id === 'null') {
+    res.status(400).json({ error: `Invalid ${label}`, message: `${label} is required` });
+    return false;
+  }
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400).json({ error: `Invalid ${label}`, message: `${label} format is invalid` });
+    return false;
+  }
+  return true;
+}
+
 // Helper: Get all descendant node IDs for a given root node
 async function getDescendantIds(projectId, rootNodeId) {
   const descendants = new Set();
@@ -231,6 +244,8 @@ function generatePreviewSvg(snapshot) {
 
 // POST /share/publish/:projectId - Publish a project as a shared map
 router.post('/publish/:projectId', verifyToken, async (req, res) => {
+  if (!validateId(req.params.projectId, res, 'Project ID')) return;
+
   try {
     const { title, description, category, visibility, excludedBranchRoots } = req.body;
     const projectId = req.params.projectId;
@@ -398,6 +413,8 @@ router.put('/:mapId', verifyToken, async (req, res) => {
 
 // GET /share/status/:projectId - Check if project is published to Atlas
 router.get('/status/:projectId', verifyToken, async (req, res) => {
+  if (!validateId(req.params.projectId, res, 'Project ID')) return;
+
   try {
     const project = await Project.findById(req.params.projectId);
     if (!project) {

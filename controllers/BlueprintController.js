@@ -253,6 +253,19 @@ async function refundQuota(quotaCheck, operationType, projectId = null, reason =
   );
 }
 
+// Helper: validate ObjectId - returns true if valid, sends 400 and returns false if not
+function validateId(id, res, label = 'ID') {
+  if (!id || id === 'undefined' || id === 'null') {
+    res.status(400).json({ error: `Invalid ${label}`, message: `${label} is required` });
+    return false;
+  }
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400).json({ error: `Invalid ${label}`, message: `${label} format is invalid` });
+    return false;
+  }
+  return true;
+}
+
 // Helper: verify project ownership
 async function verifyOwnership(projectId, userId, anonymousSessionId) {
   // Guard against invalid/undefined projectId
@@ -654,6 +667,8 @@ router.post('/projects/:projectId/nodes', optionalAuth, async (req, res) => {
 
 // Update node (position, content, scores)
 router.put('/nodes/:id', optionalAuth, async (req, res) => {
+  if (!validateId(req.params.id, res, 'Node ID')) return;
+
   try {
     const node = await Node.findById(req.params.id);
     if (!node) {
@@ -702,6 +717,8 @@ router.put('/nodes/:id', optionalAuth, async (req, res) => {
 
 // Delete node (and connected edges)
 router.delete('/nodes/:id', optionalAuth, async (req, res) => {
+  if (!validateId(req.params.id, res, 'Node ID')) return;
+
   try {
     const node = await Node.findById(req.params.id);
     if (!node) {
