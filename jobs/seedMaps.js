@@ -604,29 +604,59 @@ async function createSeedMap(user, topic) {
   const snapshot = {
     core: savedCoreNode ? {
       _id: savedCoreNode._id,
+      kind: 'core',
       label: savedCoreNode.label || savedCoreNode.title,
       title: savedCoreNode.title,
       statement: savedCoreNode.statement,
       detail: savedCoreNode.detail,
+      territory: savedCoreNode.territory,
       x: savedCoreNode.x,
-      y: savedCoreNode.y
+      y: savedCoreNode.y,
+      // Identity fields
+      coreId: savedCoreNode.coreId,
+      path: savedCoreNode.path,
+      stableId: savedCoreNode.stableId,
+      essence: savedCoreNode.essence,
+      derivation: savedCoreNode.derivation,
+      liveness: savedCoreNode.liveness,
+      terminal: savedCoreNode.terminal,
+      scoping: savedCoreNode.scoping
     } : null,
     nodes: savedOtherNodes.map(n => ({
       _id: n._id,
       parentNodeId: n.parentNodeId,
+      kind: n.kind || (n.constellation ? 'constellation' : 'star'),
+      nodeKind: n.nodeKind,
       label: n.label || n.title,
       title: n.title,
       statement: n.statement,
       detail: n.detail,
+      territory: n.territory,
       constellation: n.constellation,
       constellationLabel: n.constellationLabel,
       stage: n.stage,
       scores: n.scores,
       confidence: n.confidence,
+      cost: n.cost,
+      dependencies: n.dependencies,
       status: n.status,
+      sources: n.sources,
       depth: n.depth,
       x: n.x,
-      y: n.y
+      y: n.y,
+      // Identity fields
+      coreId: n.coreId,
+      path: n.path,
+      stableId: n.stableId,
+      essence: n.essence,
+      derivation: n.derivation,
+      liveness: n.liveness,
+      terminal: n.terminal,
+      // Scoping fields
+      scoping: n.scoping,
+      scoped: n.scoped,
+      scopedPaths: n.scopedPaths,
+      suggestedSubAspects: n.suggestedSubAspects
     })),
     edges: (await Edge.find({ projectId: project._id }).lean()).map(e => ({
       _id: e._id,
