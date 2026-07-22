@@ -2141,6 +2141,58 @@ function formatNodeForClient(node) {
   };
 }
 
+// ============== FILLER DETECTION (for exports and backend guards) ==============
+const FILLER_PATTERNS = [
+  /key aspects of \[?\w+\]?/i,
+  /this area covers the \[?\w+\]? dimension/i,
+  /specifics depend on your context/i,
+  /to be refined based on your/i,
+  /need to be developed/i,
+  /aspects of this plan/i,
+  /awaiting development/i,
+  /needs development/i,
+  // W-key placeholders
+  /\[how\]/i,
+  /\[why\]/i,
+  /\[what\]/i,
+  /\[where\]/i,
+  /\[when\]/i,
+  /\[who\]/i
+];
+
+function hasFiller(text) {
+  if (!text) return false;
+  return FILLER_PATTERNS.some(p => p.test(text));
+}
+
+// Format node for export with filler detection
+// If filler is detected, convert to question state
+function formatNodeForExport(node) {
+  const formatted = formatNodeForClient(node);
+
+  // Check for filler in statement or detail
+  const statementHasFiller = hasFiller(formatted.statement);
+  const detailHasFiller = hasFiller(formatted.detail);
+
+  if (statementHasFiller || detailHasFiller) {
+    const label = formatted.constellationLabel || formatted.title || 'this area';
+
+    // Convert to question state
+    formatted.needsInput = true;
+    formatted.liveness = 'dormant';
+    formatted.confidence = { value: 0, basis: 'unknown' };
+
+    if (statementHasFiller) {
+      formatted.statement = `What should we know about ${label.toLowerCase()}?`;
+    }
+    if (detailHasFiller) {
+      formatted.detail = `Input needed to scope this part of the plan.`;
+    }
+  }
+
+  return formatted;
+}
+
 /**
  * Get all descendants of a node (for cascade delete).
  * Recursively finds all children and their children.
@@ -2644,7 +2696,7 @@ router.get('/projects/:projectId/export/json', optionalAuth, requireAuthForExpor
         premise: project.premise,
         createdAt: project.createdAt
       },
-      nodes: nodes.map(formatNodeForClient),
+      nodes: nodes.map(formatNodeForExport),
       edges: edges.map(e => ({
         id: e._id.toString(),
         fromNodeId: e.fromNodeId.toString(),
@@ -2684,7 +2736,13 @@ router.get('/projects/:projectId/export/csv', optionalAuth, requireAuthForExport
       const orch = n.scores?.orchestration?.value ?? '';
       const dem = n.scores?.demand?.value ?? '';
       const conf = n.confidence?.value ? Math.round(n.confidence.value * 100) + '%' : '';
-      return `${n.stage},"${(n.title || '').replace(/"/g, '""')}","${(n.statement || '').replace(/"/g, '""')}",${econ},${orch},${dem},${conf},${n.status}`;
+      // Detect and replace filler in statement
+      let statement = n.statement || '';
+      if (hasFiller(statement)) {
+        const label = n.constellationLabel || n.title || 'this area';
+        statement = `What should we know about ${label.toLowerCase()}?`;
+      }
+      return `${n.stage},"${(n.title || '').replace(/"/g, '""')}","${statement.replace(/"/g, '""')}",${econ},${orch},${dem},${conf},${n.status}`;
     }).join('\n');
 
     res.setHeader('Content-Type', 'text/csv');
