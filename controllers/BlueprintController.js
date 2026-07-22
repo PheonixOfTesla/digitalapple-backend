@@ -424,8 +424,8 @@ router.get('/projects/:id', optionalAuth, async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error('Get project error:', error);
-    res.status(500).json({ error: 'Failed to get project' });
+    console.error('Get project error:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to get project', details: error.message });
   }
 });
 
@@ -2916,8 +2916,8 @@ router.get('/projects/:projectId/integration', optionalAuth, async (req, res) =>
       lastIntegratedAt: coreDoc?.lastIntegratedAt
     });
   } catch (error) {
-    console.error('Get integration error:', error);
-    res.status(500).json({ error: 'Failed to get integration' });
+    console.error('Get integration error:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to get integration', details: error.message });
   }
 });
 
