@@ -106,6 +106,19 @@
         { "key": "risk",  "label": "Risk",       "covers": "what could sink it", "optional": true }
       ],
       "stagesEnabled": true
+    },
+    "procedure": {
+      "label": "Procedure",
+      "description": "A how-to, bureaucratic process, step-by-step task",
+      "roots": [
+        { "key": "what",  "label": "Requirements",   "covers": "what you need before starting, eligibility" },
+        { "key": "how",   "label": "Steps",          "covers": "the ordered process, what to do first/next/last" },
+        { "key": "where", "label": "Documents",      "covers": "forms, IDs, paperwork, tools needed" },
+        { "key": "why",   "label": "Cost & Time",    "covers": "fees, processing time, total duration" },
+        { "key": "risk",  "label": "Common Pitfalls","covers": "mistakes to avoid, what fails applications", "optional": true },
+        { "key": "who",   "label": "Where & Who",    "covers": "office, authority, portal, contact" }
+      ],
+      "stagesEnabled": false
     }
   },
   "fallback": {

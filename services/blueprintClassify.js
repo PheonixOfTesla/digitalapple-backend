@@ -20,12 +20,14 @@ Types:
 - career: job search, promotion, switching fields
 - research: a study, investigation, thesis, deep question
 - campaign: a launch, fundraiser, movement, marketing push
+- procedure: a how-to, bureaucratic process, step-by-step task (e.g. "how to get my drivers license", "how to file a patent", "how to renew a passport")
 
 Rules:
 1. Pick the single best fit. If the premise spans two, pick the one that governs the structure.
-2. Return confidence 0.0-1.0. Be honest — "throw a party" is 0.95 event; "start some kind of business maybe" is 0.5 venture.
-3. Always include the top alternate if confidence < 0.85.
-4. If nothing fits well, return type "unknown" with low confidence.
+2. "How to..." premises that are bureaucratic/administrative tasks → procedure (NOT career or personal-goal).
+3. Return confidence 0.0-1.0. Be honest — "throw a party" is 0.95 event; "start some kind of business maybe" is 0.5 venture.
+4. Always include the top alternate if confidence < 0.85.
+5. If nothing fits well, return type "unknown" with low confidence.
 `;
 
 // Strict JSON schema for classification output
@@ -40,7 +42,7 @@ const CLASSIFY_SCHEMA = {
         type: {
           type: "string",
           enum: ["venture", "event", "personal-goal", "creative-work",
-                 "life-transition", "career", "research", "campaign", "unknown"]
+                 "life-transition", "career", "research", "campaign", "procedure", "unknown"]
         },
         confidence: { type: "number" },
         alternates: {

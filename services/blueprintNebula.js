@@ -66,8 +66,8 @@ Return JSON with full content for this root and its stars. Be SPECIFIC to this e
   "stars": [
     {
       "title": "echo the star title",
-      "statement": "1 concrete sentence specific to this premise",
-      "detail": "2-3 sentences with real specifics — not template text",
+      "statement": "1 concrete sentence — AN ACTION, not a category description",
+      "detail": "2-3 sentences with EXECUTION-LEVEL specifics: named tools/offices/services, real numbers (costs, quantities, times), sequence/preconditions",
       "territory": "8 words max",
       "scores": {"economy": 0-10, "orchestration": 0-10, "demand": 0-10},
       "confidence": {"value": 0.3-0.7, "basis": "inferred"}
@@ -75,21 +75,147 @@ Return JSON with full content for this root and its stars. Be SPECIFIC to this e
   ]
 }
 
-CRITICAL — every statement and detail must be REAL INFERENCE about THIS premise:
-- "a flaky test linked to Redis use-after-free" → talk about race conditions, client lifecycle, memory handling
-- "coffee roaster in Sarasota" → talk about Sarasota's market, Florida regulations, local suppliers
-- NEVER write "This area covers X" or "specifics depend on your context" — that's filler, not content
+EXECUTION-LEVEL OUTPUT (CRITICAL for stars/leaves):
+Stars must resolve to DOABLE ACTIONS, not category restating. Include:
+- Named entities: real offices, tools, services, websites (e.g. "Florida Division of Corporations", "Sarasota County Clerk", "FDACS", "@sarasotaroasters on Instagram")
+- Real numbers: costs ($125), times (3-5 business days), quantities (40 questions)
+- Sequence cues: "before opening a bank account", "after the written test", "needed first"
 
-If you genuinely cannot infer something without more information, return for that star:
+Examples of the target grade:
+- "Register the LLC with Florida Division of Corporations — $125, same-week approval, needed before the commissary lease."
+- "Book the road test at Sarasota DMV; bring proof of insurance + permit held ≥12 months, $48."
+- "Reserve @sarasotaroasters on Instagram + TikTok; post 3x/week, lead with roast-day videos."
+
+FORBIDDEN:
+- "Handle the operations dimension" — that's a category, not an action
+- "This area covers X" — that's filler
+- "Consider the logistics" — that's vague guidance, not a step
+- "Specifics depend on your context" — either infer or ask a specific question
+
+If you genuinely cannot infer execution-level detail without user input, return:
 {
   "title": "the title",
   "needsInput": true,
-  "question": "A SPECIFIC question to ask the user (e.g. 'What Redis client library are you using?')",
+  "question": "A SPECIFIC question (e.g. 'What roasting capacity do you need — sample roaster or production scale?')",
   "whyItMatters": "One sentence on why this affects the plan"
 }
 `;
 
 const CONTENT_SYSTEM = BLUEPRINT_SYSTEM_PREFIX + CONTENT_INSTRUCTION;
+
+// ============== TERMINAL DETECTION ==============
+
+/**
+ * Determine if a node has reached terminal/actionable state.
+ * A terminal node is one that specifies a DOABLE ACTION with concrete specifics.
+ *
+ * @param {object} node - The node to evaluate
+ * @param {number} depth - The depth level (0=core, 1=root, 2=star)
+ * @returns {object} { terminal: boolean, reason: string }
+ */
+function judgeNodeTerminal(node, depth = 0) {
+  // Core nodes are never terminal
+  if (depth === 0) {
+    return { terminal: false, reason: 'Core node' };
+  }
+
+  // Nodes that need input are not terminal
+  if (node.needsInput) {
+    return { terminal: false, reason: 'Needs user input' };
+  }
+
+  const statement = node.statement || node.title || '';
+  const detail = node.detail || '';
+  const combined = statement + ' ' + detail;
+
+  // Action verb patterns suggesting a doable step
+  const actionPatterns = [
+    /^(register|file|apply|submit|book|schedule|call|email|contact|buy|order|sign|create|write|upload|download|reserve|open|set up|establish)/i,
+    /\b(register|file|apply|submit|book|schedule)\b.*\b(at|with|to|on)\b/i,  // "register with X", "file at Y"
+  ];
+
+  // Specificity patterns indicating execution-level detail
+  const specificityPatterns = [
+    /\$\d+/,                           // Dollar amount: $125, $48
+    /\d+\s*(day|week|hour|minute)/i,   // Time: 3 days, 2 weeks
+    /\d+\s*%/,                         // Percentage
+    /@\w+/,                            // Social handle
+    /\.(com|org|gov|io|co)\b/i,        // Website
+    /\b(LLC|DBA|EIN|SSN|DMV|IRS)\b/,   // Official acronyms
+    /\b(before|after|first|then|needed for)\b/i,  // Sequence cues
+    /\b(county|state|federal|division|department|office|clerk)\b/i,  // Government entities
+  ];
+
+  // Check for action verbs
+  const hasActionVerb = actionPatterns.some(p => p.test(statement));
+
+  // Check for specificity markers
+  const specificityScore = specificityPatterns.filter(p => p.test(combined)).length;
+
+  // Terminal conditions:
+  // 1. Has action verb + at least 1 specificity marker
+  if (hasActionVerb && specificityScore >= 1) {
+    return { terminal: true, reason: 'Action with specifics' };
+  }
+
+  // 2. Depth 2 (star) with 2+ specificity markers (even without explicit action verb)
+  if (depth >= 2 && specificityScore >= 2) {
+    return { terminal: true, reason: 'Leaf with multiple specifics' };
+  }
+
+  // 3. Short, concrete statement at depth 2+
+  const wordCount = statement.trim().split(/\s+/).length;
+  if (depth >= 2 && wordCount <= 12 && specificityScore >= 1) {
+    return { terminal: true, reason: 'Concise actionable leaf' };
+  }
+
+  return { terminal: false, reason: 'Can be expanded further' };
+}
+
+/**
+ * Mark all terminal nodes in a nebula.
+ *
+ * @param {object} nebula - The nebula to process
+ * @returns {object} The nebula with terminal flags set
+ */
+function markTerminalNodes(nebula) {
+  // Core is never terminal
+  if (nebula.core) {
+    nebula.core.terminal = false;
+  }
+
+  // Process roots and their stars
+  for (const root of (nebula.roots || [])) {
+    const rootResult = judgeNodeTerminal(root, 1);
+    root.terminal = rootResult.terminal;
+
+    for (const star of (root.stars || [])) {
+      const starResult = judgeNodeTerminal(star, 2);
+      star.terminal = starResult.terminal;
+    }
+  }
+
+  return nebula;
+}
+
+/**
+ * Count terminal nodes in a nebula.
+ *
+ * @param {object} nebula - The nebula to count
+ * @returns {number} Count of terminal nodes
+ */
+function countTerminalNodes(nebula) {
+  let count = 0;
+
+  for (const root of (nebula.roots || [])) {
+    if (root.terminal) count++;
+    for (const star of (root.stars || [])) {
+      if (star.terminal) count++;
+    }
+  }
+
+  return count;
+}
 
 // ============== MAIN GENERATION ==============
 
@@ -120,7 +246,13 @@ async function generateFramedNebula(frameInput, retries = 1) {
   const nebula = assembleNebula(skeleton, contentResults, frameInput);
 
   // Step 4: Enforce guards (label mapping, optional-root dropping)
-  const result = enforceGuards(nebula, frameInput);
+  const guarded = enforceGuards(nebula, frameInput);
+
+  // Step 5: Mark terminal nodes at generation time
+  console.log('[Nebula] Step 4: Detecting terminal nodes...');
+  const result = markTerminalNodes(guarded);
+  const terminalCount = countTerminalNodes(result);
+  console.log(`[Nebula] Terminal nodes: ${terminalCount}`);
 
   const elapsed = Date.now() - startTime;
   console.log(`[Nebula] Complete in ${elapsed}ms`);
