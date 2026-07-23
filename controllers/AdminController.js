@@ -1044,10 +1044,13 @@ async function creditSummary() {
   const costUsd = usage ? (usage.costUsd || 0) : 0;
 
   const anchored = doc.anchorCostUsd != null;
-  const spent = anchored ? Math.max(0, costUsd - doc.anchorCostUsd) : 0;
+  // Total Clockwork cost = LLM generation + Lab reel renders.
+  const llmSpent = anchored ? Math.max(0, costUsd - doc.anchorCostUsd) : 0;
+  const labSpent = doc.labCostUsd || 0;
+  const spent = llmSpent + labSpent;
   const remaining = anchored ? (doc.loaded - spent) : doc.loaded;
 
-  // Average daily burn since the anchor (fallback: since first tracked call).
+  // Average daily burn since the anchor.
   let burnPerDay = null, runwayDays = null;
   if (anchored && doc.anchorAt) {
     const days = Math.max(0.5, (Date.now() - new Date(doc.anchorAt).getTime()) / 86400000);
@@ -1058,6 +1061,8 @@ async function creditSummary() {
   return {
     loaded: +doc.loaded.toFixed(4),
     spent: +spent.toFixed(4),
+    llmCost: +llmSpent.toFixed(4),
+    labCost: +labSpent.toFixed(4),
     remaining: +remaining.toFixed(4),
     burnPerDay: burnPerDay == null ? null : +burnPerDay.toFixed(4),
     runwayDays: runwayDays == null ? null : Math.floor(runwayDays),
@@ -1074,6 +1079,25 @@ async function creditSummary() {
     history: (doc.history || []).slice(-25).reverse()
   };
 }
+
+// POST /admin/lab/render-cost { usd, note } — record a Lab reel-render cost so
+// it rolls into total Clockwork cost and draws down the shared credit balance.
+router.post('/lab/render-cost', async (req, res) => {
+  try {
+    const AiCredit = require('../models/AiCredit');
+    const usd = Number(req.body && req.body.usd);
+    if (!Number.isFinite(usd) || usd < 0) return res.status(400).json({ error: 'Invalid usd amount' });
+    let doc = await AiCredit.findOne({ key: 'global' });
+    if (!doc) doc = await AiCredit.create({ key: 'global' });
+    doc.labCostUsd = +((doc.labCostUsd || 0) + usd).toFixed(4);
+    doc.history.push({ type: 'load', amount: -usd, note: (req.body.note || 'Lab render').toString().slice(0, 200), balanceAfter: null });
+    await doc.save();
+    res.json({ success: true, ...(await creditSummary()) });
+  } catch (e) {
+    console.error('[lab render-cost] error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
 // GET /admin/credits — current balance, burn, runway, usage, history
 router.get('/credits', async (req, res) => {
@@ -1118,6 +1142,7 @@ router.post('/credits', async (req, res) => {
       // Re-anchor spend to "now" and set loaded so remaining == bal.
       doc.anchorCostUsd = costUsd;
       doc.anchorAt = new Date();
+      doc.labCostUsd = 0;
       doc.loaded = bal;
       doc.history.push({ type: 'set-balance', amount: bal, note: note || 'Reconciled to provider balance', balanceAfter: bal });
       await doc.save();
@@ -1144,6 +1169,78 @@ router.post('/credits', async (req, res) => {
     res.json({ success: true, ...(await creditSummary()) });
   } catch (e) {
     console.error('[credits] post error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ==================== INTEGRATIONS (Lab / reel render) ====================
+// Store the WaveSpeed API key server-side so the render pipeline can use it.
+// The full key is NEVER returned — only a masked preview + connected flag.
+
+function maskKey(v) {
+  if (!v) return null;
+  const s = String(v);
+  return s.length <= 6 ? '••••' : '••••' + s.slice(-4);
+}
+
+// GET /admin/integrations — which integrations are connected
+router.get('/integrations', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    const ws = await Setting.findOne({ key: 'wavespeed_api_key' });
+    res.json({
+      success: true,
+      wavespeed: {
+        connected: !!(ws && ws.value),
+        masked: ws && ws.value ? maskKey(ws.value) : null,
+        updatedAt: ws ? ws.updatedAt : null
+      }
+    });
+  } catch (e) {
+    console.error('[integrations] get error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /admin/integrations/wavespeed/reveal — return the full key (admin only,
+// explicit reveal, like Railway's eye toggle).
+router.get('/integrations/wavespeed/reveal', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    const ws = await Setting.findOne({ key: 'wavespeed_api_key' });
+    res.json({ success: true, key: ws && ws.value ? ws.value : null });
+  } catch (e) {
+    console.error('[integrations] reveal error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /admin/integrations/wavespeed { key } — save/replace the key
+router.post('/integrations/wavespeed', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    const key = (req.body && req.body.key || '').toString().trim();
+    if (!key || key.length < 8) return res.status(400).json({ error: 'Enter a valid API key' });
+    await Setting.findOneAndUpdate(
+      { key: 'wavespeed_api_key' },
+      { value: key, updatedAt: new Date() },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true, wavespeed: { connected: true, masked: maskKey(key) } });
+  } catch (e) {
+    console.error('[integrations] save error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// DELETE /admin/integrations/wavespeed — disconnect
+router.delete('/integrations/wavespeed', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    await Setting.deleteOne({ key: 'wavespeed_api_key' });
+    res.json({ success: true, wavespeed: { connected: false, masked: null } });
+  } catch (e) {
+    console.error('[integrations] delete error', e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });

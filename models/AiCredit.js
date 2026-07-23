@@ -27,6 +27,10 @@ const aiCreditSchema = new mongoose.Schema({
   anchorCostUsd: { type: Number, default: null },
   anchorAt: { type: Date, default: null },
 
+  // Cumulative cost of Lab reel renders (WaveSpeed video) since the anchor.
+  // Rolls into total spend alongside LLM cost. Reset on set-balance.
+  labCostUsd: { type: Number, default: 0 },
+
   // Warn when remaining falls at/below this many dollars.
   lowThresholdUsd: { type: Number, default: 10 },
 
