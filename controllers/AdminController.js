@@ -1245,4 +1245,99 @@ router.delete('/integrations/wavespeed', async (req, res) => {
   }
 });
 
+// ==================== LAB — WaveSpeed video render ====================
+// Uses the stored WaveSpeed key to generate footage clips. Async: submit
+// returns a task id; poll the status endpoint until the clip is ready.
+
+const WAVESPEED_BASE = 'https://api.wavespeed.ai/api/v3';
+
+async function wavespeedKey() {
+  const Setting = require('../models/Setting');
+  const ws = await Setting.findOne({ key: 'wavespeed_api_key' });
+  return ws && ws.value ? ws.value : null;
+}
+
+// POST /admin/lab/render { model, input, estUsd, note }
+// model  e.g. "bytedance/seedance-2.0/text-to-video"
+// input  the model's request body (prompt, aspect_ratio, duration, …)
+router.post('/lab/render', async (req, res) => {
+  try {
+    const key = await wavespeedKey();
+    if (!key) return res.status(400).json({ error: 'Connect your WaveSpeed key first (Lab → Connect).' });
+
+    const model = (req.body && req.body.model || '').toString().trim();
+    const input = (req.body && req.body.input) || {};
+    if (!model) return res.status(400).json({ error: 'Model slug required (e.g. bytedance/seedance-2.0/text-to-video)' });
+    if (!input.prompt) return res.status(400).json({ error: 'A prompt is required' });
+
+    const r = await fetch(`${WAVESPEED_BASE}/${model}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input)
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({ error: body.message || body.error || `WaveSpeed error ${r.status}`, detail: body });
+    }
+    const data = body.data || body;
+    const taskId = data.id;
+    if (!taskId) return res.status(502).json({ error: 'No task id returned', detail: body });
+
+    // Record an estimated cost so it rolls into total Clockwork cost.
+    const estUsd = Number(req.body && req.body.estUsd);
+    if (Number.isFinite(estUsd) && estUsd > 0) {
+      const AiCredit = require('../models/AiCredit');
+      let doc = await AiCredit.findOne({ key: 'global' });
+      if (!doc) doc = await AiCredit.create({ key: 'global' });
+      doc.labCostUsd = +((doc.labCostUsd || 0) + estUsd).toFixed(4);
+      doc.history.push({ type: 'load', amount: -estUsd, note: (req.body.note || 'Lab render: ' + model).toString().slice(0, 200), balanceAfter: null });
+      await doc.save();
+    }
+
+    res.json({ success: true, taskId, model });
+  } catch (e) {
+    console.error('[lab render] error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /admin/lab/render-status?id=<taskId> — poll a render job
+router.get('/lab/render-status', async (req, res) => {
+  try {
+    const key = await wavespeedKey();
+    if (!key) return res.status(400).json({ error: 'WaveSpeed key not connected' });
+    const id = (req.query.id || '').toString().trim();
+    if (!id) return res.status(400).json({ error: 'id required' });
+
+    const r = await fetch(`${WAVESPEED_BASE}/predictions/${id}/result`, {
+      headers: { 'Authorization': `Bearer ${key}` }
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(r.status).json({ error: body.message || `WaveSpeed error ${r.status}`, detail: body });
+    const data = body.data || body;
+    res.json({
+      success: true,
+      status: data.status,               // created | processing | completed | failed | …
+      outputs: data.outputs || [],
+      error: data.error || null
+    });
+  } catch (e) {
+    console.error('[lab render-status] error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /admin/lab/models — probe the account for a couple known model slugs
+// (best-effort; returns the canonical slugs we recommend)
+router.get('/lab/models', async (req, res) => {
+  res.json({
+    success: true,
+    recommended: [
+      { label: 'Seedance 2.0 (series)', slug: 'bytedance/seedance-2.0/text-to-video', tier: 'standard' },
+      { label: 'Seedance 2.0 image→video', slug: 'bytedance/seedance-2.0/image-to-video', tier: 'standard' },
+      { label: 'Veo 3.1 (hero, has audio)', slug: 'google/veo-3.1/text-to-video', tier: 'premium' }
+    ]
+  });
+});
+
 module.exports = router;
