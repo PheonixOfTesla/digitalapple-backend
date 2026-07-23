@@ -10,6 +10,38 @@ const SignalEntry = require('../models/SignalEntry');
 
 const router = express.Router();
 
+// Low-signal academic sources to keep out of the feed.
+const EXCLUDED_SOURCES = ['arXiv AI', 'arXiv ML'];
+
+// Fields a "college-genius" reader cares about, in surfacing priority. High-signal,
+// lower-volume genres lead so they aren't buried under high-volume tech / Hacker News
+// items. This is what makes the feed SPAN fields instead of showing 15 near-identical
+// tech posts: tech · markets · science · world · culture · policy · business.
+const GENRE_PRIORITY = ['markets', 'science', 'world', 'culture', 'policy', 'ai', 'tech', 'business', 'startup', 'general'];
+
+// Round-robin interleave a recency-sorted pool across genres. Within a genre items
+// stay newest-first; across genres they alternate so the top of the feed is a spread.
+// 'startup' (Hacker News dev-noise) is capped so it can't flood the feed.
+function balanceByGenre(pool, outLimit) {
+  const byCat = {};
+  for (const it of pool) { const c = it.category || 'general'; (byCat[c] = byCat[c] || []).push(it); }
+  const cats = [...new Set([...GENRE_PRIORITY, ...Object.keys(byCat)])].filter(c => byCat[c] && byCat[c].length);
+  const startupCap = Math.max(2, Math.ceil((outLimit || 20) * 0.18));
+  const out = []; let startupUsed = 0, moved = true;
+  while (moved) {
+    moved = false;
+    for (const c of cats) {
+      const arr = byCat[c];
+      if (!arr || !arr.length) continue;
+      if (c === 'startup' && startupUsed >= startupCap) continue;
+      out.push(arr.shift());
+      if (c === 'startup') startupUsed++;
+      moved = true;
+    }
+  }
+  return out;
+}
+
 // Get news feed (headlines + signal entries combined)
 router.get('/', async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -26,17 +58,23 @@ router.get('/', async (req, res) => {
       // Fetch headlines. Exclude low-signal academic sources so previously
       // aggregated arXiv jargon stops surfacing immediately (not just going
       // forward). Also drop the 'research' category and absurdly long titles.
-      const EXCLUDED_SOURCES = ['arXiv AI', 'arXiv ML'];
       const headlineQuery = {
         source: { $nin: EXCLUDED_SOURCES },
         category: { $ne: 'research' }
       };
       if (category) headlineQuery.category = category; // explicit filter overrides
-      const headlines = await NewsItem.find(headlineQuery)
+      // Pull a generous recent pool, then genre-balance it so the feed spans fields.
+      // An explicit category filter keeps straight recency within that field.
+      const wantHead = (type === 'headlines') ? (skip + limit) : (Math.floor(limit / 2) + 2);
+      const poolSize = category ? wantHead : Math.max(160, wantHead * 5);
+      const pool = await NewsItem.find(headlineQuery)
         .sort({ publishedAt: -1 })
-        .skip(type === 'headlines' ? skip : 0)
-        .limit(type === 'headlines' ? limit : Math.floor(limit / 2))
+        .limit(poolSize)
         .lean();
+      const ordered = category ? pool : balanceByGenre(pool, wantHead);
+      const headStart = (type === 'headlines') ? skip : 0;
+      const headTake = (type === 'headlines') ? limit : (Math.floor(limit / 2) + 2);
+      const headlines = ordered.slice(headStart, headStart + headTake);
 
       items = items.concat(headlines.map(h => ({
         id: h._id,
@@ -82,10 +120,20 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // If fetching both, sort by publishedAt and paginate
+    // If fetching both, PRESERVE the genre-balanced headline order and sprinkle in
+    // Signal (DigitalApple) entries — a plain recency re-sort would collapse the
+    // balance and let the highest-volume feed dominate again.
     if (!type) {
-      items.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-      items = items.slice(0, limit);
+      const heads = items.filter(i => i.origin === 'aggregated');
+      const sigs = items.filter(i => i.origin === 'signal');
+      const merged = [];
+      let si = 0;
+      for (let hi = 0; hi < heads.length; hi++) {
+        merged.push(heads[hi]);
+        if ((hi + 1) % 4 === 0 && si < sigs.length) merged.push(sigs[si++]); // a Signal every ~4
+      }
+      while (si < sigs.length) merged.push(sigs[si++]);
+      items = merged.slice(0, limit);
 
       const headlineCountQuery = category
         ? { category }

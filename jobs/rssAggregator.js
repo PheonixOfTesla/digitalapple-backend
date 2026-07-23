@@ -31,9 +31,17 @@ const RSS_FEEDS = [
 
   // Science — high-signal, mind-blowing, plain-language
   { url: 'https://www.quantamagazine.org/feed/', source: 'Quanta', category: 'science' },
+  { url: 'https://feeds.bbci.co.uk/news/science_and_environment/rss.xml', source: 'BBC Science', category: 'science' },
 
-  // Markets / business
+  // Markets / business / stocks
   { url: 'https://www.cnbc.com/id/10000664/device/rss/rss.html', source: 'CNBC Markets', category: 'markets' },
+  { url: 'https://feeds.bbci.co.uk/news/business/rss.xml', source: 'BBC Business', category: 'business' },
+
+  // World & geopolitics
+  { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', source: 'BBC World', category: 'world' },
+
+  // Culture & notable people (arts, entertainment, public figures — royals, etc.)
+  { url: 'https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml', source: 'BBC Culture', category: 'culture' },
 
   // Policy
   { url: 'https://www.politico.com/rss/technology.xml', source: 'Politico Tech', category: 'policy' },
