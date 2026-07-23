@@ -85,7 +85,9 @@ const SCIENCE = [
   'How the theory of relativity changed physics', 'How viruses hijack cells', 'How the moon landing was pulled off'
 ];
 
-const CULTURE_ANGLES = ['How did {x} get famous', 'How did {x} build their empire', 'How did {x} make their money'];
+// Real named individuals. NO LONGER used to build seed premises (excluded for
+// legal safety — see buildTopicPool). Retained only as the match list for the
+// admin purge that unpublishes any real-person seed maps already in the Atlas.
 const PEOPLE = [
   'Drake', 'MrBeast', 'Taylor Swift', 'Beyoncé', 'Michael Jordan', 'Elon Musk', 'Steve Jobs', 'Rihanna', 'Kanye West',
   'LeBron James', 'Oprah', 'Jeff Bezos', 'Kim Kardashian', 'Cristiano Ronaldo', 'Travis Scott', 'SZA', 'Bad Bunny',
@@ -280,7 +282,7 @@ const HEALTH_SUBJECTS = [
 const SPORTS = [
   'How the NBA became a global business', 'How athletes make money off the court', 'How Formula 1 exploded in popularity',
   'How an NFL team builds a dynasty', 'How the Premier League got so rich', 'How sports agents make deals', 'How the Olympics got so commercial',
-  'How college sports recruiting works', 'How esports became a billion-dollar industry', 'How Nike signed Michael Jordan',
+  'How college sports recruiting works', 'How esports became a billion-dollar industry',
   'How sports betting actually works', 'How fantasy sports took off', 'How teams use analytics to win', 'How the World Cup became the biggest event',
   'How boxers negotiate purses', 'How LIV Golf disrupted the PGA', 'How an athlete builds a personal brand', 'How the WNBA grew its audience',
   'How leagues negotiate TV deals', 'How soccer academies develop stars', 'How the UFC built the MMA business', 'How NIL deals pay college athletes',
@@ -359,7 +361,11 @@ function buildTopicPool() {
   CAREER_ANGLES.forEach(a => CAREER_FIELDS.forEach(f => add(`${a} ${f}`, 'career')));
   MONEY_SUBJECTS.forEach(s => { add(`How ${s} actually works`, 'other'); add(`How to start investing in ${s}`, 'other'); add(`The real risks of ${s}`, 'other'); });
   SCIENCE.forEach(s => add(s, 'other'));
-  CULTURE_ANGLES.forEach(a => PEOPLE.forEach(p => add(a.replace('{x}', p), 'other')));
+  // NOTE: named-real-person premises (e.g. "How did <person> make their money")
+  // are intentionally EXCLUDED. AI-generated maps about a real living individual's
+  // wealth/fame invite fabricated factual claims about that person — a legal risk
+  // (defamation / false light / right of publicity). Company questions below are
+  // accurate, well-documented public business history, so they stay.
   COMPANIES.forEach(c => add(c, 'other'));
   COLLEGE.forEach(c => add(c, 'career'));
   PRODUCTS.forEach(p => add(`How to build ${p}`, 'product'));
@@ -369,7 +375,7 @@ function buildTopicPool() {
   CAREER_ANGLES.forEach(a => CAREER_FIELDS2.forEach(f => add(`${a} ${f}`, 'career')));
   MONEY2.forEach(s => { add(`How ${s} actually works`, 'other'); add(`Is ${s} worth it for a beginner`, 'other'); });
   SCIENCE2.forEach(s => add(s, 'other'));
-  CULTURE_ANGLES.forEach(a => PEOPLE2.forEach(p => add(a.replace('{x}', p), 'other')));
+  // named-real-person premises excluded (see note above)
   COMPANIES2.forEach(c => add(c, 'other'));
   HISTORY_PATTERNS.forEach(pt => HISTORY_EVENTS.forEach(e => add(pt.replace('{x}', e), 'other')));
   PSYCHOLOGY.forEach(s => add(s, 'other'));
@@ -379,9 +385,8 @@ function buildTopicPool() {
   GAMING.forEach(s => add(s, 'other'));
   SKILLS_PATTERNS.forEach(pt => SKILLS.forEach(s => add(pt.replace('{x}', s), 'other')));
   PHILOSOPHY.forEach(s => add(s, 'other'));
-  // Extra angles to comfortably clear 3000 unique
-  ['What made {x} successful', 'The rise of {x}'].forEach(a =>
-    [...PEOPLE, ...PEOPLE2].forEach(p => add(a.replace('{x}', p), 'other')));
+  // Extra non-person angles to keep the pool deep (real-person "rise of / what made
+  // {person} successful" angles removed — same fabrication risk as above).
   [...MONEY_SUBJECTS, ...MONEY2].forEach(s => add(`How to think about ${s} as a beginner investor`, 'other'));
   return out;
 }
@@ -1156,7 +1161,36 @@ async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {
   return { created, failed, total: currentTotal + created };
 }
 
-module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo, getCurrentAtlasCount };
+// Combined list of real names whose seed maps should be purged from the Atlas.
+const REAL_PERSON_NAMES = [...new Set([...PEOPLE, ...PEOPLE2])];
+
+/**
+ * Soft-unpublish seed maps that are about a real named individual (title/description
+ * contains one of the excluded names). Reversible: only sets unpublishedAt, does not
+ * delete. Returns { matched, unpublished, names }.
+ */
+async function purgePersonSeeds({ dryRun = false } = {}) {
+  // Word-boundary regex per name, escaped. Only touch Clockwork seed maps still live.
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ors = REAL_PERSON_NAMES.map(n => ({ $or: [
+    { title: { $regex: `\\b${esc(n)}\\b`, $options: 'i' } },
+    { description: { $regex: `\\b${esc(n)}\\b`, $options: 'i' } }
+  ] }));
+  const query = { isSeed: true, unpublishedAt: null, $or: ors.flatMap(o => o.$or) };
+  const matches = await SharedMap.find(query).select('_id title').lean();
+  if (dryRun) return { matched: matches.length, unpublished: 0, sample: matches.slice(0, 10).map(m => m.title) };
+  let unpublished = 0;
+  if (matches.length) {
+    const r = await SharedMap.updateMany(
+      { _id: { $in: matches.map(m => m._id) } },
+      { $set: { unpublishedAt: new Date() } }
+    );
+    unpublished = r.modifiedCount || r.nModified || matches.length;
+  }
+  return { matched: matches.length, unpublished, sample: matches.slice(0, 10).map(m => m.title) };
+}
+
+module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo, getCurrentAtlasCount, purgePersonSeeds, REAL_PERSON_NAMES };
 
 // Allow running directly: node jobs/seedMaps.js
 if (require.main === module) {

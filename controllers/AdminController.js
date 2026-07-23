@@ -799,4 +799,29 @@ router.get('/atlas/backfill/status', (req, res) => {
   res.json({ state: backfillState });
 });
 
+// Purge real-person seed maps from the Atlas (legal safety). Reversible (soft
+// unpublish). GET ?dryRun=1 to preview counts without changing anything.
+// POST to actually unpublish.
+router.get('/atlas/purge-people', async (req, res) => {
+  try {
+    const { purgePersonSeeds } = require('../jobs/seedMaps');
+    const result = await purgePersonSeeds({ dryRun: true });
+    res.json({ success: true, dryRun: true, ...result });
+  } catch (e) {
+    console.error('[purge-people] preview error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+router.post('/atlas/purge-people', async (req, res) => {
+  try {
+    const { purgePersonSeeds } = require('../jobs/seedMaps');
+    const result = await purgePersonSeeds({ dryRun: false });
+    console.log('[purge-people] done', result.unpublished, 'unpublished of', result.matched);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('[purge-people] error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
