@@ -824,4 +824,18 @@ router.post('/atlas/purge-people', async (req, res) => {
   }
 });
 
+// Generate Wikipedia-sourced, genre-spanning signals into the news feed on demand.
+// POST /admin/news/generate-signals  { limit? }
+router.post('/news/generate-signals', async (req, res) => {
+  try {
+    const limit = Math.min(60, Math.max(1, parseInt(req.body && req.body.limit) || 24));
+    const { generateSignals } = require('../jobs/signalGenerator');
+    const result = await generateSignals({ limit });
+    res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('[generate-signals] error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;

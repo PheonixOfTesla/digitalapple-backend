@@ -135,4 +135,23 @@ async function retrieveContext(premise, { maxChars = 2800 } = {}) {
   }
 }
 
-module.exports = { retrieveContext, extractSubject };
+/**
+ * Lightweight card for a subject — used to aggregate genre-spanning "signals"
+ * from our topic picker into the news feed, each with a real Wikipedia citation.
+ * Returns { title, summary, url } or null.
+ */
+async function retrieveCard(subject) {
+  try {
+    if (!subject || subject.length < 2) return null;
+    const title = await searchTitle(subject);
+    if (!title) return null;
+    const s = await getSummary(title);
+    if (!s) return null;
+    const summary = (s.extract || '').split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').slice(0, 240).trim();
+    return { title: s.title, summary, url: s.url };
+  } catch (e) {
+    return null;
+  }
+}
+
+module.exports = { retrieveContext, retrieveCard, extractSubject };

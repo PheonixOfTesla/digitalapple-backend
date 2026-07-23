@@ -656,6 +656,18 @@ app.listen(PORT, () => {
   });
   console.log('RSS Aggregation: Scheduled (hourly)');
 
+  // Schedule Wikipedia-sourced signal generation - 2x daily (spans genres reliably)
+  cron.schedule('0 9,21 * * *', async () => {
+    console.log('[CRON] Generating Wikipedia signals...');
+    try {
+      const { generateSignals } = require('./jobs/signalGenerator');
+      await generateSignals({ limit: 24 });
+    } catch (error) {
+      console.error('[CRON] Signal generation failed:', error.message);
+    }
+  });
+  console.log('Signal Generation: Scheduled (9am, 9pm UTC)');
+
   // Schedule seed map generation - 3x daily at 8am, 2pm, 8pm UTC
   cron.schedule('0 8,14,20 * * *', async () => {
     console.log('[CRON] Running seed map generation...');

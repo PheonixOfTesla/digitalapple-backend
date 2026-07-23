@@ -17,7 +17,7 @@ const EXCLUDED_SOURCES = ['arXiv AI', 'arXiv ML'];
 // lower-volume genres lead so they aren't buried under high-volume tech / Hacker News
 // items. This is what makes the feed SPAN fields instead of showing 15 near-identical
 // tech posts: tech · markets · science · world · culture · policy · business.
-const GENRE_PRIORITY = ['markets', 'science', 'world', 'culture', 'policy', 'ai', 'tech', 'business', 'startup', 'general'];
+const GENRE_PRIORITY = ['markets', 'science', 'world', 'history', 'culture', 'ideas', 'health', 'sports', 'tech', 'ai', 'business', 'policy', 'gaming', 'startup', 'general'];
 
 // Round-robin interleave a recency-sorted pool across genres. Within a genre items
 // stay newest-first; across genres they alternate so the top of the feed is a spread.

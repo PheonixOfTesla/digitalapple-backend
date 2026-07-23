@@ -33,8 +33,8 @@ const RSS_FEEDS = [
   { url: 'https://www.quantamagazine.org/feed/', source: 'Quanta', category: 'science' },
   { url: 'https://feeds.bbci.co.uk/news/science_and_environment/rss.xml', source: 'BBC Science', category: 'science' },
 
-  // Markets / business / stocks
-  { url: 'https://www.cnbc.com/id/10000664/device/rss/rss.html', source: 'CNBC Markets', category: 'markets' },
+  // Markets / business / stocks (BBC works; CNBC 403s and Politico 404s from
+  // servers, so they're dropped — the Wikipedia signal generator covers markets)
   { url: 'https://feeds.bbci.co.uk/news/business/rss.xml', source: 'BBC Business', category: 'business' },
 
   // World & geopolitics
@@ -42,9 +42,6 @@ const RSS_FEEDS = [
 
   // Culture & notable people (arts, entertainment, public figures — royals, etc.)
   { url: 'https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml', source: 'BBC Culture', category: 'culture' },
-
-  // Policy
-  { url: 'https://www.politico.com/rss/technology.xml', source: 'Politico Tech', category: 'policy' },
 
   // Startup / cross-genre high-signal (front page — tech, science, culture)
   { url: 'https://news.ycombinator.com/rss', source: 'Hacker News', category: 'startup' }

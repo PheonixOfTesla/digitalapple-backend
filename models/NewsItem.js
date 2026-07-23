@@ -42,10 +42,14 @@ const newsItemSchema = new mongoose.Schema({
     default: Date.now
   },
 
-  // Category for filtering
+  // Category / field for filtering + genre balancing. Spans the "college-genius"
+  // fields (was ['ai','tech','startup','policy','research'] — which silently
+  // rejected every science/markets/world/culture item, leaving the feed ai-only).
   category: {
     type: String,
-    enum: ['ai', 'tech', 'startup', 'policy', 'research'],
+    enum: ['ai', 'tech', 'startup', 'policy', 'research',
+           'science', 'markets', 'world', 'culture', 'business',
+           'sports', 'history', 'health', 'ideas', 'gaming'],
     default: 'ai',
     index: true
   },
