@@ -11,6 +11,7 @@
 const { classifyPremise } = require('./blueprintClassify');
 const { loadFrame, buildNebulaFrameInput } = require('./frameLoader');
 const { generateFramedNebula, judgeNodeTerminal } = require('./blueprintNebula');
+const { retrieveContext } = require('./retrieval');
 const Project = require('../models/Project');
 const OrphanLog = require('../models/OrphanLog');
 
@@ -34,6 +35,17 @@ async function generateMap(premise, projectId) {
   const determination = classification.determination === 'overview' ? 'overview' : 'actionable';
   console.log(`[Blueprint] Determination: ${determination}`);
 
+  // Grounding: overview (factual) maps assert claims about real subjects, which is
+  // where the model tends to fabricate figures/dates. Retrieve a real source so
+  // those claims come from cited text, not the model's imagination. Best-effort:
+  // failure just proceeds ungrounded (the prompt then forbids unsourced specifics).
+  let grounding = null;
+  if (determination === 'overview') {
+    try { grounding = await retrieveContext(premise); } catch (e) { grounding = null; }
+    if (grounding) console.log(`[Blueprint] Grounded on ${grounding.source.url}`);
+    else console.log('[Blueprint] No grounding source found — specifics will be qualified');
+  }
+
   // 3. Store classification on project
   if (projectId) {
     await Project.findByIdAndUpdate(projectId, {
@@ -44,8 +56,8 @@ async function generateMap(premise, projectId) {
     });
   }
 
-  // 4. Build nebula input with frame context + determination
-  const frameInput = buildNebulaFrameInput(frame, premise, determination);
+  // 4. Build nebula input with frame context + determination + grounding
+  const frameInput = buildNebulaFrameInput(frame, premise, determination, grounding);
 
   // 5. Generate the map
   const map = await generateFramedNebula(frameInput);
@@ -60,6 +72,8 @@ async function generateMap(premise, projectId) {
   };
   map.frameMeta = meta;
   map.determination = determination;
+  // Real citation for the map (used by the SharedMap.source field on publish/seed).
+  if (grounding && grounding.source) map.source = grounding.source;
 
   // 6. Log orphans, straddles, and low-confidence for review
   if (meta.usedFallback || meta.isStraddle || classification.confidence < 0.7) {

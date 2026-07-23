@@ -1069,8 +1069,11 @@ async function createSeedMap(user, topic) {
     ownerHandle: 'clockwork',
     ownerAvatar: null,
     isSeed: true,
-    // Real credit only — populated for news-derived seeds, empty for pool topics.
-    source: (topic && topic.source && (topic.source.name || topic.source.url)) ? topic.source : undefined
+    // Real citation: prefer the grounding source the engine actually used (Wikipedia
+    // for overview/factual maps), then any news-derived topic source. Empty otherwise.
+    source: (framedMap && framedMap.source && (framedMap.source.name || framedMap.source.url))
+      ? framedMap.source
+      : ((topic && topic.source && (topic.source.name || topic.source.url)) ? topic.source : undefined)
   });
 
   await sharedMap.save();

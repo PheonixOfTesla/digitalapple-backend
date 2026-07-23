@@ -62,11 +62,12 @@ function loadFrame(classification) {
  * @param {string} premise - the premise text
  * @param {'actionable'|'overview'} determination - what the map resolves toward
  */
-function buildNebulaFrameInput(frame, premise, determination = 'actionable') {
+function buildNebulaFrameInput(frame, premise, determination = 'actionable', grounding = null) {
   return {
     premise,
     frameType: frame.label,
     determination,
+    grounding: grounding || null,
     stagesEnabled: frame.stagesEnabled,
     roots: frame.roots.map(r => ({
       frameId: r.key,           // Internal ID for matching - model echoes this back

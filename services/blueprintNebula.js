@@ -90,16 +90,31 @@ Examples of the target grade:
 
 ── If determination = "overview" ──
 The premise asks what's TRUE, not what to do. Stars must resolve to EVIDENCED FINDINGS —
-specific claims backed by figures, names, dates, and mechanisms. Do NOT write action steps.
-Include:
-- Figures: dollar amounts, percentages, magnitudes ("$300M+ across the Pacquiao and McGregor bouts")
-- Named entities & dates: real people, deals, years ("the 2015 Pacquiao fight", "Al Haymon", "TMT Promotions")
-- Mechanism: WHY/HOW it worked ("kept the promoter's cut by self-promoting under Mayweather Promotions")
+specific claims about mechanisms and structure. Do NOT write action steps.
 
-Examples of the target grade (overview):
-- "Pay-per-view was the engine: the 2015 Pacquiao bout sold ~4.6M PPV buys at ~$100 each, ~$400M+ gross."
-- "He self-promoted under Mayweather Promotions after 2007, capturing the promoter's cut instead of paying Top Rank."
-- "Purse-bid leverage: by controlling his own promotion he negotiated 60-70% splits, not a fighter's usual share."
+SOURCING RULES (critical — this is factual content about real subjects):
+- The input may include "sourceText" (a real reference excerpt) and "sourceName".
+- If sourceText IS present: state figures, dates, names, and specific events ONLY if they
+  appear in sourceText. You may paraphrase and explain mechanisms, but do NOT introduce any
+  specific number, dollar amount, date, or named deal that is not in sourceText. When you use
+  a fact from it, that fact is attributable to sourceName.
+- If sourceText is NOT present (null): do NOT assert specific figures, dollar amounts, exact
+  dates, or named deals as fact — you have no source for them and must not invent them. Instead
+  describe the mechanism qualitatively and, where a number would go, either omit it or clearly
+  qualify it as illustrative ("typically", "a large share", "reportedly"). Never fabricate a
+  precise statistic or a fake citation.
+
+Include (grounded in sourceText when present):
+- Mechanism: WHY/HOW it worked (the structural explanation — safe to reason about)
+- Named entities & dates ONLY from the source
+- Figures ONLY from the source
+
+Examples of the target grade (overview), when the source supports them:
+- "Pay-per-view was the engine: the source notes the Pacquiao bout drove record PPV buys."
+- "He captured the promoter's cut by self-promoting under his own promotion company (per source)."
+- "Structurally, controlling his own promotion let him keep splits a contracted fighter wouldn't."
+Without a source, keep it qualitative: "The bulk of the earnings came from pay-per-view economics
+and self-promotion, rather than a fighter's standard purse."
 
 FORBIDDEN (both modes):
 - "Handle the operations dimension" — that's a category, not content
@@ -403,6 +418,9 @@ async function generateContentParallel(frameInput, skeleton, retries) {
       contentInput: {
         premise,
         determination: frameInput.determination === 'overview' ? 'overview' : 'actionable',
+        // Real source text to ground factual claims on (null when ungrounded).
+        sourceText: frameInput.grounding ? frameInput.grounding.text : null,
+        sourceName: frameInput.grounding ? frameInput.grounding.source.name : null,
         root: {
           frameId: skeletonRoot.frameId,
           label: frameRoot.label || skeletonRoot.label,
