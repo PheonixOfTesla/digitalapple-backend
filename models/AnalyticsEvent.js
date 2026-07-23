@@ -17,8 +17,17 @@ const analyticsEventSchema = new mongoose.Schema({
   // Page path
   path: String,
 
-  // Referrer
+  // Referrer (raw)
   referrer: String,
+
+  // Classified traffic source: instagram, snapchat, tiktok, google, facebook,
+  // twitter, reddit, youtube, discord, direct, internal, other …
+  source: { type: String, index: true },
+
+  // UTM params (from campaign links)
+  utmSource: String,
+  utmMedium: String,
+  utmCampaign: String,
 
   // User agent (for detecting device type)
   userAgent: String,

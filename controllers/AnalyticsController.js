@@ -7,8 +7,42 @@ const router = express.Router();
 // ==================== PUBLIC TRACKING ====================
 
 // Track an event (no auth required)
+// Classify a referrer / utm_source into a traffic source bucket.
+function classifySource(referrer, utmSource) {
+  const u = (utmSource || '').toLowerCase().trim();
+  if (u) {
+    if (/insta|ig\b/.test(u)) return 'instagram';
+    if (/snap/.test(u)) return 'snapchat';
+    if (/tiktok|tt\b/.test(u)) return 'tiktok';
+    if (/google|adwords|gads|gclid/.test(u)) return 'google';
+    if (/face|^fb$/.test(u)) return 'facebook';
+    if (/twitter|^x$/.test(u)) return 'twitter';
+    if (/reddit/.test(u)) return 'reddit';
+    if (/youtube|^yt$/.test(u)) return 'youtube';
+    if (/discord/.test(u)) return 'discord';
+    if (/linkedin/.test(u)) return 'linkedin';
+    return u.replace(/[^a-z0-9_-]/g, '').slice(0, 20) || 'other';
+  }
+  const r = (referrer || '').toLowerCase();
+  if (!r) return 'direct';
+  if (/instagram\.com|l\.instagram/.test(r)) return 'instagram';
+  if (/snapchat|snpc/.test(r)) return 'snapchat';
+  if (/tiktok/.test(r)) return 'tiktok';
+  if (/(^|\.)google\./.test(r)) return 'google';
+  if (/facebook\.com|fb\.com|l\.facebook|m\.facebook/.test(r)) return 'facebook';
+  if (/twitter\.com|t\.co|(^|\.)x\.com/.test(r)) return 'twitter';
+  if (/reddit\.com/.test(r)) return 'reddit';
+  if (/youtube\.com|youtu\.be/.test(r)) return 'youtube';
+  if (/discord/.test(r)) return 'discord';
+  if (/bing\.com/.test(r)) return 'bing';
+  if (/duckduckgo/.test(r)) return 'duckduckgo';
+  if (/linkedin/.test(r)) return 'linkedin';
+  if (/theclockworkhub|digitalapple/.test(r)) return 'internal';
+  return 'other';
+}
+
 router.post('/track', async (req, res) => {
-  const { event, app, path, referrer, standalone, sessionId } = req.body;
+  const { event, app, path, referrer, standalone, sessionId, utmSource, utmMedium, utmCampaign } = req.body;
 
   if (!event) {
     return res.status(400).json({ error: 'Event name required' });
@@ -31,11 +65,16 @@ router.post('/track', async (req, res) => {
   }
 
   try {
+    const ref = referrer || req.headers.referer || null;
     const analyticsEvent = new AnalyticsEvent({
       event,
       app: app || null,
       path: path || req.headers.referer || null,
-      referrer: referrer || req.headers.referer || null,
+      referrer: ref,
+      source: classifySource(ref, utmSource),
+      utmSource: utmSource || null,
+      utmMedium: utmMedium || null,
+      utmCampaign: utmCampaign || null,
       userAgent: req.headers['user-agent'] || null,
       sessionId: sessionId || null,
       standalone: standalone === true
@@ -106,6 +145,29 @@ router.get('/stats', verifyToken, requireAdmin, async (req, res) => {
       AnalyticsEvent.countDocuments({ event: 'creator_click', createdAt: { $gte: monthAgo } })
     ]);
 
+    // Traffic-source breakdown — where visitors come from (Instagram, Snapchat,
+    // Google, etc.) over the last 30 days. Grouped by classified `source`, with
+    // both raw views and unique-session visitors per source.
+    const sourceAgg = await AnalyticsEvent.aggregate([
+      { $match: { event: 'page_view', createdAt: { $gte: monthAgo } } },
+      { $group: {
+        _id: { $ifNull: ['$source', 'other'] },
+        views: { $sum: 1 },
+        sessions: { $addToSet: '$sessionId' }
+      } },
+      { $project: {
+        _id: 0,
+        source: '$_id',
+        views: 1,
+        visitors: {
+          $size: {
+            $filter: { input: '$sessions', as: 's', cond: { $ne: ['$$s', null] } }
+          }
+        }
+      } },
+      { $sort: { views: -1 } }
+    ]);
+
     res.json({
       success: true,
       traffic: {
@@ -114,6 +176,7 @@ router.get('/stats', verifyToken, requireAdmin, async (req, res) => {
         month: { views: monthViews, visitors: monthVisitors }
       },
       apps: appStats,
+      sources: sourceAgg,
       social: {
         discord_clicks: discordClicks,
         instagram_clicks: instagramClicks,
