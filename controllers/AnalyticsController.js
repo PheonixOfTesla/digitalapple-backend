@@ -1,6 +1,7 @@
 const express = require('express');
 const AnalyticsEvent = require('../models/AnalyticsEvent');
 const NebulaLog = require('../models/NebulaLog');
+const realtime = require('../services/realtime');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
@@ -82,6 +83,9 @@ router.post('/track', async (req, res) => {
     });
 
     await analyticsEvent.save();
+
+    // Push to any connected admin dashboards (fire-and-forget).
+    realtime.emitAnalytics(analyticsEvent);
 
     res.json({ success: true });
 

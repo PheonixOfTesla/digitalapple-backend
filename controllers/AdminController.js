@@ -6,6 +6,7 @@ const SignalEntry = require('../models/SignalEntry');
 const Application = require('../models/Application');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 const { upload, cloudinary } = require('../config/cloudinary');
+const realtime = require('../services/realtime');
 
 const router = express.Router();
 
@@ -785,11 +786,24 @@ router.post('/atlas/backfill', async (req, res) => {
   }
 
   backfillState = { running: true, target, created: 0, failed: 0, need: 0, total: 0, startedAt: new Date(), finishedAt: null, error: null };
+  realtime.adminEmit('atlas:progress', backfillState);
 
   // Fire-and-forget: do NOT await — return immediately, run in the background.
-  backfillTo(target, { onProgress: (p) => { Object.assign(backfillState, p); } })
-    .then((r) => { Object.assign(backfillState, r, { running: false, finishedAt: new Date() }); console.log('[atlas-backfill] done', r); })
-    .catch((e) => { backfillState.running = false; backfillState.finishedAt = new Date(); backfillState.error = e.message; console.error('[atlas-backfill] error', e.message); });
+  backfillTo(target, { onProgress: (p) => {
+    Object.assign(backfillState, p);
+    // Live-push each map as it lands so the admin sees the Atlas filling.
+    realtime.adminEmit('atlas:progress', backfillState);
+  } })
+    .then((r) => {
+      Object.assign(backfillState, r, { running: false, finishedAt: new Date() });
+      console.log('[atlas-backfill] done', r);
+      realtime.adminEmit('atlas:done', backfillState);
+    })
+    .catch((e) => {
+      backfillState.running = false; backfillState.finishedAt = new Date(); backfillState.error = e.message;
+      console.error('[atlas-backfill] error', e.message);
+      realtime.adminEmit('atlas:done', backfillState);
+    });
 
   res.json({ started: true, state: backfillState });
 });

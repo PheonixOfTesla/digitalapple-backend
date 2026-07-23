@@ -1558,16 +1558,30 @@ router.post('/nebula', optionalAuth, async (req, res) => {
 
     // Durable creation record for the admin nebula tracker (best-effort —
     // never let logging affect the user's response).
+    const nebTitle = (nebula.core?.title || project.name || premise).slice(0, 200);
+    const nebType = nebula.classification?.type || updatedProject?.blueprint?.classification?.type || 'unknown';
     NebulaLog.create({
       creatorType: req.userId ? 'registered' : 'anonymous',
       ownerId: req.userId || null,
       anonymousSessionId: req.userId ? null : (req.anonymousSessionId || null),
       projectId: project._id,
       premise: premise.slice(0, 1000),
-      title: (nebula.core?.title || project.name || premise).slice(0, 200),
-      classificationType: nebula.classification?.type || updatedProject?.blueprint?.classification?.type || 'unknown',
+      title: nebTitle,
+      classificationType: nebType,
       determination: nebula.determination || 'actionable'
     }).catch((e) => console.error('NebulaLog write failed:', e.message));
+
+    // Live-push to admin dashboards (row shape matches GET /analytics/nebulas).
+    realtime.emitNebula({
+      creatorType: req.userId ? 'registered' : 'anonymous',
+      who: req.userId ? (req.userEmail || 'registered user') : 'anonymous',
+      title: nebTitle,
+      premise: premise.slice(0, 1000),
+      type: nebType,
+      forked: false,
+      forkedFromTitle: null,
+      createdAt: new Date().toISOString()
+    });
 
     res.json({
       success: true,

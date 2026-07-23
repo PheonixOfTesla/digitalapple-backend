@@ -19,6 +19,7 @@ const Edge = require('../models/Edge');
 const Core = require('../models/Core');
 const User = require('../models/User');
 const NebulaLog = require('../models/NebulaLog');
+const realtime = require('../services/realtime');
 const { verifyToken } = require('../middleware/auth');
 const rateLimit = require('express-rate-limit');
 const identity = require('../services/identity');
@@ -375,16 +376,29 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
     );
 
     // Durable creation record for the admin nebula tracker (best-effort).
+    const forkTitle = `Fork of: ${map.title}`.slice(0, 200);
     NebulaLog.create({
       creatorType: 'registered',
       ownerId: userId,
       projectId: project._id,
       premise: (map.description || '').slice(0, 1000),
-      title: `Fork of: ${map.title}`.slice(0, 200),
+      title: forkTitle,
       classificationType: 'fork',
       forked: true,
       forkedFromTitle: map.title
     }).catch((e) => console.error('NebulaLog (fork) write failed:', e.message));
+
+    // Live-push to admin dashboards.
+    realtime.emitNebula({
+      creatorType: 'registered',
+      who: (user && user.email) || 'registered user',
+      title: forkTitle,
+      premise: (map.description || '').slice(0, 1000),
+      type: 'fork',
+      forked: true,
+      forkedFromTitle: map.title,
+      createdAt: new Date().toISOString()
+    });
 
     res.json({
       success: true,
