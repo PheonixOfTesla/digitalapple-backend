@@ -758,15 +758,34 @@ let backfillState = {
   startedAt: null, finishedAt: null, error: null
 };
 
-// Start (or report already-running). POST /admin/atlas/backfill { target }
+// Start (or report already-running).
+// POST /admin/atlas/backfill { target } -> generate until the Atlas holds `target` maps
+// POST /admin/atlas/backfill { add }    -> generate `add` MORE maps on top of the current total
+// `add` wins if both are present. This makes "seed 10 more" behave intuitively even when
+// the Atlas already has maps (a plain `target` of 10 would create 0 when 11 already exist).
 router.post('/atlas/backfill', async (req, res) => {
-  const target = Math.min(5000, Math.max(1, parseInt(req.body && req.body.target) || 3000));
+  const body = req.body || {};
+  const addRaw = parseInt(body.add);
+  const useAdd = Number.isFinite(addRaw) && addRaw > 0;
+
   if (backfillState.running) {
     return res.json({ started: false, alreadyRunning: true, state: backfillState });
   }
+
+  const { backfillTo, getCurrentAtlasCount } = require('../jobs/seedMaps');
+
+  let target;
+  if (useAdd) {
+    // Resolve the current total now so `add` means "this many NEW maps".
+    let current = 0;
+    try { current = await getCurrentAtlasCount(); } catch (e) { /* fall back to 0 */ }
+    target = Math.min(5000, current + Math.min(5000, addRaw));
+  } else {
+    target = Math.min(5000, Math.max(1, parseInt(body.target) || 3000));
+  }
+
   backfillState = { running: true, target, created: 0, failed: 0, need: 0, total: 0, startedAt: new Date(), finishedAt: null, error: null };
 
-  const { backfillTo } = require('../jobs/seedMaps');
   // Fire-and-forget: do NOT await — return immediately, run in the background.
   backfillTo(target, { onProgress: (p) => { Object.assign(backfillState, p); } })
     .then((r) => { Object.assign(backfillState, r, { running: false, finishedAt: new Date() }); console.log('[atlas-backfill] done', r); })

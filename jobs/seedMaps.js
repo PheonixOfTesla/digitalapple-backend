@@ -1114,6 +1114,10 @@ async function runOnce() {
  * against existing maps. Batched (<=3 concurrent, Moonshot's limit).
  * Calls onProgress({ created, failed, need, total }) as it goes.
  */
+async function getCurrentAtlasCount() {
+  return SharedMap.countDocuments({ unpublishedAt: null });
+}
+
 async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {}) {
   const user = await getClockworkUser();
   const currentTotal = await SharedMap.countDocuments({ unpublishedAt: null });
@@ -1142,7 +1146,7 @@ async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {
   return { created, failed, total: currentTotal + created };
 }
 
-module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo };
+module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo, getCurrentAtlasCount };
 
 // Allow running directly: node jobs/seedMaps.js
 if (require.main === module) {
