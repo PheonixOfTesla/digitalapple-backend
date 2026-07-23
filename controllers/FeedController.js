@@ -311,6 +311,23 @@ router.get('/my-reviews', verifyToken, async (req, res) => {
 // ============================================================
 
 // GET /feed/maps/public - Public shared maps feed
+// GET /feed/stats - exact public-map counts for the live homepage counter.
+// Total is authoritative; "today" is a true count (not a sampled estimate).
+router.get('/stats', async (req, res) => {
+  try {
+    const base = { visibility: 'public', publishedAt: { $ne: null }, unpublishedAt: null };
+    const since = new Date(Date.now() - 86400000);
+    const [total, today] = await Promise.all([
+      SharedMap.countDocuments(base),
+      SharedMap.countDocuments({ ...base, publishedAt: { $gte: since } })
+    ]);
+    res.json({ success: true, total, today });
+  } catch (err) {
+    console.error('Feed stats error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load stats' });
+  }
+});
+
 router.get('/maps/public', optionalAuth, async (req, res) => {
   try {
     const {
