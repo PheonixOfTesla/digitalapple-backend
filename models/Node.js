@@ -10,6 +10,22 @@
 
 const mongoose = require('mongoose');
 
+/**
+ * Coerce an LLM-supplied confidence basis into the allowed enum.
+ * Providers frequently return prose like "inferred from local market trends"
+ * instead of a bare enum value, which fails Mongoose validation and 500s the
+ * whole generation. Map any such string to the closest enum keyword.
+ */
+function normalizeBasis(v) {
+  if (v == null) return 'unknown';
+  const s = String(v).toLowerCase();
+  if (s.includes('confirm')) return 'confirmed';
+  if (s.includes('stat')) return 'stated';                       // "stated", "from user statement"
+  if (s.includes('infer') || s.includes('estimat') || s.includes('assum') || s.includes('deriv')) return 'inferred';
+  if (s.includes('unknown') || s.includes('unclear') || s.includes('n/a')) return 'unknown';
+  return 'inferred'; // provider gave *some* basis → treat as inferred, not dormant
+}
+
 const nodeSchema = new mongoose.Schema({
   // Which project this belongs to
   projectId: {
@@ -156,7 +172,8 @@ const nodeSchema = new mongoose.Schema({
     basis: {
       type: String,
       enum: ['stated', 'inferred', 'unknown', 'confirmed'],
-      default: 'unknown'
+      default: 'unknown',
+      set: normalizeBasis   // coerce prose bases ("inferred from …") to the enum
     }
   },
 
@@ -283,7 +300,7 @@ const nodeSchema = new mongoose.Schema({
     },
     confidence: {
       value: { type: Number, min: 0, max: 1 },
-      basis: { type: String, enum: ['stated', 'inferred', 'unknown'] }
+      basis: { type: String, enum: ['stated', 'inferred', 'unknown', 'confirmed'], set: normalizeBasis }
     },
     inferred: { type: Boolean, default: true },
     chosen: { type: Boolean, default: false },
