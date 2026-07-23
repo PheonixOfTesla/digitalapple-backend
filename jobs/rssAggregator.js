@@ -29,10 +29,16 @@ const RSS_FEEDS = [
   // academic jargon ("nonsense") in a general Signal feed. Curated,
   // reader-friendly outlets only.
 
+  // Science — high-signal, mind-blowing, plain-language
+  { url: 'https://www.quantamagazine.org/feed/', source: 'Quanta', category: 'science' },
+
+  // Markets / business
+  { url: 'https://www.cnbc.com/id/10000664/device/rss/rss.html', source: 'CNBC Markets', category: 'markets' },
+
   // Policy
   { url: 'https://www.politico.com/rss/technology.xml', source: 'Politico Tech', category: 'policy' },
 
-  // Startup
+  // Startup / cross-genre high-signal (front page — tech, science, culture)
   { url: 'https://news.ycombinator.com/rss', source: 'Hacker News', category: 'startup' }
 ];
 

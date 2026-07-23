@@ -29,7 +29,26 @@ const SEEDS = [
   { premise: 'How I got my doctorate while a part-time student', category: 'career' },
   { premise: 'How I funded my ecom store',                        category: 'business' },
   { premise: 'How did Drake start getting famous',                category: 'other' },
-  { premise: 'What grants I got in Florida as a college student', category: 'career' }
+  { premise: 'What grants I got in Florida as a college student', category: 'career' },
+
+  // Tech / startups
+  { premise: 'How I built a SaaS to $10k MRR as a student',       category: 'business' },
+  { premise: 'How to get into Y Combinator',                      category: 'business' },
+  { premise: 'How did NVIDIA become the most valuable company',   category: 'other' },
+  { premise: 'How I landed a big tech internship as a sophomore', category: 'career' },
+  // Stocks / finance
+  { premise: 'How I built a dividend portfolio in college',       category: 'business' },
+  { premise: 'How options trading actually works',                category: 'other' },
+  { premise: 'How compound interest builds real wealth',          category: 'other' },
+  // Science / mind-blowing
+  { premise: 'How mRNA vaccines were developed',                  category: 'other' },
+  { premise: 'How scientists photographed a black hole',          category: 'other' },
+  // Culture / notable people
+  { premise: 'How did MrBeast build his YouTube empire',          category: 'other' },
+  { premise: 'How did Prince William prepare to become king',     category: 'other' },
+  // College / grants / self-made
+  { premise: 'How I got a full-ride scholarship',                 category: 'career' },
+  { premise: 'How I paid off my student loans in two years',      category: 'career' }
 ];
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
