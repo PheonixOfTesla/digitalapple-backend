@@ -194,6 +194,17 @@ const sharedMapSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Optional attribution/credit for the map's origin.
+  // Populated when a map genuinely derives from a real source (a news article,
+  // a public post, an author). Left empty for pool-generated Clockwork seeds,
+  // which render simply as "by Clockwork". Never fabricate a real person here.
+  source: {
+    name:   { type: String, maxlength: 200 },   // e.g. "MIT Technology Review", "Jane Doe"
+    url:    { type: String, maxlength: 1000 },   // canonical link to the original
+    handle: { type: String, maxlength: 100 },    // e.g. "@mittr" (social account)
+    kind:   { type: String, enum: ['news', 'author', 'social', 'other', null], default: null }
   }
 
 }, {

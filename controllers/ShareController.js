@@ -15,6 +15,21 @@ const Edge = require('../models/Edge');
 const User = require('../models/User');
 const { verifyToken } = require('../middleware/auth');
 
+// Helper: sanitize an attribution source. Returns a clean {name,url,handle,kind}
+// object or undefined. Only keeps http(s) URLs; never fabricates fields.
+function sanitizeSource(src) {
+  if (!src || typeof src !== 'object') return undefined;
+  const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+  const name = str(src.name, 200);
+  let url = str(src.url, 1000);
+  const handle = str(src.handle, 100);
+  const kinds = ['news', 'author', 'social', 'other'];
+  const kind = kinds.includes(src.kind) ? src.kind : (name || url ? 'other' : null);
+  if (url && !/^https?:\/\//i.test(url)) url = ''; // only real links
+  if (!name && !url && !handle) return undefined;   // nothing real to credit
+  return { name, url, handle, kind };
+}
+
 // Helper: validate ObjectId - returns true if valid, sends 400 and returns false if not
 function validateId(id, res, label = 'ID') {
   if (!id || id === 'undefined' || id === 'null') {
@@ -247,8 +262,11 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
   if (!validateId(req.params.projectId, res, 'Project ID')) return;
 
   try {
-    const { title, description, category, visibility, excludedBranchRoots } = req.body;
+    const { title, description, category, visibility, excludedBranchRoots, source } = req.body;
     const projectId = req.params.projectId;
+
+    // Optional attribution — only kept if it names a real source. Never fabricated.
+    const cleanSource = sanitizeSource(source);
 
     // Verify ownership
     const project = await Project.findById(projectId);
@@ -290,6 +308,8 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
       sharedMap.ownerName = user.firstName || user.email.split('@')[0];
       sharedMap.ownerHandle = user.email.split('@')[0];
       sharedMap.ownerAvatar = user.profilePhotoThumb;
+      const src = cleanSource || sanitizeSource(project.source);
+      if (src) sharedMap.source = src;
 
       await sharedMap.save();
     } else {
@@ -309,7 +329,8 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
         publishedAt: new Date(),
         ownerName: user.firstName || user.email.split('@')[0],
         ownerHandle: user.email.split('@')[0],
-        ownerAvatar: user.profilePhotoThumb
+        ownerAvatar: user.profilePhotoThumb,
+        source: cleanSource || sanitizeSource(project.source)
       });
 
       await sharedMap.save();

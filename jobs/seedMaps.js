@@ -448,7 +448,15 @@ async function getNewsTopics(limit = 3) {
     // Extract a topic from the headline
     const topic = `A business responding to: ${item.title.substring(0, 100)}`;
     if (!(await premiseExists(topic)) && topics.length < limit) {
-      topics.push({ category: 'business', premise: topic });
+      topics.push({
+        category: item.category || 'business',
+        premise: topic,
+        // Real attribution: this seed derives from a real news headline, so
+        // credit the publication and link back to the original (no body reproduced).
+        source: (item.source || item.link)
+          ? { name: item.source || '', url: item.link || '', handle: '', kind: 'news' }
+          : undefined
+      });
     }
   }
 
@@ -1055,7 +1063,9 @@ async function createSeedMap(user, topic) {
     ownerName: 'Clockwork',
     ownerHandle: 'clockwork',
     ownerAvatar: null,
-    isSeed: true
+    isSeed: true,
+    // Real credit only — populated for news-derived seeds, empty for pool topics.
+    source: (topic && topic.source && (topic.source.name || topic.source.url)) ? topic.source : undefined
   });
 
   await sharedMap.save();
