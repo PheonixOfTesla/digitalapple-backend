@@ -73,6 +73,15 @@ function getBlueprint() {
   return BlueprintService;
 }
 
+// Nebula service — terminal detection helpers (lazy loaded)
+let NebulaService = null;
+function getNebula() {
+  if (!NebulaService) {
+    NebulaService = require('../services/blueprintNebula');
+  }
+  return NebulaService;
+}
+
 const router = express.Router();
 
 // Quota limits
@@ -1361,6 +1370,8 @@ router.post('/nebula', optionalAuth, async (req, res) => {
       confidence: nebula.core?.confidence || { value: 0.5, basis: 'stated' },
       stage: nebula.stagesEnabled ? (nebula.core?.stage || 0) : undefined,
       status: nebula.core?.status || 'mapped',
+      determination: nebula.determination || 'actionable',
+      terminal: false,
       x: corePos?.x || 600,
       y: corePos?.y || 400,
       depth: 0
@@ -1380,6 +1391,7 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         alternates: [],
         reasoning: 'Generated via nebula'
       },
+      determination: nebula.determination || 'actionable',
       frameMeta: nebula.frameMeta || {},
       stagesEnabled: nebula.stagesEnabled
     });
@@ -1437,6 +1449,12 @@ router.post('/nebula', optionalAuth, async (req, res) => {
         scoped: root.isDecisionPoint || false,
         stage: nebula.stagesEnabled ? (root.stage || 0) : undefined,
         status: root.status || 'mapped',
+        // Convergence: terminal + determination computed at generation (PART 2/3)
+        determination: nebula.determination || 'actionable',
+        terminal: root.terminal || false,
+        action: root.action || null,
+        needsInput: root.needsInput || false,
+        question: root.needsInput ? (root.question || root.statement || null) : null,
         x: rootPos?.x || 600,
         y: rootPos?.y || 400,
         depth: 1
@@ -1494,6 +1512,12 @@ router.post('/nebula', optionalAuth, async (req, res) => {
           scoped: star.isDecisionPoint || false,
           stage: nebula.stagesEnabled ? (star.stage || rootNode.stage) : undefined,
           status: star.status || 'mapped',
+          // Convergence: terminal + determination computed at generation (PART 2/3)
+          determination: nebula.determination || 'actionable',
+          terminal: star.terminal || false,
+          action: star.action || null,
+          needsInput: star.needsInput || false,
+          question: star.needsInput ? (star.question || star.statement || null) : null,
           x: starPos?.x || rootNode.x + 100,
           y: starPos?.y || rootNode.y + j * 60,
           depth: 2
@@ -1616,14 +1640,21 @@ router.post('/expand', optionalAuth, async (req, res) => {
 
     // Get blueprint service for recursion logic
     const blueprint = getBlueprint();
+    const nebulaSvc = getNebula();
+
+    // Resolve this map's determination (node → Core → default actionable)
+    const mapDetermination = node.determination
+      || coreDoc?.determination
+      || 'actionable';
 
     // Check termination (unless force-expanding or refining)
     if (!forceExpand && !refinePrompt) {
-      const terminalResult = await blueprint.judgeTerminal(node);
+      const terminalResult = await blueprint.judgeTerminal(node, mapDetermination);
       if (terminalResult.terminal) {
-        // Mark as terminal, no expansion
+        // Mark as terminal, no expansion — carry the resolved action
         node.terminal = true;
         node.expanded = false;
+        if (terminalResult.action) node.action = terminalResult.action;
         await node.save();
 
         return res.json({
@@ -1633,7 +1664,7 @@ router.post('/expand', optionalAuth, async (req, res) => {
           ops: [{
             op: 'updateNode',
             nodeId: node._id.toString(),
-            data: { terminal: true, expanded: false }
+            data: { terminal: true, expanded: false, action: node.action || null, liveness: 'walled' }
           }]
         });
       }
@@ -1697,6 +1728,11 @@ router.post('/expand', optionalAuth, async (req, res) => {
           confidence: root.confidence,
           stage: root.stage || node.stage,
           status: root.status || 'unexplored',
+          determination: nebula.determination || mapDetermination,
+          terminal: root.terminal || false,
+          action: root.action || null,
+          needsInput: root.needsInput || false,
+          question: root.needsInput ? (root.question || root.statement || null) : null,
           x: node.x + 200,
           y: node.y + (i - (roots.length - 1) / 2) * CHILD_SPREAD,
           depth: node.depth + 1
@@ -1749,6 +1785,11 @@ router.post('/expand', optionalAuth, async (req, res) => {
             confidence: star.confidence,
             stage: star.stage || childNode.stage,
             status: star.status || 'unexplored',
+            determination: nebula.determination || mapDetermination,
+            terminal: star.terminal || false,
+            action: star.action || null,
+            needsInput: star.needsInput || false,
+            question: star.needsInput ? (star.question || star.statement || null) : null,
             x: childNode.x + 180,
             y: childNode.y + (j - (stars.length - 1) / 2) * 70,
             depth: node.depth + 2
@@ -1884,6 +1925,15 @@ router.post('/expand', optionalAuth, async (req, res) => {
         const child = children[i];
         // Truncate title to 50 chars (schema max)
         const childTitle = (child.statement || '').substring(0, 50);
+        const childDepth = node.depth + 1;
+        // Run terminal detection on the new child at creation (PART 2)
+        const childTerminal = child.needsInput
+          ? { terminal: false, action: null }
+          : nebulaSvc.judgeNodeTerminal(
+              { statement: child.statement, detail: child.detail, title: childTitle, needsInput: child.needsInput },
+              childDepth,
+              mapDetermination
+            );
         const childNodeData = {
           projectId: node.projectId,
           parentNodeId: node._id,
@@ -1898,9 +1948,14 @@ router.post('/expand', optionalAuth, async (req, res) => {
           status: child.status || 'unexplored',
           cost: child.cost,
           sources: child.sources || [],
+          determination: mapDetermination,
+          terminal: childTerminal.terminal || false,
+          action: childTerminal.action || null,
+          needsInput: child.needsInput || false,
+          question: child.needsInput ? (child.question || child.statement || null) : null,
           x: node.x + 180,
           y: node.y + (i - (children.length - 1) / 2) * CHILD_SPREAD,
-          depth: node.depth + 1
+          depth: childDepth
         };
         const childNode = new Node(childNodeData);
         await childNode.save();
@@ -2119,6 +2174,8 @@ function formatNodeForClient(node) {
     subFrameType: node.subFrameType || null,
     // Liveness (derived, not persisted)
     liveness,
+    // What this node resolves toward (actionable | overview)
+    determination: node.determination || 'actionable',
     // Dormant node territory/invitation (null for grounded nodes)
     territory,
     invitation,
