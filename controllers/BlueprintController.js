@@ -2905,7 +2905,9 @@ router.get('/projects/:projectId/export/actions', optionalAuth, requireAuthForEx
 
 /**
  * Export formats - stub endpoints (return structured error until implemented)
- * These are gated behind auth but not yet built
+ * These are gated behind auth but not yet built.
+ * Note: PDF export is handled CLIENT-SIDE on the Blueprint page (jsPDF, with a
+ * print-to-PDF fallback), so it is intentionally not a backend format here.
  */
 const STUB_FORMATS = ['pdf', 'xlsx', 'formation-pack', 'deck-outline'];
 
@@ -2934,7 +2936,7 @@ router.get('/projects/:projectId/export', optionalAuth, async (req, res) => {
     { format: 'json', name: 'Raw JSON', available: true, description: 'Complete map data for developers' },
     { format: 'csv', name: 'Sequence CSV', available: true, description: 'Timeline view for spreadsheets' },
     { format: 'actions', name: 'Action List', available: true, description: 'Actionable items checklist (terminal nodes only)' },
-    { format: 'pdf', name: 'PDF Brief', available: false, description: 'Executive summary document' },
+    { format: 'pdf', name: 'PDF Brief', available: true, description: 'Executive summary document (generated in-browser)' },
     { format: 'xlsx', name: 'Model XLSX', available: false, description: 'Financial model template' },
     { format: 'formation-pack', name: 'Formation Pack', available: false, description: 'Complete founding documents' },
     { format: 'deck-outline', name: 'Deck Outline', available: false, description: 'Pitch deck structure' }
