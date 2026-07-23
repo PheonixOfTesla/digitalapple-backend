@@ -205,7 +205,16 @@ const sharedMapSchema = new mongoose.Schema({
     url:    { type: String, maxlength: 1000 },   // canonical link to the original
     handle: { type: String, maxlength: 100 },    // e.g. "@mittr" (social account)
     kind:   { type: String, enum: ['news', 'author', 'social', 'other', null], default: null }
-  }
+  },
+
+  // The ACTUAL underlying sources the map draws on (the real outlets a grounded
+  // map's Wikipedia article cites — ESPN, Forbes, NYT, …), so a map credits real
+  // reporting, not just "Wikipedia". Empty for ungrounded/how-to maps.
+  sources: [{
+    name: { type: String, maxlength: 200 },
+    url:  { type: String, maxlength: 1000 },
+    kind: { type: String, maxlength: 40 }
+  }]
 
 }, {
   timestamps: true

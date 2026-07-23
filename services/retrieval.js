@@ -110,9 +110,58 @@ function buildGrounding(premise, intro, full, budget = 2800) {
   return [head, bodyText].filter(Boolean).join('\n\n').trim();
 }
 
+// Infrastructure / non-citation domains to drop from the reference list.
+const REF_SKIP = /wiki(pedia|media|data|source|books|quote|voyage)|archive\.(org|today)|web\.archive|doi\.org|worldcat|isbn|creativecommons|google\.com|google\.co|youtube\.com|youtu\.be|twitter\.com|x\.com|facebook\.com|instagram\.com|t\.co|imdb\.com|amazon\.|pinterest\./i;
+// Pretty names for common outlets; anything else falls back to the bare domain.
+const REF_NAMES = {
+  'espn.com': 'ESPN', 'espn.co.uk': 'ESPN', 'forbes.com': 'Forbes', 'nytimes.com': 'The New York Times',
+  'washingtonpost.com': 'The Washington Post', 'wsj.com': 'The Wall Street Journal', 'reuters.com': 'Reuters',
+  'apnews.com': 'AP News', 'bbc.com': 'BBC', 'bbc.co.uk': 'BBC', 'theguardian.com': 'The Guardian',
+  'cnn.com': 'CNN', 'sportsillustrated.cnn.com': 'Sports Illustrated', 'si.com': 'Sports Illustrated',
+  'usatoday.com': 'USA Today', 'sports.yahoo.com': 'Yahoo Sports', 'cnbc.com': 'CNBC', 'bloomberg.com': 'Bloomberg',
+  'npr.org': 'NPR', 'time.com': 'TIME', 'nature.com': 'Nature', 'science.org': 'Science', 'sciencedaily.com': 'ScienceDaily',
+  'nasa.gov': 'NASA', 'sportico.com': 'Sportico', 'billboard.com': 'Billboard', 'variety.com': 'Variety',
+  'rollingstone.com': 'Rolling Stone', 'theverge.com': 'The Verge', 'wired.com': 'WIRED', 'economist.com': 'The Economist',
+  'ft.com': 'Financial Times', 'nbcnews.com': 'NBC News', 'abcnews.go.com': 'ABC News', 'cbsnews.com': 'CBS News',
+  'politico.com': 'Politico', 'axios.com': 'Axios', 'techcrunch.com': 'TechCrunch', 'nationalgeographic.com': 'National Geographic',
+  'smithsonianmag.com': 'Smithsonian', 'scientificamerican.com': 'Scientific American', 'quantamagazine.org': 'Quanta'
+};
+
+/**
+ * Pull the REAL sources a Wikipedia article cites (its external references), so a
+ * map credits ESPN/Forbes/NYT rather than just "Wikipedia". Ranked by how often
+ * each domain is cited; returns up to `max` as { name, url, kind:'reference' }.
+ */
+async function getReferences(title, max = 5) {
+  try {
+    const url = `${WIKI_API}?action=query&prop=extlinks&ellimit=max&format=json&origin=*&titles=${encodeURIComponent(title)}`;
+    const d = await getJson(url, 6000);
+    const pages = d && d.query && d.query.pages;
+    if (!pages) return [];
+    const p = Object.values(pages)[0];
+    const links = (p.extlinks || []).map(e => e['*'] || e.url).filter(Boolean);
+    const byDom = new Map();
+    for (const l of links) {
+      if (REF_SKIP.test(l)) continue;
+      let host;
+      try { host = new URL(l).hostname.replace(/^www\./, ''); } catch (_) { continue; }
+      if (!host || host.length < 4) continue;
+      const cur = byDom.get(host) || { count: 0, url: l };
+      cur.count++;
+      byDom.set(host, cur);
+    }
+    return [...byDom.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, max)
+      .map(([host, v]) => ({ name: REF_NAMES[host] || host, url: v.url, kind: 'reference' }));
+  } catch (e) {
+    return [];
+  }
+}
+
 /**
  * Retrieve grounding for a premise. Returns:
- *   { text, source: { name, url, handle, kind }, title }  or  null
+ *   { text, title, source (Wikipedia), sources (real references) }  or  null
  */
 async function retrieveContext(premise, { maxChars = 2800 } = {}) {
   try {
@@ -122,13 +171,17 @@ async function retrieveContext(premise, { maxChars = 2800 } = {}) {
     if (!title) return null;
     const summary = await getSummary(title);
     if (!summary) return null;
-    const full = await getFullExtract(title);
+    const [full, references] = await Promise.all([
+      getFullExtract(title),
+      getReferences(title)
+    ]);
     const text = buildGrounding(premise, summary.extract, full || summary.extract, maxChars);
     if (!text || text.length < 40) return null;
     return {
       text,
       title: summary.title,
-      source: { name: `Wikipedia — ${summary.title}`, url: summary.url, handle: '', kind: 'other' }
+      source: { name: `Wikipedia — ${summary.title}`, url: summary.url, handle: '', kind: 'other' },
+      sources: references
     };
   } catch (e) {
     return null;
@@ -154,4 +207,4 @@ async function retrieveCard(subject) {
   }
 }
 
-module.exports = { retrieveContext, retrieveCard, extractSubject };
+module.exports = { retrieveContext, retrieveCard, getReferences, extractSubject };

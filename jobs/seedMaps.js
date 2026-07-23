@@ -1073,7 +1073,9 @@ async function createSeedMap(user, topic) {
     // for overview/factual maps), then any news-derived topic source. Empty otherwise.
     source: (framedMap && framedMap.source && (framedMap.source.name || framedMap.source.url))
       ? framedMap.source
-      : ((topic && topic.source && (topic.source.name || topic.source.url)) ? topic.source : undefined)
+      : ((topic && topic.source && (topic.source.name || topic.source.url)) ? topic.source : undefined),
+    // The actual underlying outlets the map draws on (ESPN/Forbes/NYT/…), not just Wikipedia.
+    sources: (framedMap && Array.isArray(framedMap.sources) && framedMap.sources.length) ? framedMap.sources : undefined
   });
 
   await sharedMap.save();

@@ -74,6 +74,9 @@ async function generateMap(premise, projectId) {
   map.determination = determination;
   // Real citation for the map (used by the SharedMap.source field on publish/seed).
   if (grounding && grounding.source) map.source = grounding.source;
+  // The actual underlying sources (real outlets the article cites), so the map
+  // credits ESPN/Forbes/NYT/… not just Wikipedia.
+  if (grounding && grounding.sources && grounding.sources.length) map.sources = grounding.sources;
 
   // 6. Log orphans, straddles, and low-confidence for review
   if (meta.usedFallback || meta.isStraddle || classification.confidence < 0.7) {
