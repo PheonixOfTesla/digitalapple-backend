@@ -8,7 +8,7 @@
  * Requires env: MONGODB_URI (+ the LLM keys the engine already uses:
  *   MOONSHOT_API_KEY / OPENAI_API_KEY per your AI_PROVIDER).
  * Optional env:
- *   BACKFILL_TARGET   how many total public maps to reach (default 1000)
+ *   BACKFILL_TARGET   how many total public maps to reach (default 3000)
  *   BACKFILL_CONC     concurrent generations (default 3 — Moonshot's max)
  *
  * Run:  node scripts/backfillAtlas.js
@@ -19,7 +19,7 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 
-const TARGET = parseInt(process.env.BACKFILL_TARGET || '1000', 10);
+const TARGET = parseInt(process.env.BACKFILL_TARGET || '3000', 10);
 const CONC = Math.max(1, Math.min(3, parseInt(process.env.BACKFILL_CONC || '3', 10)));
 
 async function main() {

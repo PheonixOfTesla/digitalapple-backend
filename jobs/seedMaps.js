@@ -146,6 +146,205 @@ const CREATIVE = [
   'a mockumentary about influencers', 'a photo series on late-night study spots', 'a mini-series on the history of hip-hop'
 ];
 
+// ---- Expansion pack: deeper coverage + new genres (targets ~3000 total) ----
+const VENTURES2 = [
+  'a mobile bike-repair service', 'a custom PC-building business', 'a resume-editing service', 'a language-tutoring business',
+  'a meal-prep service for athletes', 'a niche newsletter for investors', 'an AI resume tool', 'a Roblox game studio',
+  'a TikTok shop', 'a digital-planner brand', 'a house-plant subscription', 'a local tour company', 'a drone-photography business',
+  'a 3D-printing shop', 'a stationery brand', 'a sticker shop', 'a coaching business for students', 'a productivity YouTube channel',
+  'a finance TikTok', 'a study-with-me stream', 'a Twitch channel', 'a chess-coaching business', 'a math-tutoring platform',
+  'a college-essay consulting service', 'a test-prep business', 'an event-planning company', 'a catering business', 'a jewelry brand',
+  'a skincare line', 'a supplement brand', 'a matcha brand', 'a hot-sauce brand', 'a woodworking shop', 'a pottery studio',
+  'a screen-printing shop', 'a laptop-repair service', 'a phone-repair business', 'a lawn-care company', 'a moving service',
+  'a junk-removal business', 'a handyman service', 'a personal-chef service', 'a meal-kit brand', 'a fitness-app business',
+  'a yoga studio', 'a climbing gym', 'a coworking space', 'a board-game cafe', 'a bubble-tea shop', 'a ghost kitchen',
+  'a campus food-delivery app', 'a textbook-rental service', 'a peer-tutoring app', 'a scholarship-finder tool', 'a study-abroad agency',
+  'an internship-matching platform', 'a UGC agency', 'a cold-email lead-gen agency', 'a niche affiliate site', 'a Shopify theme shop',
+  'a stock-photo business', 'a wedding-photography business', 'a home-bakery brand', 'a book-summary newsletter', 'a house-cleaning company'
+];
+const CAREER_FIELDS2 = [
+  'blockchain engineering', 'embedded systems', 'bioinformatics', 'actuarial science', 'patent law', 'sports medicine',
+  'urban planning', 'industrial design', 'sound design', 'food science', 'marine biology', 'forensic science', 'epidemiology',
+  'materials science', 'space systems engineering', 'autonomous vehicles', 'fintech', 'edtech', 'healthtech', 'climate tech',
+  'deep learning research', 'computer vision', 'natural language processing', 'systems programming', 'site reliability engineering',
+  'data visualization', 'service design', 'conversion optimization', 'SEO', 'affiliate marketing', 'influencer marketing',
+  'community management', 'partnerships', 'corporate strategy', 'M&A', 'equity research', 'risk management', 'compliance',
+  'underwriting', 'wealth management', 'financial planning', 'tax advisory', 'audit', 'forensic accounting', 'operations research',
+  'logistics', 'procurement', 'talent acquisition', 'organizational psychology', 'learning and development', 'hardware engineering',
+  'robotics research', 'quant research', 'trading operations', 'growth engineering', 'developer relations', 'technical program management',
+  'cloud architecture', 'machine learning engineering', 'data engineering', 'security research', 'UX research', 'brand strategy',
+  'creative direction', 'sports management'
+];
+const MONEY2 = [
+  'REITs', 'municipal bonds', 'treasury bills', 'money-market funds', 'robo-advisors', 'target-date funds', 'sector ETFs',
+  'dividend growth investing', 'value investing', 'growth investing', 'tax-loss harvesting', 'a health savings account',
+  'a 529 college plan', 'startup stock options', 'RSUs', 'margin trading', 'futures', 'commodities like gold', 'currency trading',
+  'peer-to-peer lending', 'angel investing', 'the yield curve', 'ETFs vs mutual funds', 'the S&P 500', 'emerging-market funds',
+  'high-yield savings', 'I-bonds', 'crypto staking', 'real-estate crowdfunding', 'the bond market'
+];
+const SCIENCE2 = [
+  'How the northern lights work', 'How coral reefs build themselves', 'How the heart keeps beating', 'How sleep restores the brain',
+  'How caffeine affects the body', 'How antibiotic resistance spreads', 'How the flu mutates every year', 'How lasers work',
+  'How touchscreens sense your finger', 'How noise-canceling headphones work', 'How Wi-Fi carries data through the air',
+  'How solar eclipses happen', 'How tides are caused by the moon', 'How volcanoes form', 'How the Grand Canyon was carved',
+  'How diamonds form deep underground', 'How the immune system fights cancer', 'How the placebo effect works',
+  'How memory is stored in neurons', 'How the gut affects the brain', 'How the ozone layer protects us', 'How carbon dating measures age',
+  'How fossils are formed', 'How the continents drift', 'How hurricanes gain strength', 'How lightning forms', 'How rainbows split light',
+  'How gravity bends light', 'How atoms were split', 'How the double-slit experiment reveals quantum weirdness',
+  'How black holes evaporate', 'How dark matter was inferred', 'How the Big Bang theory was confirmed', 'How exoplanets are detected',
+  'How satellites stay in orbit', 'How the ISS recycles water and air', 'How Mars rovers drive themselves', 'How gene therapy fixes broken genes',
+  'How stem cells become any tissue', 'How the brain rewires after injury', 'How dopamine drives motivation', 'How the microbiome shapes health',
+  'How viruses jump from animals to humans', 'How pandemics are modeled', 'How the human eye turns light into sight',
+  'How anesthesia switches off consciousness', 'How MRI machines see inside the body', 'How nuclear reactors make power',
+  'How the periodic table was discovered', 'How photosynthesis feeds the planet', 'How the speed of light was measured',
+  'How vaccines are manufactured at scale', 'How weather models predict storms', 'How GPS corrects for relativity',
+  'How the internet routes your data', 'How lithium batteries store energy', 'How solar cells turn light into power',
+  'How CRISPR could cure genetic disease', 'How the LHC found the Higgs boson', 'How the genome was first sequenced'
+];
+const PEOPLE2 = [
+  'Lady Gaga', 'Bruno Mars', 'Doja Cat', 'Nicki Minaj', 'Cardi B', 'Justin Bieber', 'Harry Styles', 'Adele', 'Metallica',
+  'Kobe Bryant', 'Stephen Curry', 'Kevin Durant', 'Giannis Antetokounmpo', 'Patrick Mahomes', 'Usain Bolt', 'Michael Phelps',
+  'Roger Federer', 'Rafael Nadal', 'Novak Djokovic', 'Tiger Woods', 'Floyd Mayweather', 'Conor McGregor', 'Mike Tyson',
+  'Muhammad Ali', 'Neymar', 'Kylian Mbappé', 'Erling Haaland', 'Shohei Ohtani', 'Venus Williams', 'Greta Thunberg',
+  'Malala Yousafzai', 'Barack Obama', 'Nelson Mandela', 'Steve Wozniak', 'Bill Gates', 'Larry Page', 'Sergey Brin', 'Sam Walton',
+  'Walt Disney', 'Coco Chanel', 'Ralph Lauren', 'Pharrell Williams', 'Dr. Dre', '50 Cent', 'Reese Witherspoon', 'Ryan Reynolds',
+  'Kevin Hart', 'Steven Spielberg', 'Christopher Nolan', 'Quentin Tarantino', 'Hayao Miyazaki', 'Banksy', 'Jean-Michel Basquiat',
+  'Warren Buffett', 'Charlie Munger', 'Ray Dalio', 'Peter Thiel', 'Reid Hoffman', 'Marc Andreessen', 'Satya Nadella',
+  'Tim Cook', 'Sundar Pichai', 'Jack Ma', 'Masayoshi Son', 'Richard Branson'
+];
+const COMPANIES2 = [
+  'How did SpaceX land rockets', 'How did Palantir go public', 'How did Reddit build communities', 'How did Wikipedia stay free',
+  'How did IKEA conquer furniture', 'How did Toyota invent lean manufacturing', 'How did McDonald’s scale worldwide',
+  'How did Starbucks make coffee premium', 'How did Airbnb survive 2008', 'How did DoorDash win delivery', 'How did Zoom explode in 2020',
+  'How did Slack change work chat', 'How did Figma beat Adobe', 'How did Roblox build a creator economy', 'How did Epic Games make Fortnite',
+  'How did Valve build Steam', 'How did Nintendo reinvent gaming', 'How did Sony build PlayStation', 'How did Samsung become a chip giant',
+  'How did TSMC dominate chip making', 'How did ASML build the machines that make chips', 'How did AMD come back',
+  'How did Bloomberg build a terminal empire', 'How did Visa and Mastercard win payments', 'How did PayPal spawn a mafia of founders',
+  'How did Square reinvent small-business payments', 'How did Chime win banking', 'How did Klarna grow buy-now-pay-later',
+  'How did SHEIN dominate fast fashion', 'How did Temu undercut everyone', 'How did BYD challenge Tesla', 'How did Rivian raise billions',
+  'How did Anthropic race on AI', 'How did Nvidia ride the AI wave', 'How did Costco win loyal customers', 'How did Trader Joe’s win grocery',
+  'How did Rolex hold its value', 'How did Supreme build hype', 'How did Discord win gamers', 'How did Duolingo make learning addictive',
+  'How did Notion build a cult following', 'How did Canva democratize design', 'How did Stripe win online payments',
+  'How did Shopify empower small sellers', 'How did Red Bull build a media empire', 'How did LEGO come back from bankruptcy',
+  'How did Patagonia build a values-first brand', 'How did Chipotle build a fast-casual empire', 'How did Netflix beat Blockbuster',
+  'How did TikTok take over the world'
+];
+const HISTORY_PATTERNS = ['How did {x} happen', 'What really caused {x}'];
+const HISTORY_EVENTS = [
+  'the fall of the Roman Empire', 'the Renaissance', 'the Industrial Revolution', 'the French Revolution', 'the American Revolution',
+  'the Cold War', 'the Space Race', 'the moon landing', 'the fall of the Berlin Wall', 'the 2008 financial crisis', 'the dot-com bubble',
+  'the Great Depression', 'World War I', 'World War II', 'the Cuban Missile Crisis', 'the civil rights movement',
+  'the invention of the printing press', 'the Silk Road trade', 'the rise of the internet', 'the birth of Silicon Valley',
+  'the personal computer revolution', 'the smartphone revolution', 'the rise of social media', 'the 2020 pandemic',
+  'the invention of the steam engine', 'the birth of the automobile', 'the first powered flight', 'the Manhattan Project',
+  'the discovery of penicillin', 'the mapping of the human genome', 'the rise of China as an economy', 'the collapse of the Soviet Union',
+  'the oil crises of the 1970s', 'the founding of the United Nations', 'the creation of the Federal Reserve', 'the transcontinental railroad',
+  'the building of the Panama Canal', 'the Apollo program', 'the Chernobyl disaster', 'the 1929 stock-market crash', 'Black Monday 1987',
+  'the 2000s housing bubble', 'the crypto boom and bust', 'the AI boom', 'the streaming wars', 'the rise of e-commerce',
+  'the birth of hip-hop', 'the abolition of slavery', 'the women’s suffrage movement', 'the Watergate scandal', 'the eradication of smallpox',
+  'the Green Revolution in agriculture', 'the invention of the microchip', 'the birth of the video-game industry', 'the rise of Bitcoin',
+  'the Arab Spring', 'the reunification of Germany', 'the founding of NASA', 'the harnessing of electricity', 'the invention of the telephone',
+  'the commercialization of the light bulb', 'the discovery of the New World', 'the British Empire’s expansion', 'the gold rush',
+  'the electrification of cities', 'the creation of the World Wide Web', 'the 1970s stagflation', 'the Japanese economic miracle',
+  'the rise of Wall Street', 'the birth of modern advertising'
+];
+const PSYCHOLOGY = [
+  'Why we procrastinate', 'How habits are formed', 'Why we get addicted to our phones', 'How motivation actually works',
+  'Why first impressions stick', 'How to build unshakable confidence', 'Why we fear public speaking', 'How memory can be improved',
+  'Why we dream', 'How to read body language', 'Why we fall for cognitive biases', 'How to master self-discipline',
+  'Why comparison steals joy', 'How flow states work', 'Why we love a good story', 'How to overcome imposter syndrome',
+  'Why we make impulsive purchases', 'How persuasion actually works', 'Why groups make worse decisions', 'How to build habits with tiny changes',
+  'Why willpower runs out', 'How to focus in a distracted world', 'Why we remember music so vividly', 'How trauma shapes the brain',
+  'Why we crave social approval', 'How to build emotional intelligence', 'How the brain handles fear', 'Why deadlines boost productivity',
+  'How to negotiate like a pro', 'Why we trust some people instantly', 'How to break a bad habit', 'Why multitasking is a myth',
+  'Why we overvalue what we own', 'How to stay calm under pressure', 'Why we conform to the crowd', 'How to build resilience',
+  'How to make better decisions', 'Why we misjudge probability', 'How to beat analysis paralysis', 'Why boredom sparks creativity',
+  'How to build charisma', 'How to give feedback that lands', 'Why we self-sabotage', 'How to build trust quickly',
+  'Why we love underdogs', 'How to think more clearly', 'Why we remember beginnings and endings best', 'How to cultivate deep focus',
+  'Why we fear loss more than we value gains', 'How to rewire a limiting belief'
+];
+const HEALTH_PATTERNS = ['How to {x}', 'The science of how to {x}'];
+const HEALTH_SUBJECTS = [
+  'build muscle as a beginner', 'lose fat without losing muscle', 'run your first 5K', 'improve your sleep', 'fix your posture',
+  'build a home workout routine', 'eat healthy on a budget', 'start meditating', 'build a morning routine', 'recover from burnout',
+  'improve your gut health', 'boost your energy naturally', 'build endurance for a marathon', 'get stronger with calisthenics',
+  'improve your flexibility', 'manage stress', 'improve your focus', 'quit sugar', 'build a daily walking habit',
+  'strengthen your immune system', 'do your first pull-up', 'build core strength', 'sleep better without pills', 'recover faster after workouts',
+  'improve your mobility', 'train for a triathlon', 'build a meal-prep habit', 'lower your resting heart rate', 'build mental toughness',
+  'beat afternoon energy crashes', 'build a consistent gym habit', 'train for a hike', 'build a stretching routine', 'improve your balance',
+  'fuel for endurance sports', 'improve your VO2 max', 'reduce inflammation with food', 'build a healthy sleep schedule',
+  'strengthen your back', 'build a journaling habit', 'improve your reaction time', 'build a home gym on a budget', 'break a sugar addiction',
+  'build a running habit that sticks', 'get shredded for summer', 'build a sustainable diet', 'train like an athlete', 'improve your grip strength',
+  'build a bodyweight program', 'recover from an injury'
+];
+const SPORTS = [
+  'How the NBA became a global business', 'How athletes make money off the court', 'How Formula 1 exploded in popularity',
+  'How an NFL team builds a dynasty', 'How the Premier League got so rich', 'How sports agents make deals', 'How the Olympics got so commercial',
+  'How college sports recruiting works', 'How esports became a billion-dollar industry', 'How Nike signed Michael Jordan',
+  'How sports betting actually works', 'How fantasy sports took off', 'How teams use analytics to win', 'How the World Cup became the biggest event',
+  'How boxers negotiate purses', 'How LIV Golf disrupted the PGA', 'How an athlete builds a personal brand', 'How the WNBA grew its audience',
+  'How leagues negotiate TV deals', 'How soccer academies develop stars', 'How the UFC built the MMA business', 'How NIL deals pay college athletes',
+  'How Olympic athletes get funded', 'How the Super Bowl became a cultural event', 'How sports stadiums make money',
+  'How streaming changed how we watch sports', 'How teams scout young talent', 'How Moneyball changed baseball', 'How athletes recover from injuries',
+  'How skateboarding went mainstream', 'How running culture exploded', 'How endurance athletes fuel races', 'How coaches build winning cultures',
+  'How women’s soccer grew globally', 'How athletes extend their careers', 'How the NBA draft works', 'How teams manage a salary cap',
+  'How the Tour de France became legendary', 'How athletes train their minds', 'How cricket became a global spectacle',
+  'How marathons get organized', 'How gyms build community', 'How the Ryder Cup became iconic', 'How golf became a business',
+  'How sports build national identity', 'How athletes handle pressure', 'How the transfer market works in soccer', 'How sponsorship deals get made',
+  'How pro athletes manage their money', 'How a boxing promotion is built'
+];
+const GEOPOLITICS = [
+  'Why the Middle East is so unstable', 'How the US and China became rivals', 'Why oil prices move markets', 'How the global chip supply chain works',
+  'Why Taiwan is so important', 'How sanctions actually work', 'Why the dollar is the world reserve currency', 'How the EU came together',
+  'Why trade wars happen', 'How OPEC controls oil prices', 'Why the Arctic is becoming contested', 'Why rare-earth mining is strategic',
+  'How immigration shapes economies', 'Why currencies collapse', 'Why water is becoming a geopolitical issue', 'How globalization reshaped the world',
+  'Why some countries stay poor', 'How foreign aid actually works', 'Why semiconductor manufacturing is concentrated in Asia',
+  'How central banks fight inflation', 'How the petrodollar system formed', 'Why food security is a national concern', 'How nations build soft power',
+  'Why empires rise and fall', 'How the UN Security Council works', 'Why the South China Sea is contested', 'How reserve currencies shift over time',
+  'How energy shapes geopolitics', 'Why lithium is the new oil', 'How nations recover after war', 'Why debt crises cascade',
+  'How the IMF stabilizes economies', 'Why some cities become global hubs', 'How pandemics reshape economies', 'Why space is becoming contested',
+  'How climate change drives migration', 'Why supply shocks cause inflation', 'How nations negotiate climate deals', 'Why markets react to elections',
+  'How the global banking system connects', 'Why tariffs affect everyday prices', 'Why commodity booms and busts happen',
+  'How the global shipping industry works', 'Why talent migration matters', 'How nations compete in AI', 'Why housing crises spread across borders',
+  'How trade blocs shape the world', 'Why supply chains are being reshored', 'How nations weaponize their currencies', 'Why the chip war matters'
+];
+const GAMING = [
+  'How Minecraft became the best-selling game', 'How Fortnite built a metaverse', 'How a AAA game gets made', 'How Stardew Valley succeeded solo',
+  'How free-to-play games make money', 'How Roblox turned kids into developers', 'How speedrunning became a culture', 'How Twitch changed gaming',
+  'How esports teams make money', 'How League of Legends built a global sport', 'How mobile gaming overtook console', 'How game design creates flow',
+  'How Nintendo reinvented itself', 'How Steam dominated PC gaming', 'How Among Us blew up overnight', 'How live-service games keep players',
+  'How Pokémon became a mega-franchise', 'How open-world games get built', 'How GTA became a cultural giant', 'How Elden Ring redefined difficulty',
+  'How game engines like Unreal work', 'How battle royale took over', 'How games use psychology to engage', 'How modding communities shape games',
+  'How Discord became gamers’ home', 'How gacha games make billions', 'How cloud gaming developed', 'How indie devs ship a game solo',
+  'How gaming influencers rose', 'How games get localized worldwide', 'How the console wars played out', 'How procedural generation changed games',
+  'How VR gaming developed', 'How esports arenas get built', 'How studios avoid crunch', 'How gaming became a spectator sport',
+  'How a viral game gets discovered', 'How microtransactions took over', 'How a game studio raises funding', 'How retro games got revived'
+];
+const SKILLS_PATTERNS = ['How to learn {x}', 'How to get good at {x} fast', 'The best way to master {x}'];
+const SKILLS = [
+  'coding', 'public speaking', 'a new language', 'the guitar', 'the piano', 'chess', 'drawing', 'photography', 'video editing',
+  'graphic design', 'writing', 'copywriting', 'negotiation', 'speed reading', 'touch typing', 'cooking', 'digital marketing',
+  'data analysis', 'Excel', 'SQL', 'Python', 'machine learning', '3D modeling', 'animation', 'music production', 'singing', 'dancing',
+  'filmmaking', 'storytelling', 'sales', 'investing', 'budgeting', 'time management', 'memory techniques', 'meditation', 'weightlifting',
+  'baking', 'woodworking', 'poker', 'trading', 'UX design', 'prompt engineering', 'financial modeling', 'critical thinking', 'calligraphy',
+  'chess openings', 'productivity systems', 'note-taking', 'mental math', 'improv', 'debate', 'networking', 'interviewing', 'leadership',
+  'design thinking', 'systems thinking', 'persuasive writing', 'data storytelling', 'public relations', 'personal branding'
+];
+const PHILOSOPHY = [
+  'What Stoicism teaches about a good life', 'How to think like a philosopher', 'What game theory reveals about decisions',
+  'How to reason about ethics', 'What existentialism says about meaning', 'How to build a personal philosophy',
+  'What Buddhism teaches about the mind', 'How to think about free will', 'What utilitarianism gets right and wrong',
+  'How to argue without fighting', 'What the trolley problem really asks', 'How to spot logical fallacies', 'What Nietzsche meant by will to power',
+  'How to live with uncertainty', 'What the Socratic method teaches', 'How to build good mental models', 'What first-principles thinking really means',
+  'How to think about risk and probability', 'What Taoism teaches about flow', 'How to develop wisdom, not just knowledge',
+  'How to make decisions under uncertainty', 'What behavioral economics reveals about us', 'How to think in bets', 'What the paradox of choice teaches',
+  'How to build intellectual humility', 'How to reason about long-term consequences', 'What Kant meant by the categorical imperative',
+  'How to think about justice', 'What Plato’s cave teaches about reality', 'How to cultivate curiosity', 'What Aristotle said about happiness',
+  'What Occam’s razor really means', 'How to build a growth mindset', 'What the prisoner’s dilemma teaches', 'How to think about consciousness',
+  'What absurdism says about meaning', 'How to make peace with uncertainty', 'How to think about identity over time', 'What complexity science says about systems',
+  'How to build a philosophy of work'
+];
+
 // Build a large, deduped flat pool of { premise, category } across all genres.
 function buildTopicPool() {
   const out = [];
@@ -165,6 +364,25 @@ function buildTopicPool() {
   COLLEGE.forEach(c => add(c, 'career'));
   PRODUCTS.forEach(p => add(`How to build ${p}`, 'product'));
   CREATIVE.forEach(c => add(`How to make ${c}`, 'creative'));
+  // Expansion pack
+  VENTURE_ANGLES.forEach(a => VENTURES2.forEach(v => add(`${a} ${v}`, 'business')));
+  CAREER_ANGLES.forEach(a => CAREER_FIELDS2.forEach(f => add(`${a} ${f}`, 'career')));
+  MONEY2.forEach(s => { add(`How ${s} actually works`, 'other'); add(`Is ${s} worth it for a beginner`, 'other'); });
+  SCIENCE2.forEach(s => add(s, 'other'));
+  CULTURE_ANGLES.forEach(a => PEOPLE2.forEach(p => add(a.replace('{x}', p), 'other')));
+  COMPANIES2.forEach(c => add(c, 'other'));
+  HISTORY_PATTERNS.forEach(pt => HISTORY_EVENTS.forEach(e => add(pt.replace('{x}', e), 'other')));
+  PSYCHOLOGY.forEach(s => add(s, 'other'));
+  HEALTH_PATTERNS.forEach(pt => HEALTH_SUBJECTS.forEach(s => add(pt.replace('{x}', s), 'other')));
+  SPORTS.forEach(s => add(s, 'other'));
+  GEOPOLITICS.forEach(s => add(s, 'other'));
+  GAMING.forEach(s => add(s, 'other'));
+  SKILLS_PATTERNS.forEach(pt => SKILLS.forEach(s => add(pt.replace('{x}', s), 'other')));
+  PHILOSOPHY.forEach(s => add(s, 'other'));
+  // Extra angles to comfortably clear 3000 unique
+  ['What made {x} successful', 'The rise of {x}'].forEach(a =>
+    [...PEOPLE, ...PEOPLE2].forEach(p => add(a.replace('{x}', p), 'other')));
+  [...MONEY_SUBJECTS, ...MONEY2].forEach(s => add(`How to think about ${s} as a beginner investor`, 'other'));
   return out;
 }
 
