@@ -29,16 +29,20 @@ const RSS_FEEDS = [
   // academic jargon ("nonsense") in a general Signal feed. Curated,
   // reader-friendly outlets only.
 
-  // Science — high-signal, mind-blowing, plain-language
+  // Science — high-signal, mind-blowing, plain-language (diverse sources, not just BBC)
   { url: 'https://www.quantamagazine.org/feed/', source: 'Quanta', category: 'science' },
   { url: 'https://feeds.bbci.co.uk/news/science_and_environment/rss.xml', source: 'BBC Science', category: 'science' },
+  { url: 'https://www.theguardian.com/science/rss', source: 'The Guardian', category: 'science' },
+  { url: 'https://www.sciencedaily.com/rss/top/science.xml', source: 'ScienceDaily', category: 'science' },
+  { url: 'https://www.nasa.gov/news-release/feed/', source: 'NASA', category: 'science' },
 
   // Markets / business / stocks (BBC works; CNBC 403s and Politico 404s from
   // servers, so they're dropped — the Wikipedia signal generator covers markets)
   { url: 'https://feeds.bbci.co.uk/news/business/rss.xml', source: 'BBC Business', category: 'business' },
 
-  // World & geopolitics
+  // World & geopolitics (BBC + Guardian for source diversity)
   { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', source: 'BBC World', category: 'world' },
+  { url: 'https://www.theguardian.com/world/rss', source: 'The Guardian', category: 'world' },
 
   // Culture & notable people (arts, entertainment, public figures — royals, etc.)
   { url: 'https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml', source: 'BBC Culture', category: 'culture' },
