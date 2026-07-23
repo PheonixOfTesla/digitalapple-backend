@@ -838,4 +838,61 @@ router.post('/news/generate-signals', async (req, res) => {
   }
 });
 
+// Economics — revenue (real, from Stripe purchases) vs estimated AI cost, so admin
+// can see profit/loss. AI cost is an ESTIMATE (we don't meter every LLM token),
+// tunable via AI_COST_PER_MAP / AI_COST_PER_1K_NODES env vars.
+router.get('/economics', async (req, res) => {
+  try {
+    const TokenLedger = require('../models/TokenLedger');
+    const Project = require('../models/Project');
+    const SharedMap = require('../models/SharedMap');
+    const Node = require('../models/Node');
+
+    const dayAgo = new Date(Date.now() - 86400000);
+
+    const [purchaseAll, purchaseDay, spendAgg, totalMaps, seedMaps, totalNodes] = await Promise.all([
+      TokenLedger.aggregate([
+        { $match: { reason: 'purchase' } },
+        { $group: { _id: null, cents: { $sum: { $ifNull: ['$metadata.amountPaid', 0] } }, tokens: { $sum: '$delta' }, count: { $sum: 1 } } }
+      ]),
+      TokenLedger.aggregate([
+        { $match: { reason: 'purchase', createdAt: { $gte: dayAgo } } },
+        { $group: { _id: null, cents: { $sum: { $ifNull: ['$metadata.amountPaid', 0] } } } }
+      ]),
+      TokenLedger.aggregate([
+        { $match: { reason: 'spend' } },
+        { $group: { _id: null, tokens: { $sum: { $abs: '$delta' } } } }
+      ]),
+      Project.countDocuments(),
+      SharedMap.countDocuments({ isSeed: true }),
+      Node.countDocuments()
+    ]);
+
+    const revenueUsd = (purchaseAll[0]?.cents || 0) / 100;
+    const revenueTodayUsd = (purchaseDay[0]?.cents || 0) / 100;
+    const tokensSold = purchaseAll[0]?.tokens || 0;
+    const purchases = purchaseAll[0]?.count || 0;
+    const tokensSpent = spendAgg[0]?.tokens || 0;
+
+    const COST_PER_MAP = parseFloat(process.env.AI_COST_PER_MAP) || 0.03;        // ~one full generateMap
+    const COST_PER_1K_NODES = parseFloat(process.env.AI_COST_PER_1K_NODES) || 0.50; // expansions / refinements
+
+    const estAiCostUsd = totalMaps * COST_PER_MAP + (totalNodes / 1000) * COST_PER_1K_NODES;
+    const estProfitUsd = revenueUsd - estAiCostUsd;
+    const marginPct = revenueUsd > 0 ? (estProfitUsd / revenueUsd) * 100 : null;
+
+    res.json({
+      success: true,
+      revenue: { usd: +revenueUsd.toFixed(2), todayUsd: +revenueTodayUsd.toFixed(2), purchases, tokensSold },
+      usage: { mapsGenerated: totalMaps, seedMaps, userMaps: Math.max(0, totalMaps - seedMaps), totalNodes, tokensSpent },
+      aiCost: { estUsd: +estAiCostUsd.toFixed(2), perMap: COST_PER_MAP, per1kNodes: COST_PER_1K_NODES },
+      profit: { estUsd: +estProfitUsd.toFixed(2), marginPct: marginPct == null ? null : +marginPct.toFixed(0) },
+      note: 'Revenue is real (Stripe). AI cost is an estimate — tune AI_COST_PER_MAP / AI_COST_PER_1K_NODES.'
+    });
+  } catch (e) {
+    console.error('[economics] error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
