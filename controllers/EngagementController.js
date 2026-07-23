@@ -18,6 +18,7 @@ const Node = require('../models/Node');
 const Edge = require('../models/Edge');
 const Core = require('../models/Core');
 const User = require('../models/User');
+const NebulaLog = require('../models/NebulaLog');
 const { verifyToken } = require('../middleware/auth');
 const rateLimit = require('express-rate-limit');
 const identity = require('../services/identity');
@@ -372,6 +373,18 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       { _id: mapId },
       { $inc: { forkCount: 1 } }
     );
+
+    // Durable creation record for the admin nebula tracker (best-effort).
+    NebulaLog.create({
+      creatorType: 'registered',
+      ownerId: userId,
+      projectId: project._id,
+      premise: (map.description || '').slice(0, 1000),
+      title: `Fork of: ${map.title}`.slice(0, 200),
+      classificationType: 'fork',
+      forked: true,
+      forkedFromTitle: map.title
+    }).catch((e) => console.error('NebulaLog (fork) write failed:', e.message));
 
     res.json({
       success: true,

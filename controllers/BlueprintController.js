@@ -16,6 +16,7 @@ const UserQuota = require('../models/UserQuota');
 const User = require('../models/User');
 const SessionToken = require('../models/SessionToken');
 const TokenLedger = require('../models/TokenLedger');
+const NebulaLog = require('../models/NebulaLog');
 const { verifyToken } = require('../middleware/auth');
 const identity = require('../services/identity');
 
@@ -1554,6 +1555,19 @@ router.post('/nebula', optionalAuth, async (req, res) => {
 
     // Reload project to get classification data
     const updatedProject = await Project.findById(project._id).lean();
+
+    // Durable creation record for the admin nebula tracker (best-effort —
+    // never let logging affect the user's response).
+    NebulaLog.create({
+      creatorType: req.userId ? 'registered' : 'anonymous',
+      ownerId: req.userId || null,
+      anonymousSessionId: req.userId ? null : (req.anonymousSessionId || null),
+      projectId: project._id,
+      premise: premise.slice(0, 1000),
+      title: (nebula.core?.title || project.name || premise).slice(0, 200),
+      classificationType: nebula.classification?.type || updatedProject?.blueprint?.classification?.type || 'unknown',
+      determination: nebula.determination || 'actionable'
+    }).catch((e) => console.error('NebulaLog write failed:', e.message));
 
     res.json({
       success: true,

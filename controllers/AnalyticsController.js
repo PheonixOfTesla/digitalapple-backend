@@ -1,5 +1,6 @@
 const express = require('express');
 const AnalyticsEvent = require('../models/AnalyticsEvent');
+const NebulaLog = require('../models/NebulaLog');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
@@ -187,6 +188,68 @@ router.get('/stats', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Analytics stats error:', error);
     res.status(500).json({ error: 'Failed to get analytics stats' });
+  }
+});
+
+// Nebula creation tracker (admin only)
+// Who is creating nebulas (anonymous vs registered) and what they made.
+router.get('/nebulas', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekAgo = new Date(todayStart); weekAgo.setDate(weekAgo.getDate() - 7);
+    const monthAgo = new Date(todayStart); monthAgo.setDate(monthAgo.getDate() - 30);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 40));
+
+    const countBy = async (match) => {
+      const rows = await NebulaLog.aggregate([
+        { $match: match },
+        { $group: { _id: '$creatorType', n: { $sum: 1 } } }
+      ]);
+      const out = { anonymous: 0, registered: 0, total: 0 };
+      rows.forEach(r => { out[r._id] = r.n; out.total += r.n; });
+      return out;
+    };
+
+    const [total, today, week, month, byType, recent] = await Promise.all([
+      countBy({}),
+      countBy({ createdAt: { $gte: todayStart } }),
+      countBy({ createdAt: { $gte: weekAgo } }),
+      countBy({ createdAt: { $gte: monthAgo } }),
+      NebulaLog.aggregate([
+        { $match: { createdAt: { $gte: monthAgo } } },
+        { $group: { _id: { $ifNull: ['$classificationType', 'unknown'] }, n: { $sum: 1 } } },
+        { $sort: { n: -1 } }
+      ]),
+      NebulaLog.find({})
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .populate('ownerId', 'email name')
+        .lean()
+    ]);
+
+    const recentClean = recent.map(r => ({
+      creatorType: r.creatorType,
+      who: r.creatorType === 'registered'
+        ? (r.ownerId?.email || r.ownerId?.name || 'registered user')
+        : 'anonymous',
+      title: r.title || r.premise || '(untitled)',
+      premise: r.premise || '',
+      type: r.classificationType || 'unknown',
+      forked: !!r.forked,
+      forkedFromTitle: r.forkedFromTitle || null,
+      createdAt: r.createdAt
+    }));
+
+    res.json({
+      success: true,
+      summary: { total, today, week, month },
+      byType: byType.map(t => ({ type: t._id, count: t.n })),
+      recent: recentClean
+    });
+  } catch (error) {
+    console.error('Nebula tracker error:', error);
+    res.status(500).json({ error: 'Failed to get nebula tracker' });
   }
 });
 
