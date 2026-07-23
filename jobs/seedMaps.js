@@ -608,6 +608,63 @@ function calculateCoverage(nodes) {
   return Math.round((kept / nonCore.length) * 100);
 }
 
+// Normalize simple {economy,orchestration,demand} numbers to schema {value}
+function normSeedScores(s) {
+  if (!s) return undefined;
+  if (s.economy && typeof s.economy === 'object' && s.economy.value !== undefined) return s;
+  return {
+    economy: { value: (typeof s.economy === 'number' ? s.economy : 5) },
+    orchestration: { value: (typeof s.orchestration === 'number' ? s.orchestration : 5) },
+    demand: { value: (typeof s.demand === 'number' ? s.demand : 5) }
+  };
+}
+
+// Convert frame-aware engine output ({core, roots}) to nodes/edges, carrying
+// determination/terminal/action/needsInput/question through (post-convergence).
+function convertFramedToGraph(map) {
+  const nodes = [], edges = [];
+  const det = map.determination === 'overview' ? 'overview' : 'actionable';
+  const coreId = new mongoose.Types.ObjectId();
+  const c = map.core || {};
+  nodes.push({
+    _id: coreId, label: 'CORE', title: c.title || 'Core', statement: c.statement, detail: c.detail || '',
+    scores: normSeedScores(c.scores), confidence: c.confidence, stage: c.stage || 0, status: c.status || 'mapped',
+    determination: det, terminal: false, depth: 0, x: 600, y: 400
+  });
+  const roots = map.roots || [];
+  const angleStep = (2 * Math.PI) / (roots.length || 1);
+  const radius = 180;
+  roots.forEach((r, i) => {
+    const angle = angleStep * i - Math.PI / 2;
+    const rid = new mongoose.Types.ObjectId();
+    nodes.push({
+      _id: rid, parentNodeId: coreId, label: r.label || r.title, title: r.title || r.label,
+      statement: r.statement, detail: r.detail || '', constellation: r.constellation || null, constellationLabel: r.label,
+      scores: normSeedScores(r.scores), confidence: r.confidence, stage: r.stage || 1, status: r.status || 'mapped',
+      determination: det, terminal: !!r.terminal, action: r.action || null,
+      needsInput: !!r.needsInput, question: r.needsInput ? (r.question || r.statement || null) : null,
+      depth: 1, x: Math.round(600 + radius * Math.cos(angle)), y: Math.round(400 + radius * Math.sin(angle))
+    });
+    edges.push({ _id: new mongoose.Types.ObjectId(), sourceId: coreId, targetId: rid });
+    const stars = r.stars || [];
+    const childRadius = radius + 120;
+    stars.forEach((s, j) => {
+      const ca = angle + (j - (stars.length - 1) / 2) * 0.4;
+      const sid = new mongoose.Types.ObjectId();
+      nodes.push({
+        _id: sid, parentNodeId: rid, label: (s.title || '').substring(0, 50), title: s.title,
+        statement: s.statement, detail: s.detail || '', constellation: r.constellation || null, constellationLabel: r.label,
+        scores: normSeedScores(s.scores), confidence: s.confidence, stage: s.stage || 2, status: s.status || 'mapped',
+        determination: det, terminal: !!s.terminal, action: s.action || null,
+        needsInput: !!s.needsInput, question: s.needsInput ? (s.question || s.statement || null) : null,
+        depth: 2, x: Math.round(600 + childRadius * Math.cos(ca)), y: Math.round(400 + childRadius * Math.sin(ca))
+      });
+      edges.push({ _id: new mongoose.Types.ObjectId(), sourceId: rid, targetId: sid });
+    });
+  });
+  return { nodes, edges };
+}
+
 // Convert LLM nebula response to nodes/edges format
 function convertNebulaToGraph(nebula, category) {
   const nodes = [];
@@ -783,21 +840,28 @@ async function createSeedMap(user, topic) {
   });
   await project.save();
 
-  let nodes, edges;
+  let nodes, edges, framedMap = null;
 
-  // Try LLM generation with 60s timeout
+  // Primary: frame-aware engine (classify -> frame -> nebula) so seeds carry
+  // the right determination (actionable vs overview), frame, and terminals.
   try {
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('LLM timeout')), 60000)
-    );
-    const llmPromise = BlueprintLLM.generateNebula(premise, {});
-    const { nebula } = await Promise.race([llmPromise, timeoutPromise]);
-    ({ nodes, edges } = convertNebulaToGraph(nebula, category));
-    console.log(`[SEED] LLM generation succeeded for: ${premise.substring(0, 40)}...`);
-  } catch (llmError) {
-    // Fallback to static generation with enriched detail
-    console.log(`[SEED] LLM fallback (${llmError.message}), using static generation`);
-    ({ nodes, edges } = generateBasicGraphWithDetail(premise, category));
+    const blueprint = require('../services/blueprint');
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('generateMap timeout')), 120000));
+    framedMap = await Promise.race([blueprint.generateMap(premise, project._id), timeoutPromise]);
+    ({ nodes, edges } = convertFramedToGraph(framedMap));
+    if (!nodes || nodes.length < 2) throw new Error('empty framed map');
+    console.log(`[SEED] frame-aware (${framedMap.determination}) for: ${premise.substring(0, 40)}...`);
+  } catch (err) {
+    // Fallback: legacy LLM path, then static — so a map is always produced.
+    console.log(`[SEED] frame-aware fallback (${err.message})`);
+    framedMap = null;
+    try {
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LLM timeout')), 60000));
+      const { nebula } = await Promise.race([BlueprintLLM.generateNebula(premise, {}), timeoutPromise]);
+      ({ nodes, edges } = convertNebulaToGraph(nebula, category));
+    } catch (e2) {
+      ({ nodes, edges } = generateBasicGraphWithDetail(premise, category));
+    }
   }
 
   // Find core node to create Core document
@@ -820,7 +884,12 @@ async function createSeedMap(user, topic) {
     projectId: project._id,
     coreNodeId: coreNode._id,
     premise: premise,
-    classification: {
+    classification: framedMap && framedMap.classification ? {
+      type: framedMap.classification.type || 'unknown',
+      confidence: framedMap.classification.confidence || 0.7,
+      alternates: framedMap.classification.alternates || [],
+      reasoning: framedMap.classification.reasoning || 'Seed map'
+    } : {
       type: category === 'business' ? 'venture' :
             category === 'career' ? 'career' :
             category === 'product' ? 'venture' :
@@ -829,12 +898,13 @@ async function createSeedMap(user, topic) {
       alternates: [],
       reasoning: 'Seed map classification'
     },
-    frameMeta: {
+    determination: framedMap ? (framedMap.determination === 'overview' ? 'overview' : 'actionable') : 'actionable',
+    frameMeta: framedMap && framedMap.frameMeta ? framedMap.frameMeta : {
       selectedType: category,
       confidence: 0.7,
       usedFallback: false
     },
-    stagesEnabled: true
+    stagesEnabled: framedMap ? !!framedMap.stagesEnabled : true
   });
   await coreDoc.save();
 
