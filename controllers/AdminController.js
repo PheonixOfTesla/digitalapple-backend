@@ -1029,4 +1029,123 @@ router.get('/economics', async (req, res) => {
   }
 });
 
+// ==================== AI CREDITS / MAINTENANCE ====================
+// Track the AI budget that keeps generation running: load credits when you top
+// up the provider, and monitor what's left, the burn rate, and the runway.
+
+async function creditSummary() {
+  const AiCredit = require('../models/AiCredit');
+  const aiUsage = require('../services/aiUsage');
+
+  let doc = await AiCredit.findOne({ key: 'global' });
+  if (!doc) doc = await AiCredit.create({ key: 'global' });
+
+  const usage = await aiUsage.getTotals();
+  const costUsd = usage ? (usage.costUsd || 0) : 0;
+
+  const anchored = doc.anchorCostUsd != null;
+  const spent = anchored ? Math.max(0, costUsd - doc.anchorCostUsd) : 0;
+  const remaining = anchored ? (doc.loaded - spent) : doc.loaded;
+
+  // Average daily burn since the anchor (fallback: since first tracked call).
+  let burnPerDay = null, runwayDays = null;
+  if (anchored && doc.anchorAt) {
+    const days = Math.max(0.5, (Date.now() - new Date(doc.anchorAt).getTime()) / 86400000);
+    burnPerDay = spent / days;
+    if (burnPerDay > 0) runwayDays = Math.max(0, remaining / burnPerDay);
+  }
+
+  return {
+    loaded: +doc.loaded.toFixed(4),
+    spent: +spent.toFixed(4),
+    remaining: +remaining.toFixed(4),
+    burnPerDay: burnPerDay == null ? null : +burnPerDay.toFixed(4),
+    runwayDays: runwayDays == null ? null : Math.floor(runwayDays),
+    lowThresholdUsd: doc.lowThresholdUsd,
+    low: anchored && remaining <= doc.lowThresholdUsd,
+    anchored,
+    anchorAt: doc.anchorAt,
+    usage: {
+      calls: usage ? (usage.calls || 0) : 0,
+      totalTokens: usage ? (usage.totalTokens || 0) : 0,
+      costUsd: +costUsd.toFixed(4),
+      lastCallAt: usage ? usage.lastCallAt : null
+    },
+    history: (doc.history || []).slice(-25).reverse()
+  };
+}
+
+// GET /admin/credits — current balance, burn, runway, usage, history
+router.get('/credits', async (req, res) => {
+  try {
+    res.json({ success: true, ...(await creditSummary()) });
+  } catch (e) {
+    console.error('[credits] get error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /admin/credits — add credits or set the exact remaining balance.
+// Body: { amount, note }            → add `amount` dollars of credit
+//       { setBalance, note }        → set remaining to exactly `setBalance`
+//       { lowThreshold }            → update the low-balance warning level
+router.post('/credits', async (req, res) => {
+  try {
+    const AiCredit = require('../models/AiCredit');
+    const aiUsage = require('../services/aiUsage');
+    const body = req.body || {};
+
+    let doc = await AiCredit.findOne({ key: 'global' });
+    if (!doc) doc = await AiCredit.create({ key: 'global' });
+
+    const usage = await aiUsage.getTotals();
+    const costUsd = usage ? (usage.costUsd || 0) : 0;
+    const note = (body.note || '').toString().slice(0, 200);
+
+    // Update just the warning threshold.
+    if (body.lowThreshold != null && body.amount == null && body.setBalance == null) {
+      const t = Math.max(0, Number(body.lowThreshold) || 0);
+      doc.lowThresholdUsd = t;
+      doc.history.push({ type: 'threshold', amount: t, note, balanceAfter: null });
+      await doc.save();
+      return res.json({ success: true, ...(await creditSummary()) });
+    }
+
+    // Set the exact remaining balance (reconcile to what the provider shows).
+    if (body.setBalance != null) {
+      const bal = Number(body.setBalance);
+      if (!Number.isFinite(bal) || bal < 0) return res.status(400).json({ error: 'Invalid balance' });
+      // Re-anchor spend to "now" and set loaded so remaining == bal.
+      doc.anchorCostUsd = costUsd;
+      doc.anchorAt = new Date();
+      doc.loaded = bal;
+      doc.history.push({ type: 'set-balance', amount: bal, note: note || 'Reconciled to provider balance', balanceAfter: bal });
+      await doc.save();
+      return res.json({ success: true, ...(await creditSummary()) });
+    }
+
+    // Add credits.
+    const amount = Number(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'amount must be a positive number (or use setBalance)' });
+    }
+    // First time credits are set: anchor spend tracking to now so historical
+    // AI cost doesn't instantly drain the new balance.
+    if (doc.anchorCostUsd == null) {
+      doc.anchorCostUsd = costUsd;
+      doc.anchorAt = new Date();
+    }
+    doc.loaded = +(doc.loaded + amount).toFixed(4);
+    const spent = Math.max(0, costUsd - doc.anchorCostUsd);
+    const balanceAfter = +(doc.loaded - spent).toFixed(4);
+    doc.history.push({ type: 'load', amount, note, balanceAfter });
+    await doc.save();
+
+    res.json({ success: true, ...(await creditSummary()) });
+  } catch (e) {
+    console.error('[credits] post error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
