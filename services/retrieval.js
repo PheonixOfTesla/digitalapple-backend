@@ -59,21 +59,62 @@ async function getSummary(title) {
   };
 }
 
-// Longer plain-text intro extract for richer grounding.
-async function getIntroExtract(title) {
-  const url = `${WIKI_API}?action=query&prop=extracts&exintro=&explaintext=&redirects=1&format=json&origin=*&titles=${encodeURIComponent(title)}`;
-  const d = await getJson(url);
+// Full plain-text article (all sections) — the figures/dates live in the body,
+// not the intro, so overview maps need this.
+async function getFullExtract(title) {
+  const url = `${WIKI_API}?action=query&prop=extracts&explaintext=&redirects=1&format=json&origin=*&titles=${encodeURIComponent(title)}`;
+  const d = await getJson(url, 7000);
   const pages = d && d.query && d.query.pages;
   if (!pages) return null;
   const p = Object.values(pages)[0];
   return (p && p.extract) || null;
 }
 
+const STOP = new Set('the a an and or of to in on for with how did do does why is are was were their his her its make made money get famous build built empire become became what really caused rise economics'.split(/\s+/));
+function keywords(premise) {
+  return (premise || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 2 && !STOP.has(w));
+}
+const MONEY_RX = /\b(\$[\d,.]+|\d+(?:\.\d+)?\s*(?:million|billion|thousand)|million|billion|earn|earnings|earned|revenue|income|net worth|salary|paid|highest-paid|purse|pay-per-view|ppv|fortune|wealth|sales|deal|contract|endorsement)\b/i;
+
+/**
+ * Build a focused, figure-rich grounding text: the intro (identity) plus the
+ * body sentences most relevant to the premise (money-heavy sentences boosted
+ * when the premise is about wealth/earnings). This puts the REAL documented
+ * numbers in front of the model instead of leaving it to invent them.
+ */
+function buildGrounding(premise, intro, full, budget = 2800) {
+  const kw = keywords(premise);
+  const moneyPremise = /\b(money|wealth|rich|earn|earnings|fortune|income|paid|net worth|revenue|salary|billionaire|millionaire)\b/i.test(premise);
+  const head = (intro || '').slice(0, 700).trim();
+  const body = (full || '').slice(head.length);
+  const sentences = body.split(/(?<=[.!?])\s+/).map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 30 && s.length < 400);
+  const scored = sentences.map((s, i) => {
+    const low = s.toLowerCase();
+    let score = kw.reduce((acc, w) => acc + (low.includes(w) ? 1 : 0), 0);
+    if (moneyPremise && MONEY_RX.test(s)) score += 3;
+    else if (MONEY_RX.test(s)) score += 1;
+    return { s, i, score };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+  const picked = [];
+  let used = head.length;
+  const seen = new Set();
+  for (const { s, i } of scored) {
+    if (used + s.length > budget) continue;
+    if (seen.has(s)) continue;
+    seen.add(s); picked.push({ s, i }); used += s.length + 1;
+    if (used >= budget) break;
+  }
+  picked.sort((a, b) => a.i - b.i); // restore reading order
+  const bodyText = picked.map(p => p.s).join(' ');
+  return [head, bodyText].filter(Boolean).join('\n\n').trim();
+}
+
 /**
  * Retrieve grounding for a premise. Returns:
  *   { text, source: { name, url, handle, kind }, title }  or  null
  */
-async function retrieveContext(premise, { maxChars = 1800 } = {}) {
+async function retrieveContext(premise, { maxChars = 2800 } = {}) {
   try {
     const subject = extractSubject(premise) || premise;
     if (!subject || subject.length < 2) return null;
@@ -81,11 +122,9 @@ async function retrieveContext(premise, { maxChars = 1800 } = {}) {
     if (!title) return null;
     const summary = await getSummary(title);
     if (!summary) return null;
-    let text = summary.extract;
-    const longer = await getIntroExtract(title);
-    if (longer && longer.length > text.length) text = longer;
-    text = text.slice(0, maxChars).trim();
-    if (!text) return null;
+    const full = await getFullExtract(title);
+    const text = buildGrounding(premise, summary.extract, full || summary.extract, maxChars);
+    if (!text || text.length < 40) return null;
     return {
       text,
       title: summary.title,
