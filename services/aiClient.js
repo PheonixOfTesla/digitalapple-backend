@@ -41,6 +41,34 @@ console.log(
   `key_present=${!!providerConfig.key}`
 );
 
+// ── Real token-usage tracking ──────────────────────────────────────────────
+// Wrap chat.completions.create ONCE so every LLM call across the app records its
+// actual prompt/completion tokens + cost. Best-effort: wrapping and logging never
+// break a generation call.
+try {
+  const completions = client.chat && client.chat.completions;
+  if (completions && typeof completions.create === 'function') {
+    const _create = completions.create.bind(completions);
+    completions.create = async function (...args) {
+      const resp = await _create(...args);
+      try {
+        const u = resp && resp.usage;
+        if (u && (u.prompt_tokens || u.completion_tokens)) {
+          const mdl = (args[0] && args[0].model) || model;
+          // Lazy require avoids a load-order cycle with the model layer.
+          require('./aiUsage').record({
+            model: mdl,
+            promptTokens: u.prompt_tokens || 0,
+            completionTokens: u.completion_tokens || 0
+          });
+        }
+      } catch (_) { /* never let usage logging break a call */ }
+      return resp;
+    };
+    console.log('[AI] token-usage tracking enabled');
+  }
+} catch (_) { /* leave client unwrapped if the SDK shape changes */ }
+
 module.exports = {
   client,
   model,

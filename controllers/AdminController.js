@@ -874,20 +874,36 @@ router.get('/economics', async (req, res) => {
     const purchases = purchaseAll[0]?.count || 0;
     const tokensSpent = spendAgg[0]?.tokens || 0;
 
-    const COST_PER_MAP = parseFloat(process.env.AI_COST_PER_MAP) || 0.03;        // ~one full generateMap
-    const COST_PER_1K_NODES = parseFloat(process.env.AI_COST_PER_1K_NODES) || 0.50; // expansions / refinements
+    // Prefer ACTUAL LLM cost from real token usage; fall back to an estimate only
+    // until usage has been logged (older maps generated before tracking existed).
+    const aiUsage = require('../services/aiUsage');
+    const usage = await aiUsage.getTotals();
+    const actualCostUsd = usage ? (usage.costUsd || 0) : 0;
+    const hasActual = !!(usage && usage.calls > 0);
 
+    const COST_PER_MAP = parseFloat(process.env.AI_COST_PER_MAP) || 0.03;
+    const COST_PER_1K_NODES = parseFloat(process.env.AI_COST_PER_1K_NODES) || 0.50;
     const estAiCostUsd = totalMaps * COST_PER_MAP + (totalNodes / 1000) * COST_PER_1K_NODES;
-    const estProfitUsd = revenueUsd - estAiCostUsd;
-    const marginPct = revenueUsd > 0 ? (estProfitUsd / revenueUsd) * 100 : null;
+
+    const aiCostUsd = hasActual ? actualCostUsd : estAiCostUsd;
+    const profitUsd = revenueUsd - aiCostUsd;
+    const marginPct = revenueUsd > 0 ? (profitUsd / revenueUsd) * 100 : null;
 
     res.json({
       success: true,
       revenue: { usd: +revenueUsd.toFixed(2), todayUsd: +revenueTodayUsd.toFixed(2), purchases, tokensSold },
       usage: { mapsGenerated: totalMaps, seedMaps, userMaps: Math.max(0, totalMaps - seedMaps), totalNodes, tokensSpent },
-      aiCost: { estUsd: +estAiCostUsd.toFixed(2), perMap: COST_PER_MAP, per1kNodes: COST_PER_1K_NODES },
-      profit: { estUsd: +estProfitUsd.toFixed(2), marginPct: marginPct == null ? null : +marginPct.toFixed(0) },
-      note: 'Revenue is real (Stripe). AI cost is an estimate — tune AI_COST_PER_MAP / AI_COST_PER_1K_NODES.'
+      aiCost: {
+        usd: +aiCostUsd.toFixed(2),
+        actual: hasActual,                              // true once real usage is logged
+        llmCalls: usage ? (usage.calls || 0) : 0,
+        llmTokens: usage ? (usage.totalTokens || 0) : 0,
+        estUsd: +estAiCostUsd.toFixed(2)                // the fallback estimate, for reference
+      },
+      profit: { usd: +profitUsd.toFixed(2), marginPct: marginPct == null ? null : +marginPct.toFixed(0) },
+      note: hasActual
+        ? 'Revenue and AI cost are both real (Stripe + logged LLM tokens).'
+        : 'Revenue is real; AI cost is an estimate until LLM usage is logged (generate a map to start tracking).'
     });
   } catch (e) {
     console.error('[economics] error', e.message);
