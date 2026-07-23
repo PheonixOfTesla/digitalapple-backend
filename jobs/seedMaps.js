@@ -30,57 +30,146 @@ const BlueprintLLM = require('../services/BlueprintLLM');
 // System user email for seed maps
 const CLOCKWORK_EMAIL = 'system@clockwork.app';
 
-// Topic pool by category
-const TOPIC_POOL = {
-  business: [
-    'A single-operator coffee roastery with direct-to-consumer subscriptions',
-    'A local meal prep service for busy professionals',
-    'A vintage furniture restoration workshop',
-    'An artisan candle brand with seasonal collections',
-    'A mobile car detailing service for residential areas',
-    'A specialty tea import business',
-    'A boutique fitness studio for seniors',
-    'A subscription box for local craft beers',
-    'A home organization consulting service',
-    'A pet photography studio'
-  ],
-  career: [
-    'Transition from engineering to product management',
-    'Breaking into data science without a degree',
-    'Moving from agency to in-house marketing',
-    'Pivoting from finance to tech startup',
-    'Building a freelance design practice',
-    'Switching from teaching to corporate training',
-    'Career restart after extended leave',
-    'Moving from individual contributor to manager',
-    'Transitioning from military to civilian career',
-    'Building expertise in AI prompt engineering'
-  ],
-  product: [
-    'A local-first note-taking app with sync',
-    'A browser extension for focused reading',
-    'A habit tracker that respects privacy',
-    'A scheduling tool for small teams',
-    'A recipe manager with meal planning',
-    'A personal finance tracker without cloud',
-    'A meditation app for specific scenarios',
-    'A tool for managing side projects',
-    'A simple CRM for freelancers',
-    'A reading list manager with recommendations'
-  ],
-  creative: [
-    'A mystery novel set in a remote research station',
-    'A documentary about urban farming pioneers',
-    'A podcast series on regional craft traditions',
-    'An illustrated guide to local wildlife',
-    'A photo essay on neighborhood transformation',
-    'A short film anthology on solitude',
-    'A music album exploring acoustic textures',
-    'A graphic novel about climate adaptation',
-    'A theater piece about generational stories',
-    'An interactive fiction about ethical choices'
-  ]
-};
+// ============== TOPIC POOL ==============
+// Built from curated components across the full college-genius media spectrum:
+// tech/startups, money/markets, science, culture/notable people, career/college,
+// product, creative. buildTopicPool() combines angles × subjects (deduped) to
+// produce 1000+ unique premises so the Atlas rotates for a long time.
+
+const VENTURE_ANGLES = ['How to start', 'How I bootstrapped', 'How to fund', 'How to scale', 'How to market', 'How to validate', 'How I launched', 'The economics of running'];
+const VENTURES = [
+  'a campus coffee cart', 'a Notion template shop', 'a faceless YouTube channel', 'a print-on-demand clothing brand',
+  'a student tutoring collective', 'a micro-SaaS', 'an Etsy handmade shop', 'a paid newsletter', 'a Discord community business',
+  'a mobile car-detailing service', 'a dropshipping store', 'a local meal-prep service', 'a photography side business',
+  'a mobile app studio', 'an online course', 'a thrift-flipping resale business', 'a freelance web-dev practice',
+  'a social-media marketing agency', 'a vending-machine route', 'a pressure-washing business', 'a subscription box brand',
+  'a personal-training business', 'a podcast network', 'a digital art store', 'a landscaping company', 'a food truck',
+  'a candle brand', 'a sneaker resale business', 'a copywriting agency', 'a dog-walking business', 'a video-editing service',
+  'a UGC creator business', 'a Shopify theme shop', 'a boutique gym', 'an AI automation agency', 'a stock-photo business',
+  'a wedding-photography business', 'a home-bakery brand', 'a book-summary newsletter', 'a resume-writing service',
+  'a house-cleaning company', 'a tutoring marketplace', 'a merch brand for creators', 'a plant nursery', 'a bike-repair shop',
+  'a cold-email lead-gen agency', 'a rentable photo-studio space', 'a specialty coffee roastery', 'an indie game studio', 'a niche affiliate site'
+];
+
+const CAREER_ANGLES = ['How to break into', 'How I got into', 'How to land a job in', 'How to build a career in', 'What it really takes to succeed in'];
+const CAREER_FIELDS = [
+  'quant trading', 'venture capital', 'product management', 'data science', 'game development', 'investment banking',
+  'UX design', 'AI research', 'management consulting', 'software engineering at big tech', 'biotech', 'aerospace engineering',
+  'cybersecurity', 'growth marketing', 'technical writing', 'robotics', 'sports analytics', 'film production', 'journalism',
+  'clinical psychology', 'architecture', 'law', 'medicine', 'academia', 'private equity', 'machine learning engineering',
+  'devrel', 'hardware engineering', 'nursing', 'physical therapy', 'commercial real estate', 'supply chain', 'brand strategy',
+  'animation', 'music production', 'fashion design', 'sports management', 'public policy', 'data engineering', 'sales',
+  'startup founding', 'trading', 'accounting', 'civil engineering', 'environmental science', 'graphic design', 'nutrition',
+  'esports', 'teaching', 'diplomacy'
+];
+
+const MONEY_SUBJECTS = [
+  'compound interest', 'options trading', 'index funds', 'ETFs', 'short selling', 'dividend investing', 'a Roth IRA',
+  'credit scores', 'inflation', 'the Federal Reserve', 'bond yields', 'startup equity and vesting', 'crypto and blockchain',
+  'a 401k', 'mortgages', 'the housing market', 'hedge funds', 'stock buybacks', 'IPOs', 'venture capital returns',
+  'the bond market', 'recessions', 'taxes on investments', 'real estate investing', 'dollar-cost averaging', 'market crashes',
+  'high-frequency trading', 'private credit', 'commodities', 'currency exchange'
+];
+
+const SCIENCE = [
+  'How scientists photographed a black hole', 'How mRNA vaccines were developed', 'How CRISPR gene editing works',
+  'How the James Webb telescope sees the early universe', 'How nuclear fusion could power the future', 'How quantum computers work',
+  'How GPS actually works', 'How the brain forms memories', 'How vaccines train the immune system', 'How SpaceX made rockets reusable',
+  'How self-driving cars see the road', 'How the internet actually works', 'How lithium batteries power everything',
+  'How weather forecasting got so accurate', 'How DNA ancestry tests work', 'How antibiotics fight infection', 'How solar panels turn light into power',
+  'How the human genome was sequenced', 'How airplanes actually stay in the air', 'How encryption keeps data secret',
+  'How the LHC discovered the Higgs boson', 'How neural networks learn', 'How the water cycle shapes climate',
+  'How anesthesia switches off consciousness', 'How the eye turns light into sight', 'How earthquakes are predicted',
+  'How the immune system remembers', 'How 3D printing builds objects layer by layer', 'How black holes bend time',
+  'How the periodic table was discovered', 'How photosynthesis feeds the planet', 'How MRI machines see inside the body',
+  'How the theory of relativity changed physics', 'How viruses hijack cells', 'How the moon landing was pulled off'
+];
+
+const CULTURE_ANGLES = ['How did {x} get famous', 'How did {x} build their empire', 'How did {x} make their money'];
+const PEOPLE = [
+  'Drake', 'MrBeast', 'Taylor Swift', 'Beyoncé', 'Michael Jordan', 'Elon Musk', 'Steve Jobs', 'Rihanna', 'Kanye West',
+  'LeBron James', 'Oprah', 'Jeff Bezos', 'Kim Kardashian', 'Cristiano Ronaldo', 'Travis Scott', 'SZA', 'Bad Bunny',
+  'Zendaya', 'Dwayne Johnson', 'Serena Williams', 'Kendrick Lamar', 'Ariana Grande', 'Mark Zuckerberg', 'Rihanna',
+  'Post Malone', 'Billie Eilish', 'The Weeknd', 'Lionel Messi', 'Warren Buffett', 'Jay-Z', 'Selena Gomez', 'Tom Brady',
+  'Kylie Jenner', 'Ed Sheeran', 'Snoop Dogg', 'Emma Chamberlain', 'Logan Paul', 'Gary Vaynerchuk', 'Alex Hormozi',
+  'Naval Ravikant', 'Sam Altman', 'Jensen Huang', 'Bernard Arnault', 'Rihanna', 'Simone Biles'
+];
+
+const COMPANIES = [
+  'How did NVIDIA become the most valuable company', 'How did Apple become a trillion-dollar company', 'How did Netflix beat Blockbuster',
+  'How did TikTok take over the world', 'How did Amazon start in a garage', 'How did Google win search', 'How did Airbnb start',
+  'How did Tesla change the car industry', 'How did OpenAI build ChatGPT', 'How did Spotify beat piracy', 'How did Nike build its brand',
+  'How did Disney build its empire', 'How did SpaceX undercut the rocket industry', 'How did Uber change transportation',
+  'How did Stripe win online payments', 'How did Shopify empower small sellers', 'How did Costco win loyal customers',
+  'How did Duolingo make learning addictive', 'How did Robinhood change investing', 'How did Red Bull build a media empire',
+  'How did LEGO come back from bankruptcy', 'How did Patagonia build a values-first brand', 'How did Instagram grow so fast',
+  'How did Chipotle build a fast-casual empire', 'How did Canva democratize design', 'How did Notion build a cult following',
+  'How did Trader Joe’s win grocery', 'How did Rolex hold its value', 'How did Supreme build hype', 'How did Discord win gamers'
+];
+
+const COLLEGE = [
+  'How to win a full-ride scholarship', 'How I got my doctorate while working part-time', 'What grants I got in Florida as a college student',
+  'How to land a Fulbright scholarship', 'How to get into a top MBA program', 'How to get published as an undergraduate researcher',
+  'How I paid off my student loans in two years', 'How to get a big-tech internship as a sophomore',
+  'How to get into medical school as a non-traditional applicant', 'How to become a research assistant as a freshman',
+  'How to get recruited for college sports', 'How to transfer into an Ivy League school', 'How to win a National Merit Scholarship',
+  'How to study abroad on a budget', 'How to graduate college debt-free', 'How to ace technical interviews as a student',
+  'How to build a standout college application', 'How to land undergraduate research funding', 'How to get a PhD stipend that covers living costs',
+  'How to double-major without burning out', 'How to get a first internship with no experience', 'How to network your way into a dream job',
+  'How to start a startup while in college', 'How to get a green card through a STEM degree', 'How to get into law school with a low GPA',
+  'How to win a hackathon', 'How to get a teaching assistant position', 'How to land a Rhodes Scholarship',
+  'How to build a portfolio that gets you hired', 'How to negotiate your first job offer'
+];
+
+const PRODUCTS = [
+  'a privacy-first study app for students', 'a tool that turns lectures into notes', 'a budgeting app for students on loans',
+  'a habit tracker that actually sticks', 'a flashcard app powered by spaced repetition', 'a campus textbook marketplace',
+  'a focus timer that blocks distractions', 'a research-paper summarizer', 'a meal-planning app for tight budgets',
+  'a scheduling app for group projects', 'an AI tutor for hard classes', 'a job-application tracker', 'a class-notes sharing network',
+  'a habit-building app for gym beginners', 'a personal-finance dashboard for Gen Z', 'a dorm-room marketplace app',
+  'a resume builder with AI feedback', 'a language-exchange app for students', 'a study-group finder', 'an internship-discovery app',
+  'a mental-health check-in app', 'a syllabus-to-calendar tool', 'a citation manager that isn’t painful', 'a campus-events app',
+  'a split-the-bill app for roommates', 'a portfolio site builder for creatives', 'a time-blocking planner', 'a reading-tracker for students',
+  'a note-taking app that maps ideas', 'a career-path explorer for undecided majors'
+];
+
+const CREATIVE = [
+  'a documentary about first-gen college students', 'a podcast on how great scientists think', 'a YouTube series explaining big ideas simply',
+  'a mystery novel set in a research station', 'a short film about ambition', 'a music album blending genres',
+  'a graphic novel about the future of AI', 'a photo essay on a changing neighborhood', 'a video essay channel on culture',
+  'an animated explainer series on economics', 'a newsletter that curates the best of the internet', 'a comic about startup life',
+  'a docuseries on self-made entrepreneurs', 'a podcast interviewing college dropouts who made it', 'a short-story collection about growing up online',
+  'a science-fiction novel about space colonies', 'a TikTok series teaching history', 'an interactive story about hard choices',
+  'a coffee-table book on modern architecture', 'a zine about underground music scenes', 'a documentary on the creator economy',
+  'a fantasy novel with a magic system based on physics', 'a podcast on the psychology of money', 'a YouTube channel building things from scratch',
+  'a video series on how cities work', 'a poetry collection about the digital age', 'a board game about running a startup',
+  'a mockumentary about influencers', 'a photo series on late-night study spots', 'a mini-series on the history of hip-hop'
+];
+
+// Build a large, deduped flat pool of { premise, category } across all genres.
+function buildTopicPool() {
+  const out = [];
+  const seen = new Set();
+  const add = (premise, category) => {
+    const key = premise.toLowerCase().trim();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ premise, category });
+  };
+  VENTURE_ANGLES.forEach(a => VENTURES.forEach(v => add(`${a} ${v}`, 'business')));
+  CAREER_ANGLES.forEach(a => CAREER_FIELDS.forEach(f => add(`${a} ${f}`, 'career')));
+  MONEY_SUBJECTS.forEach(s => { add(`How ${s} actually works`, 'other'); add(`How to start investing in ${s}`, 'other'); add(`The real risks of ${s}`, 'other'); });
+  SCIENCE.forEach(s => add(s, 'other'));
+  CULTURE_ANGLES.forEach(a => PEOPLE.forEach(p => add(a.replace('{x}', p), 'other')));
+  COMPANIES.forEach(c => add(c, 'other'));
+  COLLEGE.forEach(c => add(c, 'career'));
+  PRODUCTS.forEach(p => add(`How to build ${p}`, 'product'));
+  CREATIVE.forEach(c => add(`How to make ${c}`, 'creative'));
+  return out;
+}
+
+// Flat pool (built once) — used by both the daily job and the backfill script.
+const FLAT_POOL = buildTopicPool();
 
 // Hash a premise for deduplication
 function hashPremise(premise) {
@@ -148,27 +237,20 @@ async function getNewsTopics(limit = 3) {
   return topics;
 }
 
-// Pick random topics avoiding duplicates
+// Pick random topics avoiding duplicates (draws from the large flat pool)
 async function pickTopics(count = 5) {
   const topics = [];
-  const categories = Object.keys(TOPIC_POOL);
 
-  // Try to get some news-based topics first
+  // Try to get some news-based topics first (perpetual freshness)
   const newsTopics = await getNewsTopics(Math.ceil(count / 3));
   topics.push(...newsTopics);
 
-  // Fill rest from pool
-  const attempts = count * 3; // Allow some failures
-  let tried = 0;
-
-  while (topics.length < count && tried < attempts) {
-    tried++;
-    const category = categories[Math.floor(Math.random() * categories.length)];
-    const pool = TOPIC_POOL[category];
-    const premise = pool[Math.floor(Math.random() * pool.length)];
-
-    if (!(await premiseExists(premise))) {
-      topics.push({ category, premise });
+  // Shuffle a copy of the flat pool and take the first `count` not-yet-seen
+  const shuffled = [...FLAT_POOL].sort(() => Math.random() - 0.5);
+  for (const item of shuffled) {
+    if (topics.length >= count) break;
+    if (!(await premiseExists(item.premise))) {
+      topics.push({ category: item.category, premise: item.premise });
     }
   }
 
@@ -738,7 +820,7 @@ async function runOnce() {
   return result;
 }
 
-module.exports = { generateSeedMaps, getClockworkUser, hashPremise };
+module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL };
 
 // Allow running directly: node jobs/seedMaps.js
 if (require.main === module) {
