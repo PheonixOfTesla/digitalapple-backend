@@ -92,7 +92,7 @@ const sharedMapSchema = new mongoose.Schema({
       path: [{ nodeId: mongoose.Schema.Types.ObjectId, title: String }],
       stableId: String,
       essence: { title: String, statement: String },
-      derivation: { type: String },
+      derivation: { type: mongoose.Schema.Types.Mixed },
       liveness: String,
       terminal: Boolean,
       scoping: { type: mongoose.Schema.Types.Mixed }
@@ -130,7 +130,7 @@ const sharedMapSchema = new mongoose.Schema({
       path: [{ nodeId: mongoose.Schema.Types.ObjectId, title: String }],
       stableId: String,
       essence: { title: String, statement: String },
-      derivation: { type: String },
+      derivation: { type: mongoose.Schema.Types.Mixed },
       liveness: String,
       terminal: Boolean,
       // Scoping fields
