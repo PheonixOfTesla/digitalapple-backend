@@ -75,7 +75,9 @@ Return JSON with full content for this root and its stars. Be SPECIFIC to this e
   ]
 }
 
-EXECUTION-LEVEL OUTPUT (CRITICAL for stars/leaves):
+The input carries a "determination" field. Match it:
+
+── If determination = "actionable" ──
 Stars must resolve to DOABLE ACTIONS, not category restating. Include:
 - Named entities: real offices, tools, services, websites (e.g. "Florida Division of Corporations", "Sarasota County Clerk", "FDACS", "@sarasotaroasters on Instagram")
 - Real numbers: costs ($125), times (3-5 business days), quantities (40 questions)
@@ -86,10 +88,23 @@ Examples of the target grade:
 - "Book the road test at Sarasota DMV; bring proof of insurance + permit held ≥12 months, $48."
 - "Reserve @sarasotaroasters on Instagram + TikTok; post 3x/week, lead with roast-day videos."
 
-FORBIDDEN:
-- "Handle the operations dimension" — that's a category, not an action
+── If determination = "overview" ──
+The premise asks what's TRUE, not what to do. Stars must resolve to EVIDENCED FINDINGS —
+specific claims backed by figures, names, dates, and mechanisms. Do NOT write action steps.
+Include:
+- Figures: dollar amounts, percentages, magnitudes ("$300M+ across the Pacquiao and McGregor bouts")
+- Named entities & dates: real people, deals, years ("the 2015 Pacquiao fight", "Al Haymon", "TMT Promotions")
+- Mechanism: WHY/HOW it worked ("kept the promoter's cut by self-promoting under Mayweather Promotions")
+
+Examples of the target grade (overview):
+- "Pay-per-view was the engine: the 2015 Pacquiao bout sold ~4.6M PPV buys at ~$100 each, ~$400M+ gross."
+- "He self-promoted under Mayweather Promotions after 2007, capturing the promoter's cut instead of paying Top Rank."
+- "Purse-bid leverage: by controlling his own promotion he negotiated 60-70% splits, not a fighter's usual share."
+
+FORBIDDEN (both modes):
+- "Handle the operations dimension" — that's a category, not content
 - "This area covers X" — that's filler
-- "Consider the logistics" — that's vague guidance, not a step
+- "Consider the logistics" — vague guidance, not a resolved node
 - "Specifics depend on your context" — either infer or ask a specific question
 
 If you genuinely cannot infer execution-level detail without user input, return:
@@ -105,15 +120,53 @@ const CONTENT_SYSTEM = BLUEPRINT_SYSTEM_PREFIX + CONTENT_INSTRUCTION;
 
 // ============== TERMINAL DETECTION ==============
 
+// Specificity / execution markers — shared by both determinations
+const SPECIFICITY_PATTERNS = [
+  /\$[\d,]+/,                        // Dollar amount: $125, $1,200
+  /\d+\s*(day|week|hour|minute|month|year)/i,  // Duration
+  /\d+\s*%/,                         // Percentage
+  /@\w+/,                            // Social handle
+  /\.(com|org|gov|io|co)\b/i,        // Website
+  /\b(LLC|DBA|EIN|SSN|DMV|IRS|FDACS|FDA|SEC|IRS)\b/,  // Official acronyms
+  /\b(before|after|first|then|needed for|precondition)\b/i,  // Sequence cues
+  /\b(county|state|federal|division|department|office|clerk|bureau|commission)\b/i,  // Gov entities
+];
+
+// Evidence markers for OVERVIEW findings — figures, named things, mechanisms
+const EVIDENCE_PATTERNS = [
+  /\$[\d,]+(\.\d+)?\s*(million|billion|thousand|k|m|b)?/i,  // Money figures
+  /\b\d+(\.\d+)?\s*(million|billion|thousand|percent|%)/i,   // Quantified magnitudes
+  /\b(19|20)\d{2}\b/,                // Years: 1996, 2015
+  /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b/, // Proper-noun sequence (Named entities)
+  /\b(because|due to|driven by|resulted in|caused by|thanks to|as a result)\b/i, // Mechanism/causation
+  /\b(pay-per-view|PPV|contract|revenue|earnings|purse|deal|share|stake|margin)\b/i, // Domain evidence nouns
+];
+
+// Action verbs that signal a doable step (ACTIONABLE determination)
+const ACTION_PATTERNS = [
+  /^\s*(register|file|apply|submit|book|schedule|call|email|contact|buy|order|sign|create|write|upload|download|reserve|open|set up|establish|obtain|renew|pass|take|complete|pay|hire|lease|form|draft|install|configure|visit|bring|request)/i,
+  /\b(register|file|apply|submit|book|schedule|obtain|renew)\b.*\b(at|with|to|on|from)\b/i,
+];
+
+// Category-restatement / filler — never terminal, signals a non-resolved node
+const CATEGORY_PATTERNS = [
+  /^(the\s+\w+\s+dimension|handle the|consider the|this area covers|this section covers)/i,
+  /specifics depend on your context/i,
+];
+
 /**
- * Determine if a node has reached terminal/actionable state.
- * A terminal node is one that specifies a DOABLE ACTION with concrete specifics.
+ * Determine if a node has reached a resolved / terminal state.
+ *
+ * Terminal criterion depends on the map's determination (PART 3):
+ *   - actionable: a DOABLE step — action verb + concrete specifics.
+ *   - overview:   an evidenced FINDING — figures / names / mechanisms.
  *
  * @param {object} node - The node to evaluate
- * @param {number} depth - The depth level (0=core, 1=root, 2=star)
- * @returns {object} { terminal: boolean, reason: string, action: string|null }
+ * @param {number} depth - Depth level (0=core, 1=root, 2=star, 3+ deeper)
+ * @param {'actionable'|'overview'} determination
+ * @returns {object} { terminal, reason, action }
  */
-function judgeNodeTerminal(node, depth = 0) {
+function judgeNodeTerminal(node, depth = 0, determination = 'actionable') {
   // Core nodes are never terminal
   if (depth === 0) {
     return { terminal: false, reason: 'Core node', action: null };
@@ -127,55 +180,60 @@ function judgeNodeTerminal(node, depth = 0) {
   const statement = node.statement || node.title || '';
   const detail = node.detail || '';
   const combined = statement + ' ' + detail;
+  const wordCount = statement.trim().split(/\s+/).length;
 
-  // Action verb patterns suggesting a doable step
-  const actionPatterns = [
-    /^(register|file|apply|submit|book|schedule|call|email|contact|buy|order|sign|create|write|upload|download|reserve|open|set up|establish)/i,
-    /\b(register|file|apply|submit|book|schedule)\b.*\b(at|with|to|on)\b/i,  // "register with X", "file at Y"
-  ];
+  // Category restatement is never terminal regardless of determination
+  if (CATEGORY_PATTERNS.some(p => p.test(statement.trim()))) {
+    return { terminal: false, reason: 'Category restatement, not resolved', action: null };
+  }
 
-  // Specificity patterns indicating execution-level detail
-  const specificityPatterns = [
-    /\$\d+/,                           // Dollar amount: $125, $48
-    /\d+\s*(day|week|hour|minute)/i,   // Time: 3 days, 2 weeks
-    /\d+\s*%/,                         // Percentage
-    /@\w+/,                            // Social handle
-    /\.(com|org|gov|io|co)\b/i,        // Website
-    /\b(LLC|DBA|EIN|SSN|DMV|IRS)\b/,   // Official acronyms
-    /\b(before|after|first|then|needed for)\b/i,  // Sequence cues
-    /\b(county|state|federal|division|department|office|clerk)\b/i,  // Government entities
-  ];
-
-  // Check for action verbs
-  const hasActionVerb = actionPatterns.some(p => p.test(statement));
-
-  // Check for specificity markers
-  const specificityScore = specificityPatterns.filter(p => p.test(combined)).length;
-
-  // Extract action text: statement + relevant detail (truncate if needed)
+  // Extract the resolved text: statement + first sentence of detail
   const extractAction = () => {
     let action = statement;
-    if (detail && detail.length < 200) {
+    if (detail && detail.length < 240) {
       action += ' — ' + detail.split('.')[0] + '.';
     }
-    return action.length > 300 ? action.substring(0, 297) + '...' : action;
+    return action.length > 400 ? action.substring(0, 397) + '...' : action;
   };
 
-  // Terminal conditions:
-  // 1. Has action verb + at least 1 specificity marker
+  if (determination === 'overview') {
+    // OVERVIEW: terminal when the node states an evidenced finding.
+    const evidenceScore = EVIDENCE_PATTERNS.filter(p => p.test(combined)).length;
+
+    // A finding needs concrete evidence (figures/names/mechanism).
+    if (depth >= 2 && evidenceScore >= 2) {
+      return { terminal: true, reason: 'Evidenced finding', action: extractAction() };
+    }
+    // A concise, evidenced claim at leaf depth also resolves.
+    if (depth >= 2 && evidenceScore >= 1 && wordCount <= 30 && /\b(19|20)\d{2}\b|\$|\d/.test(combined)) {
+      return { terminal: true, reason: 'Concise evidenced finding', action: extractAction() };
+    }
+    // Deep node with any evidence.
+    if (depth >= 3 && evidenceScore >= 1) {
+      return { terminal: true, reason: 'Deep evidenced finding', action: extractAction() };
+    }
+    return { terminal: false, reason: 'Not yet an evidenced finding', action: null };
+  }
+
+  // ACTIONABLE (default): terminal when the node states a doable step.
+  const hasActionVerb = ACTION_PATTERNS.some(p => p.test(statement));
+  const specificityScore = SPECIFICITY_PATTERNS.filter(p => p.test(combined)).length;
+
+  // 1. Action verb + at least one concrete specific
   if (hasActionVerb && specificityScore >= 1) {
     return { terminal: true, reason: 'Action with specifics', action: extractAction() };
   }
-
-  // 2. Depth 2 (star) with 2+ specificity markers (even without explicit action verb)
+  // 2. Leaf with multiple specifics even without an explicit verb
   if (depth >= 2 && specificityScore >= 2) {
     return { terminal: true, reason: 'Leaf with multiple specifics', action: extractAction() };
   }
-
-  // 3. Short, concrete statement at depth 2+
-  const wordCount = statement.trim().split(/\s+/).length;
-  if (depth >= 2 && wordCount <= 12 && specificityScore >= 1) {
+  // 3. Concise, concrete leaf
+  if (depth >= 2 && wordCount <= 14 && specificityScore >= 1) {
     return { terminal: true, reason: 'Concise actionable leaf', action: extractAction() };
+  }
+  // 4. Deep + action verb (short doable step)
+  if (depth >= 3 && hasActionVerb) {
+    return { terminal: true, reason: 'Deep actionable step', action: extractAction() };
   }
 
   return { terminal: false, reason: 'Can be expanded further', action: null };
@@ -183,20 +241,24 @@ function judgeNodeTerminal(node, depth = 0) {
 
 /**
  * Mark all terminal nodes in a nebula and set action/question fields.
+ * Runs at generation time so fresh maps have real terminals (PART 2).
  *
  * @param {object} nebula - The nebula to process
- * @returns {object} The nebula with terminal flags and action/question fields set
+ * @param {'actionable'|'overview'} determination
+ * @returns {object} The nebula with terminal flags + action/question fields set
  */
-function markTerminalNodes(nebula) {
+function markTerminalNodes(nebula, determination = 'actionable') {
   // Core is never terminal
   if (nebula.core) {
     nebula.core.terminal = false;
     nebula.core.action = null;
+    nebula.core.determination = determination;
   }
 
   // Process roots and their stars
   for (const root of (nebula.roots || [])) {
-    const rootResult = judgeNodeTerminal(root, 1);
+    root.determination = determination;
+    const rootResult = judgeNodeTerminal(root, 1, determination);
     root.terminal = rootResult.terminal;
     root.action = rootResult.action;
 
@@ -206,7 +268,8 @@ function markTerminalNodes(nebula) {
     }
 
     for (const star of (root.stars || [])) {
-      const starResult = judgeNodeTerminal(star, 2);
+      star.determination = determination;
+      const starResult = judgeNodeTerminal(star, 2, determination);
       star.terminal = starResult.terminal;
       star.action = starResult.action;
 
@@ -246,6 +309,7 @@ function countTerminalNodes(nebula) {
  */
 async function generateFramedNebula(frameInput, retries = 1) {
   const startTime = Date.now();
+  const determination = frameInput.determination === 'overview' ? 'overview' : 'actionable';
 
   // Step 1: Generate skeleton (structure only)
   console.log('[Nebula] Step 1: Generating skeleton...');
@@ -270,11 +334,12 @@ async function generateFramedNebula(frameInput, retries = 1) {
   // Step 4: Enforce guards (label mapping, optional-root dropping)
   const guarded = enforceGuards(nebula, frameInput);
 
-  // Step 5: Mark terminal nodes at generation time
-  console.log('[Nebula] Step 4: Detecting terminal nodes...');
-  const result = markTerminalNodes(guarded);
+  // Step 5: Mark terminal nodes at generation time (determination-aware)
+  console.log(`[Nebula] Step 4: Detecting terminal nodes (determination=${determination})...`);
+  const result = markTerminalNodes(guarded, determination);
+  result.determination = determination;
   const terminalCount = countTerminalNodes(result);
-  console.log(`[Nebula] Terminal nodes: ${terminalCount}`);
+  console.log(`[Nebula] Terminal nodes: ${terminalCount}/${determination}`);
 
   const elapsed = Date.now() - startTime;
   console.log(`[Nebula] Complete in ${elapsed}ms`);
@@ -337,6 +402,7 @@ async function generateContentParallel(frameInput, skeleton, retries) {
       frameRoot,
       contentInput: {
         premise,
+        determination: frameInput.determination === 'overview' ? 'overview' : 'actionable',
         root: {
           frameId: skeletonRoot.frameId,
           label: frameRoot.label || skeletonRoot.label,
@@ -504,46 +570,76 @@ function generateSpecificQuestion(premise, label, covers) {
 }
 
 /**
- * Synthesize core detail from all roots (advisory integration).
- * Confidence-weighted: terminal/stated = full, inferred = partial, unknown = gap.
+ * Confidence weight for a node's contribution to completeness (PART 5).
+ * confirmed/terminal = full (1.0), stated = 0.8, inferred = partial (0.5),
+ * unknown = gap (0.0). NOT node-count.
  */
-function synthesizeCoreDetail(roots, premise) {
+function completenessWeight(node) {
+  if (node.terminal) return 1.0;
+  const basis = node.confidence?.basis || 'unknown';
+  if (node.needsInput || basis === 'unknown') return 0.0;
+  if (basis === 'confirmed') return 1.0;
+  if (basis === 'stated') return 0.8;
+  if (basis === 'inferred') return 0.5;
+  return 0.0;
+}
+
+/**
+ * Synthesize the core detail as an INTEGRATION of all developed nodes —
+ * re-synthesized in Clockwork's advisory voice as leaves resolve (PART 5).
+ * Not the premise repeated. Completeness is confidence-weighted, not node-count.
+ *
+ * @param {Array} roots
+ * @param {string} premise
+ * @param {'actionable'|'overview'} determination
+ */
+function synthesizeCoreDetail(roots, premise, determination = 'actionable') {
+  const noun = determination === 'overview' ? 'account' : 'plan';
   if (!roots || roots.length === 0) {
-    return `This plan explores ${premise}. Each section below covers a key dimension.`;
+    return `This ${noun} maps ${premise}. Each section below opens a dimension to develop.`;
   }
 
-  // Collect key points from resolved roots
+  // Collect key points from resolved roots, weighted by grounding
   const highlights = [];
-  let terminalCount = 0;
-  let totalNodes = 0;
+  let resolvedCount = 0;     // terminal endpoints reached
+  let weightSum = 0;         // confidence-weighted completeness numerator
+  let weightMax = 0;         // denominator (every developable node)
+  const openGaps = [];       // labels of dimensions still needing input
 
   for (const root of roots) {
-    totalNodes++;
     const label = root.label || root.title;
 
-    // Check if root has real content (not a question)
-    if (!root.needsInput && root.statement && !root.statement.startsWith('What ')) {
+    weightMax += 1;
+    weightSum += completenessWeight(root);
+    if (root.terminal) resolvedCount++;
+
+    if (root.needsInput) {
+      openGaps.push(label);
+    } else if (root.statement && !root.statement.startsWith('What ')) {
       highlights.push(`${label}: ${root.statement.split('.')[0]}.`);
     }
 
-    // Count terminal actions
-    if (root.terminal) terminalCount++;
     for (const star of (root.stars || [])) {
-      totalNodes++;
-      if (star.terminal) terminalCount++;
+      weightMax += 1;
+      weightSum += completenessWeight(star);
+      if (star.terminal) resolvedCount++;
     }
   }
 
-  // Build integration summary
+  const completeness = weightMax > 0 ? Math.round((weightSum / weightMax) * 100) : 0;
+
   if (highlights.length === 0) {
-    return `This plan explores ${premise}. Input needed to scope the key dimensions.`;
+    const gapNote = openGaps.length ? ` Start with ${openGaps.slice(0, 2).join(' and ')}.` : '';
+    return `This ${noun} maps ${premise}, but the key dimensions still need your input.${gapNote}`;
   }
 
-  const actionSummary = terminalCount > 0
-    ? ` ${terminalCount} actionable steps identified so far.`
-    : ' Keep expanding to reach actionable steps.';
+  const resolvedNote = determination === 'overview'
+    ? (resolvedCount > 0 ? ` ${resolvedCount} evidenced findings so far` : ' No findings resolved yet — keep developing the branches')
+    : (resolvedCount > 0 ? ` ${resolvedCount} concrete steps identified` : ' No steps resolved yet — keep developing the branches');
 
-  return highlights.slice(0, 4).join(' ') + actionSummary;
+  const gapNote = openGaps.length ? `; ${openGaps.length} dimension(s) still open` : '';
+
+  return `${highlights.slice(0, 4).join(' ')}${resolvedNote} (${completeness}% grounded)${gapNote}.`;
 }
 
 /**
@@ -634,7 +730,11 @@ function assembleNebula(skeleton, contentResults, frameInput) {
   }
 
   // Synthesize core detail from assembled roots
-  nebula.core.detail = synthesizeCoreDetail(nebula.roots, frameInput.premise);
+  nebula.core.detail = synthesizeCoreDetail(
+    nebula.roots,
+    frameInput.premise,
+    frameInput.determination === 'overview' ? 'overview' : 'actionable'
+  );
 
   return nebula;
 }
@@ -812,4 +912,9 @@ function capitalizeFirst(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-module.exports = { generateFramedNebula };
+module.exports = {
+  generateFramedNebula,
+  judgeNodeTerminal,
+  markTerminalNodes,
+  countTerminalNodes
+};

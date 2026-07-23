@@ -10,7 +10,7 @@
 
 const { classifyPremise } = require('./blueprintClassify');
 const { loadFrame, buildNebulaFrameInput } = require('./frameLoader');
-const { generateFramedNebula } = require('./blueprintNebula');
+const { generateFramedNebula, judgeNodeTerminal } = require('./blueprintNebula');
 const Project = require('../models/Project');
 const OrphanLog = require('../models/OrphanLog');
 
@@ -30,20 +30,36 @@ async function generateMap(premise, projectId) {
   const { frame, meta } = loadFrame(classification);
   console.log(`[Blueprint] Using frame: ${frame.label}, fallback: ${meta.usedFallback}, straddle: ${meta.isStraddle}`);
 
+  // Determination: what this map resolves TOWARD (PART 3)
+  const determination = classification.determination === 'overview' ? 'overview' : 'actionable';
+  console.log(`[Blueprint] Determination: ${determination}`);
+
   // 3. Store classification on project
   if (projectId) {
     await Project.findByIdAndUpdate(projectId, {
       'blueprint.classification': classification,
       'blueprint.frameMeta': meta,
+      'blueprint.determination': determination,
       'blueprint.stagesEnabled': frame.stagesEnabled
     });
   }
 
-  // 4. Build nebula input with frame context
-  const frameInput = buildNebulaFrameInput(frame, premise);
+  // 4. Build nebula input with frame context + determination
+  const frameInput = buildNebulaFrameInput(frame, premise, determination);
 
   // 5. Generate the map
   const map = await generateFramedNebula(frameInput);
+
+  // Attach classification + frame meta so the controller persists the real
+  // type on the Core (previously always defaulted to 'unknown').
+  map.classification = {
+    type: classification.type,
+    confidence: classification.confidence,
+    alternates: classification.alternates || [],
+    reasoning: classification.reasoning || ''
+  };
+  map.frameMeta = meta;
+  map.determination = determination;
 
   // 6. Log orphans, straddles, and low-confidence for review
   if (meta.usedFallback || meta.isStraddle || classification.confidence < 0.7) {
@@ -145,58 +161,32 @@ async function decideExpansionMode(node) {
 }
 
 /**
- * Judge if a node is terminal (actionable, should not expand).
+ * Judge if a node is terminal (resolved endpoint, should not expand).
  *
- * A node is terminal when it's a specific, doable action — not a topic.
- * Signals:
- * - Already a concrete action (starts with verb, names specific task)
- * - Very short and specific
- * - Deep node that is already concrete
+ * Delegates to the determination-aware judge (PART 2/3):
+ *   - actionable maps terminate at concrete doable steps
+ *   - overview maps terminate at evidenced findings
  *
- * @param {object} node - The node to judge
- * @returns {Promise<{terminal: boolean, reason: string}>}
+ * Determination is read from the node (denormalized from Core); defaults to
+ * actionable for legacy nodes without the field.
+ *
+ * @param {object} node - The node to judge (must carry depth; determination optional)
+ * @param {'actionable'|'overview'} [determinationOverride]
+ * @returns {Promise<{terminal: boolean, reason: string, action: string|null}>}
  */
-async function judgeTerminal(node) {
-  const statement = node.statement || node.title || '';
-  const wordCount = statement.trim().split(/\s+/).length;
+async function judgeTerminal(node, determinationOverride = null) {
   const depth = node.depth || 0;
+  const determination = determinationOverride
+    || node.determination
+    || 'actionable';
 
-  // Very short statements at depth 2+ are likely actionable
-  if (wordCount <= 5 && depth >= 2) {
-    return {
-      terminal: true,
-      reason: 'Short specific statement at depth'
-    };
-  }
-
-  // Action verb patterns suggesting actionability
-  const actionPatterns = [
-    /^(apply|email|call|file|register|submit|send|book|schedule|contact|buy|order|sign|create|write|upload|download)/i,
-    /by\s+(january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2})/i,
-    /\$\d+/,  // contains dollar amount
-    /@\w+/,   // contains email/handle
-  ];
-
-  for (const pattern of actionPatterns) {
-    if (pattern.test(statement)) {
-      return {
-        terminal: true,
-        reason: 'Contains actionable specifics'
-      };
-    }
-  }
-
-  // Deep + short = likely terminal
-  if (depth >= 3 && wordCount <= 8) {
-    return {
-      terminal: true,
-      reason: 'Deep and specific'
-    };
-  }
-
+  // Evaluate at the node's real depth. Core/root (depth 0/1) are branch points
+  // and won't qualify as terminal; leaves (depth 2+) resolve when grounded.
+  const result = judgeNodeTerminal(node, depth, determination);
   return {
-    terminal: false,
-    reason: 'Expandable'
+    terminal: result.terminal,
+    reason: result.reason,
+    action: result.action
   };
 }
 

@@ -224,10 +224,19 @@ const nodeSchema = new mongoose.Schema({
     default: false
   },
 
-  // Terminal node (actionable, no further expansion)
+  // Terminal node (resolved endpoint, no further expansion)
   terminal: {
     type: Boolean,
     default: false
+  },
+
+  // What this node resolves TOWARD (denormalized from Core — PART 3)
+  // actionable: terminal = concrete doable step (action verb + specifics)
+  // overview:   terminal = evidenced finding (figures/names/mechanisms)
+  determination: {
+    type: String,
+    enum: ['actionable', 'overview', null],
+    default: 'actionable'
   },
 
   // Action field (present when terminal=true) — the concrete doable step

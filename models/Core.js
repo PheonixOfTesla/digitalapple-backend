@@ -32,12 +32,21 @@ const coreSchema = new mongoose.Schema({
     maxlength: 2000
   },
 
+  // What this map resolves TOWARD (PART 3 — determination)
+  // actionable: premise asks what to DO → nodes terminate at concrete doable steps
+  // overview:   premise asks what's TRUE → nodes terminate at evidenced findings
+  determination: {
+    type: String,
+    enum: ['actionable', 'overview'],
+    default: 'actionable'
+  },
+
   // Classification result
   classification: {
     type: {
       type: String,
       enum: ['venture', 'event', 'personal-goal', 'creative-work',
-             'life-transition', 'career', 'research', 'campaign', 'unknown'],
+             'life-transition', 'career', 'research', 'campaign', 'procedure', 'unknown'],
       required: true
     },
     confidence: {
