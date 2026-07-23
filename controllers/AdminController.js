@@ -749,4 +749,35 @@ router.post('/seed-maps', async (req, res) => {
   }
 });
 
+// ==================== ATLAS BACKFILL (one-click) ====================
+// Runs in-process in the background (server has the LLM keys + DB). Resumable,
+// so if the process restarts mid-run just trigger it again to continue.
+
+let backfillState = {
+  running: false, target: 0, created: 0, failed: 0, need: 0, total: 0,
+  startedAt: null, finishedAt: null, error: null
+};
+
+// Start (or report already-running). POST /admin/atlas/backfill { target }
+router.post('/atlas/backfill', async (req, res) => {
+  const target = Math.min(5000, Math.max(1, parseInt(req.body && req.body.target) || 3000));
+  if (backfillState.running) {
+    return res.json({ started: false, alreadyRunning: true, state: backfillState });
+  }
+  backfillState = { running: true, target, created: 0, failed: 0, need: 0, total: 0, startedAt: new Date(), finishedAt: null, error: null };
+
+  const { backfillTo } = require('../jobs/seedMaps');
+  // Fire-and-forget: do NOT await — return immediately, run in the background.
+  backfillTo(target, { onProgress: (p) => { Object.assign(backfillState, p); } })
+    .then((r) => { Object.assign(backfillState, r, { running: false, finishedAt: new Date() }); console.log('[atlas-backfill] done', r); })
+    .catch((e) => { backfillState.running = false; backfillState.finishedAt = new Date(); backfillState.error = e.message; console.error('[atlas-backfill] error', e.message); });
+
+  res.json({ started: true, state: backfillState });
+});
+
+// Progress. GET /admin/atlas/backfill/status
+router.get('/atlas/backfill/status', (req, res) => {
+  res.json({ state: backfillState });
+});
+
 module.exports = router;

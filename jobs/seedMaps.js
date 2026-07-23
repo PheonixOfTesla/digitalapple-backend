@@ -1038,7 +1038,41 @@ async function runOnce() {
   return result;
 }
 
-module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL };
+/**
+ * In-process backfill to a target total (used by the admin one-click trigger).
+ * Assumes an existing mongoose connection (the server's). Resumable: dedupes
+ * against existing maps. Batched (<=3 concurrent, Moonshot's limit).
+ * Calls onProgress({ created, failed, need, total }) as it goes.
+ */
+async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {}) {
+  const user = await getClockworkUser();
+  const currentTotal = await SharedMap.countDocuments({ unpublishedAt: null });
+  const need = Math.max(0, target - currentTotal);
+  if (need === 0) { onProgress({ created: 0, failed: 0, need: 0, total: currentTotal }); return { created: 0, failed: 0, total: currentTotal }; }
+
+  const seen = new Set();
+  for (const m of await SharedMap.find({}).select('description title').lean()) seen.add(hashPremise(m.description || m.title || ''));
+  for (const p of await Project.find({}).select('premise name').lean()) seen.add(hashPremise(p.premise || p.name || ''));
+
+  const candidates = FLAT_POOL.filter(t => !seen.has(hashPremise(t.premise)))
+    .sort(() => Math.random() - 0.5)
+    .slice(0, need);
+
+  let created = 0, failed = 0, idx = 0;
+  async function worker() {
+    while (idx < candidates.length) {
+      const topic = candidates[idx++];
+      try { await createSeedMap(user, topic); created++; }
+      catch (e) { failed++; console.error('[backfill] fail:', e.message); }
+      onProgress({ created, failed, need: candidates.length, total: currentTotal + created });
+    }
+  }
+  const conc = Math.max(1, Math.min(3, concurrency));
+  await Promise.all(Array.from({ length: conc }, () => worker()));
+  return { created, failed, total: currentTotal + created };
+}
+
+module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo };
 
 // Allow running directly: node jobs/seedMaps.js
 if (require.main === module) {
