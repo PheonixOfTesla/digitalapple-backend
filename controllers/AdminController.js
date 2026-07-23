@@ -874,18 +874,25 @@ router.get('/economics', async (req, res) => {
     const purchases = purchaseAll[0]?.count || 0;
     const tokensSpent = spendAgg[0]?.tokens || 0;
 
-    // Prefer ACTUAL LLM cost from real token usage; fall back to an estimate only
-    // until usage has been logged (older maps generated before tracking existed).
+    // AI cost = REAL tracked LLM tokens (going forward) + an ESTIMATE for the maps
+    // generated before tracking was enabled — so the total reflects true spend and
+    // is never a misleading $0. The tracked portion grows and dominates over time.
     const aiUsage = require('../services/aiUsage');
     const usage = await aiUsage.getTotals();
-    const actualCostUsd = usage ? (usage.costUsd || 0) : 0;
-    const hasActual = !!(usage && usage.calls > 0);
+    const trackedUsd = usage ? (usage.costUsd || 0) : 0;
+    const trackedSince = usage ? (usage.createdAt || null) : null;
 
     const COST_PER_MAP = parseFloat(process.env.AI_COST_PER_MAP) || 0.03;
     const COST_PER_1K_NODES = parseFloat(process.env.AI_COST_PER_1K_NODES) || 0.50;
-    const estAiCostUsd = totalMaps * COST_PER_MAP + (totalNodes / 1000) * COST_PER_1K_NODES;
 
-    const aiCostUsd = hasActual ? actualCostUsd : estAiCostUsd;
+    let untrackedMaps = totalMaps;
+    if (trackedSince) {
+      untrackedMaps = await Project.countDocuments({ createdAt: { $lt: trackedSince } });
+    }
+    const nodeFrac = totalMaps > 0 ? (untrackedMaps / totalMaps) : 1;
+    const historicalEstUsd = untrackedMaps * COST_PER_MAP + (totalNodes * nodeFrac / 1000) * COST_PER_1K_NODES;
+
+    const aiCostUsd = historicalEstUsd + trackedUsd;
     const profitUsd = revenueUsd - aiCostUsd;
     const marginPct = revenueUsd > 0 ? (profitUsd / revenueUsd) * 100 : null;
 
@@ -894,16 +901,15 @@ router.get('/economics', async (req, res) => {
       revenue: { usd: +revenueUsd.toFixed(2), todayUsd: +revenueTodayUsd.toFixed(2), purchases, tokensSold },
       usage: { mapsGenerated: totalMaps, seedMaps, userMaps: Math.max(0, totalMaps - seedMaps), totalNodes, tokensSpent },
       aiCost: {
-        usd: +aiCostUsd.toFixed(2),
-        actual: hasActual,                              // true once real usage is logged
+        usd: +aiCostUsd.toFixed(2),                     // headline: historical estimate + real tracked
+        trackedUsd: +trackedUsd.toFixed(2),             // the precisely-tracked, real portion
+        historicalEstUsd: +historicalEstUsd.toFixed(2), // estimate for maps made before tracking
         llmCalls: usage ? (usage.calls || 0) : 0,
         llmTokens: usage ? (usage.totalTokens || 0) : 0,
-        estUsd: +estAiCostUsd.toFixed(2)                // the fallback estimate, for reference
+        tracking: !!trackedSince
       },
       profit: { usd: +profitUsd.toFixed(2), marginPct: marginPct == null ? null : +marginPct.toFixed(0) },
-      note: hasActual
-        ? 'Revenue and AI cost are both real (Stripe + logged LLM tokens).'
-        : 'Revenue is real; AI cost is an estimate until LLM usage is logged (generate a map to start tracking).'
+      note: 'Revenue is real (Stripe). AI cost = live-tracked LLM tokens + an estimate for maps generated before tracking was enabled.'
     });
   } catch (e) {
     console.error('[economics] error', e.message);
