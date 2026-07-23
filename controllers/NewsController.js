@@ -63,15 +63,21 @@ router.get('/', async (req, res) => {
         category: { $ne: 'research' }
       };
       if (category) headlineQuery.category = category; // explicit filter overrides
-      // Pull a generous recent pool, then genre-balance it so the feed spans fields.
-      // An explicit category filter keeps straight recency within that field.
       const wantHead = (type === 'headlines') ? (skip + limit) : (Math.floor(limit / 2) + 2);
-      const poolSize = category ? wantHead : Math.max(160, wantHead * 5);
-      const pool = await NewsItem.find(headlineQuery)
-        .sort({ publishedAt: -1 })
-        .limit(poolSize)
-        .lean();
-      const ordered = category ? pool : balanceByGenre(pool, wantHead);
+      let ordered;
+      if (category) {
+        // Explicit field filter → straight recency within that field.
+        ordered = await NewsItem.find(headlineQuery).sort({ publishedAt: -1 }).limit(skip + wantHead).lean();
+      } else {
+        // Gather the newest items PER genre, so low-volume high-signal fields
+        // (science, markets, world, culture) surface even when tech / Hacker News
+        // out-publish them 10:1 — a single recency pool would bury them entirely.
+        const cats = await NewsItem.distinct('category', headlineQuery);
+        const groups = await Promise.all(cats.map(c =>
+          NewsItem.find({ ...headlineQuery, category: c }).sort({ publishedAt: -1 }).limit(15).lean()
+        ));
+        ordered = balanceByGenre(groups.flat(), wantHead);
+      }
       const headStart = (type === 'headlines') ? skip : 0;
       const headTake = (type === 'headlines') ? limit : (Math.floor(limit / 2) + 2);
       const headlines = ordered.slice(headStart, headStart + headTake);
