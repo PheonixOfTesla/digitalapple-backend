@@ -151,27 +151,31 @@ router.get('/stats', verifyToken, requireAdmin, async (req, res) => {
     ]);
 
     // Traffic-source breakdown — where visitors come from (Instagram, Snapchat,
-    // Google, etc.) over the last 30 days. Grouped by classified `source`, with
-    // both raw views and unique-session visitors per source.
-    const sourceAgg = await AnalyticsEvent.aggregate([
+    // Google, etc.) over the last 30 days. We group by the RAW referrer/UTM and
+    // classify each group in JS, so EVERY event is bucketed consistently —
+    // including ones logged before the `source` field existed (source=null),
+    // which would otherwise all pile into "Other" even when their referrer is
+    // known (or empty, i.e. "Direct").
+    const rawSourceAgg = await AnalyticsEvent.aggregate([
       { $match: { event: 'page_view', createdAt: { $gte: monthAgo } } },
       { $group: {
-        _id: { $ifNull: ['$source', 'other'] },
+        _id: { source: '$source', referrer: '$referrer', utmSource: '$utmSource' },
         views: { $sum: 1 },
         sessions: { $addToSet: '$sessionId' }
-      } },
-      { $project: {
-        _id: 0,
-        source: '$_id',
-        views: 1,
-        visitors: {
-          $size: {
-            $filter: { input: '$sessions', as: 's', cond: { $ne: ['$$s', null] } }
-          }
-        }
-      } },
-      { $sort: { views: -1 } }
+      } }
     ]);
+
+    const sourceBuckets = {};
+    for (const g of rawSourceAgg) {
+      // Trust a stored classification; otherwise derive it from the referrer/UTM.
+      const src = g._id.source || classifySource(g._id.referrer, g._id.utmSource);
+      if (!sourceBuckets[src]) sourceBuckets[src] = { views: 0, sessions: new Set() };
+      sourceBuckets[src].views += g.views;
+      for (const s of (g.sessions || [])) if (s) sourceBuckets[src].sessions.add(s);
+    }
+    const sourceAgg = Object.entries(sourceBuckets)
+      .map(([source, v]) => ({ source, views: v.views, visitors: v.sessions.size }))
+      .sort((a, b) => b.views - a.views);
 
     res.json({
       success: true,
