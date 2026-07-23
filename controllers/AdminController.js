@@ -838,6 +838,104 @@ router.post('/news/generate-signals', async (req, res) => {
   }
 });
 
+// ── Atlas moderation ────────────────────────────────────────────────────────
+// Heuristic "inappropriate gauge": flags maps that assert fabricated events about
+// real entities, speculate on real people's wealth, or contain explicit terms.
+function atlasRisk(map) {
+  const t = ((map.title || '') + ' ' + (map.description || '')).toLowerCase();
+  let score = 0; const reasons = [];
+  if (/\b(cyberattack|hacked|hack\b|scandal|lawsuit|sued|arrested|indicted|convicted|died|dead|killed|murder|leaked|breach|fraud|scam|affair|divorce|resign)\b/.test(t)) { score += 55; reasons.push('fabricated-event claim'); }
+  if (/\b(make|made|making)\s+(their|his|her)\s+money|net worth|how rich|fortune\b/.test(t)) { score += 28; reasons.push('real-person wealth'); }
+  if (/\b(fuck|shit|porn|nude|nsfw|cocaine|heroin|suicide|terroris|bomb-making)\b/.test(t)) { score += 65; reasons.push('explicit / unsafe'); }
+  if (!map.isSeed && score > 0) score += 10; // hand-made claim, not a framed seed
+  score = Math.min(100, score);
+  return { score, level: score >= 55 ? 'high' : score >= 25 ? 'medium' : 'low', reasons };
+}
+
+// GET /admin/atlas/maps?search=&limit=&hidden=1 — list/search Atlas maps + risk gauge
+router.get('/atlas/maps', async (req, res) => {
+  try {
+    const SharedMap = require('../models/SharedMap');
+    const search = (req.query.search || '').trim();
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 40));
+    const q = req.query.hidden === '1' ? {} : { unpublishedAt: null };
+    if (search) q.$or = [
+      { title: { $regex: search, $options: 'i' } },
+      { description: { $regex: search, $options: 'i' } },
+      { ownerName: { $regex: search, $options: 'i' } }
+    ];
+    const maps = await SharedMap.find(q).sort({ publishedAt: -1 }).limit(limit).select('-snapshot').lean();
+    res.json({
+      success: true,
+      maps: maps.map(m => ({
+        id: m._id, title: m.title, ownerName: m.ownerName, category: m.category,
+        isSeed: m.isSeed, forkCount: m.forkCount || 0, nodeCount: m.nodeCount || 0,
+        hidden: !!m.unpublishedAt, hasSources: !!(m.sources && m.sources.length),
+        risk: atlasRisk(m)
+      }))
+    });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Hide (unpublish) / unhide a map — reversible.
+router.post('/atlas/maps/:id/hide', async (req, res) => {
+  try { await require('../models/SharedMap').updateOne({ _id: req.params.id }, { $set: { unpublishedAt: new Date() } }); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+router.post('/atlas/maps/:id/unhide', async (req, res) => {
+  try { await require('../models/SharedMap').updateOne({ _id: req.params.id }, { $set: { unpublishedAt: null } }); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Permanently delete a map + its graph + fork records.
+router.delete('/atlas/maps/:id', async (req, res) => {
+  try {
+    const SharedMap = require('../models/SharedMap');
+    const m = await SharedMap.findById(req.params.id).select('projectId').lean();
+    if (!m) return res.status(404).json({ success: false, error: 'Map not found' });
+    const pid = m.projectId;
+    await Promise.all([
+      SharedMap.deleteOne({ _id: req.params.id }),
+      require('../models/Fork').deleteMany({ sourceMapId: req.params.id }),
+      pid && require('../models/Node').deleteMany({ projectId: pid }),
+      pid && require('../models/Edge').deleteMany({ projectId: pid }),
+      pid && require('../models/Core').deleteMany({ projectId: pid }),
+      pid && require('../models/Project').deleteOne({ _id: pid })
+    ].filter(Boolean));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Add a map to the Atlas as admin (generate from a premise, posted by Clockwork).
+// Fire-and-forget: generation runs in the background; the map appears when ready.
+router.post('/atlas/maps', async (req, res) => {
+  const premise = (req.body && req.body.premise || '').trim();
+  if (!premise) return res.status(400).json({ success: false, error: 'premise required' });
+  try {
+    const { getClockworkUser, createSeedMap } = require('../jobs/seedMaps');
+    const user = await getClockworkUser();
+    createSeedMap(user, { category: req.body.category || 'other', premise })
+      .then(() => console.log('[atlas-add] created:', premise))
+      .catch(e => console.error('[atlas-add] fail:', e.message));
+    res.json({ success: true, started: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Recompute all fork counts from the Fork collection (fixes drift / removed forks).
+router.post('/atlas/recompute-forks', async (req, res) => {
+  try {
+    const SharedMap = require('../models/SharedMap');
+    const Fork = require('../models/Fork');
+    const maps = await SharedMap.find({}).select('_id forkCount').lean();
+    let changed = 0;
+    for (const m of maps) {
+      const c = await Fork.countDocuments({ sourceMapId: m._id });
+      if (c !== (m.forkCount || 0)) { await SharedMap.updateOne({ _id: m._id }, { $set: { forkCount: c } }); changed++; }
+    }
+    res.json({ success: true, recomputed: maps.length, changed });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // Economics — revenue (real, from Stripe purchases) vs estimated AI cost, so admin
 // can see profit/loss. AI cost is an ESTIMATE (we don't meter every LLM token),
 // tunable via AI_COST_PER_MAP / AI_COST_PER_1K_NODES env vars.
