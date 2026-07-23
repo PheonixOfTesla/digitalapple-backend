@@ -23,8 +23,15 @@ router.get('/', async (req, res) => {
     let total = 0;
 
     if (type === 'headlines' || !type) {
-      // Fetch headlines
-      const headlineQuery = category ? { category } : {};
+      // Fetch headlines. Exclude low-signal academic sources so previously
+      // aggregated arXiv jargon stops surfacing immediately (not just going
+      // forward). Also drop the 'research' category and absurdly long titles.
+      const EXCLUDED_SOURCES = ['arXiv AI', 'arXiv ML'];
+      const headlineQuery = {
+        source: { $nin: EXCLUDED_SOURCES },
+        category: { $ne: 'research' }
+      };
+      if (category) headlineQuery.category = category; // explicit filter overrides
       const headlines = await NewsItem.find(headlineQuery)
         .sort({ publishedAt: -1 })
         .skip(type === 'headlines' ? skip : 0)
@@ -80,8 +87,11 @@ router.get('/', async (req, res) => {
       items.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
       items = items.slice(0, limit);
 
+      const headlineCountQuery = category
+        ? { category }
+        : { source: { $nin: ['arXiv AI', 'arXiv ML'] }, category: { $ne: 'research' } };
       const [headlineCount, signalCount] = await Promise.all([
-        NewsItem.countDocuments(category ? { category } : {}),
+        NewsItem.countDocuments(headlineCountQuery),
         SignalEntry.countDocuments({ status: 'published' })
       ]);
       total = headlineCount + signalCount;

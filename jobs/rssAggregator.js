@@ -23,10 +23,11 @@ const RSS_FEEDS = [
   { url: 'https://feeds.arstechnica.com/arstechnica/technology-lab', source: 'Ars Technica', category: 'tech' },
   { url: 'https://www.wired.com/feed/category/artificial-intelligence/latest/rss', source: 'Wired', category: 'ai' },
   { url: 'https://venturebeat.com/category/ai/feed/', source: 'VentureBeat', category: 'ai' },
+  { url: 'https://www.technologyreview.com/feed/', source: 'MIT Tech Review', category: 'ai' },
 
-  // Research
-  { url: 'https://arxiv.org/rss/cs.AI', source: 'arXiv AI', category: 'research' },
-  { url: 'https://arxiv.org/rss/cs.LG', source: 'arXiv ML', category: 'research' },
+  // NOTE: arXiv (cs.AI / cs.LG) feeds removed — raw paper titles read as dense
+  // academic jargon ("nonsense") in a general Signal feed. Curated,
+  // reader-friendly outlets only.
 
   // Policy
   { url: 'https://www.politico.com/rss/technology.xml', source: 'Politico Tech', category: 'policy' },
