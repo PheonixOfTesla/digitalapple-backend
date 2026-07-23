@@ -143,8 +143,23 @@ router.post('/repost/:mapId', verifyToken, repostLimiter, async (req, res) => {
 
 // POST /engage/fork/:mapId - Fork a map into user's own project
 router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  // NOTE: intentionally NOT using a multi-document transaction. The production
+  // Mongo (Railway plugin) is a standalone instance, not a replica set, so
+  // startTransaction() throws and every fork 500s. We do best-effort sequential
+  // writes and clean up the partial project if anything fails partway.
+  let createdProjectId = null;
+  async function rollback() {
+    if (!createdProjectId) return;
+    try {
+      await Promise.all([
+        Node.deleteMany({ projectId: createdProjectId }),
+        Edge.deleteMany({ projectId: createdProjectId }),
+        Core.deleteMany({ projectId: createdProjectId }),
+        Fork.deleteMany({ newProjectId: createdProjectId }),
+        Project.deleteOne({ _id: createdProjectId })
+      ]);
+    } catch (e) { console.error('Fork rollback error:', e.message); }
+  }
 
   try {
     const mapId = req.params.mapId;
@@ -153,7 +168,6 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
     // Get the shared map with snapshot
     const map = await SharedMap.findById(mapId);
     if (!map || map.visibility === 'private' || map.unpublishedAt) {
-      await session.abortTransaction();
       return res.status(404).json({ success: false, error: 'Map not found' });
     }
 
@@ -175,7 +189,8 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
         ownerName: map.ownerName
       }
     });
-    await project.save({ session });
+    await project.save();
+    createdProjectId = project._id;
 
     // Create nodes from snapshot
     const nodeIdMap = new Map(); // old ID -> new ID
@@ -204,7 +219,7 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
         scopedPaths: snapCore.scopedPaths,
         scopeRecommendation: snapCore.scopeRecommendation
       });
-      await coreNode.save({ session });
+      await coreNode.save();
       nodeIdMap.set(snapCore._id.toString(), coreNode._id);
       coreNodeId = coreNode._id;
 
@@ -260,7 +275,7 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
         scopedPaths: snapNode.scopedPaths,
         scopeRecommendation: snapNode.scopeRecommendation
       });
-      await node.save({ session });
+      await node.save();
       nodeIdMap.set(snapNode._id.toString(), node._id);
 
       // Build path from parent's path
@@ -289,9 +304,9 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
         forkedBy: userId
       }
     });
-    await newCore.save({ session });
+    await newCore.save();
 
-    // Now assign identity to all nodes (outside session for simplicity)
+    // Now assign identity to all nodes
     // Core node first
     if (coreNodeId) {
       const corePath = pathMap.get(map.snapshot.core._id.toString());
@@ -304,7 +319,7 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
           essence: { title: map.snapshot.core.title || map.snapshot.core.label, statement: map.snapshot.core.statement },
           derivation: { kind: 'fork', sourcePrompt: null, usedTrace: false }
         }
-      ).session(session);
+      );
     }
 
     // Other nodes
@@ -326,7 +341,7 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
             },
             derivation: { kind: 'fork', sourcePrompt: null, usedTrace: false }
           }
-        ).session(session);
+        );
       }
     }
 
@@ -341,7 +356,7 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
           toNodeId: targetId,
           type: snapEdge.type || 'contains'
         });
-        await edge.save({ session });
+        await edge.save();
       }
     }
 
@@ -350,15 +365,13 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       sourceMapId: mapId,
       newProjectId: project._id,
       userId
-    }).save({ session });
+    }).save();
 
-    // Update fork count
+    // Update fork count (only after everything above succeeded)
     await SharedMap.updateOne(
       { _id: mapId },
       { $inc: { forkCount: 1 } }
-    ).session(session);
-
-    await session.commitTransaction();
+    );
 
     res.json({
       success: true,
@@ -372,11 +385,9 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       } : null
     });
   } catch (err) {
-    await session.abortTransaction();
     console.error('Fork error:', err);
+    await rollback();
     res.status(500).json({ success: false, error: 'Failed to fork' });
-  } finally {
-    session.endSession();
   }
 });
 
