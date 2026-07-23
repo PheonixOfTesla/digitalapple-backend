@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const jwt = require('jsonwebtoken');
-const { Server } = require('socket.io');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
@@ -640,38 +639,48 @@ const PORT = process.env.PORT || 3000;
 // Wrap the Express app in an HTTP server so Socket.IO can share the port.
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    credentials: true,
-    methods: ['GET', 'POST']
-  },
-  // Long-polling fallback for hosts/proxies that don't allow raw WS upgrades.
-  transports: ['websocket', 'polling']
-});
+// Socket.IO is a progressive enhancement (live admin dashboard). It must NEVER
+// be able to crash the API on boot — if the module is missing or init throws,
+// the server still starts and everything else keeps working; the admin just
+// falls back to polling. This also prevents a socket issue from blocking deploys.
+try {
+  const { Server } = require('socket.io');
+  const io = new Server(server, {
+    cors: {
+      origin: allowedOrigins,
+      credentials: true,
+      methods: ['GET', 'POST']
+    },
+    // Long-polling fallback for hosts/proxies that don't allow raw WS upgrades.
+    transports: ['websocket', 'polling']
+  });
 
-// Admin dashboard channel — gated to admins only. Analytics can include
-// premises and emails, so a valid admin JWT is required to join.
-const adminNs = io.of('/admin');
-adminNs.use((socket, next) => {
-  try {
-    const token = socket.handshake.auth?.token ||
-                  (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
-    if (!token) return next(new Error('unauthorized'));
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.role !== 'admin') return next(new Error('forbidden'));
-    socket.userEmail = decoded.email;
-    next();
-  } catch (e) {
-    next(new Error('unauthorized'));
-  }
-});
-adminNs.on('connection', (socket) => {
-  socket.emit('ready', { ok: true });
-});
+  // Admin dashboard channel — gated to admins only. Analytics can include
+  // premises and emails, so a valid admin JWT is required to join.
+  const adminNs = io.of('/admin');
+  adminNs.use((socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token ||
+                    (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!token) return next(new Error('unauthorized'));
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (decoded.role !== 'admin') return next(new Error('forbidden'));
+      socket.userEmail = decoded.email;
+      next();
+    } catch (e) {
+      next(new Error('unauthorized'));
+    }
+  });
+  adminNs.on('connection', (socket) => {
+    socket.emit('ready', { ok: true });
+  });
 
-// Hand the io instance to the realtime service for controllers to use.
-realtime.setIO(io);
+  // Hand the io instance to the realtime service for controllers to use.
+  realtime.setIO(io);
+  console.log('Socket.IO: enabled (/admin namespace)');
+} catch (e) {
+  console.error('Socket.IO disabled — continuing without live features:', e.message);
+}
 
 server.listen(PORT, () => {
   console.log('');
