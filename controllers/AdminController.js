@@ -1187,17 +1187,110 @@ function maskKey(v) {
 router.get('/integrations', async (req, res) => {
   try {
     const Setting = require('../models/Setting');
-    const ws = await Setting.findOne({ key: 'wavespeed_api_key' });
+    const [ws, el, elVoice] = await Promise.all([
+      Setting.findOne({ key: 'wavespeed_api_key' }),
+      Setting.findOne({ key: 'elevenlabs_api_key' }),
+      Setting.findOne({ key: 'elevenlabs_voice_id' })
+    ]);
     res.json({
       success: true,
       wavespeed: {
         connected: !!(ws && ws.value),
         masked: ws && ws.value ? maskKey(ws.value) : null,
         updatedAt: ws ? ws.updatedAt : null
+      },
+      elevenlabs: {
+        connected: !!(el && el.value),
+        masked: el && el.value ? maskKey(el.value) : null,
+        voiceId: elVoice && elVoice.value ? elVoice.value : null,
+        updatedAt: el ? el.updatedAt : null
       }
     });
   } catch (e) {
     console.error('[integrations] get error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ElevenLabs — key + voice id (voice id is not secret; key is masked/reveal-only)
+router.get('/integrations/elevenlabs/reveal', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    const el = await Setting.findOne({ key: 'elevenlabs_api_key' });
+    res.json({ success: true, key: el && el.value ? el.value : null });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+router.post('/integrations/elevenlabs', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    const key = (req.body && req.body.key || '').toString().trim();
+    const voiceId = (req.body && req.body.voiceId || '').toString().trim();
+    if (key) {
+      if (key.length < 8) return res.status(400).json({ error: 'Enter a valid ElevenLabs API key' });
+      await Setting.findOneAndUpdate({ key: 'elevenlabs_api_key' }, { value: key, updatedAt: new Date() }, { upsert: true });
+    }
+    if (voiceId) {
+      await Setting.findOneAndUpdate({ key: 'elevenlabs_voice_id' }, { value: voiceId, updatedAt: new Date() }, { upsert: true });
+    }
+    const el = await Setting.findOne({ key: 'elevenlabs_api_key' });
+    const v = await Setting.findOne({ key: 'elevenlabs_voice_id' });
+    res.json({ success: true, elevenlabs: { connected: !!(el && el.value), masked: el && el.value ? maskKey(el.value) : null, voiceId: v && v.value ? v.value : null } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+router.delete('/integrations/elevenlabs', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    await Setting.deleteOne({ key: 'elevenlabs_api_key' });
+    res.json({ success: true, elevenlabs: { connected: false, masked: null } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// GET /admin/lab/voices — list the account's ElevenLabs voices for a dropdown
+router.get('/lab/voices', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    const el = await Setting.findOne({ key: 'elevenlabs_api_key' });
+    if (!el || !el.value) return res.status(400).json({ error: 'Connect your ElevenLabs key first' });
+    const r = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': el.value } });
+    if (!r.ok) return res.status(r.status).json({ error: `ElevenLabs error ${r.status}` });
+    const body = await r.json();
+    const voices = (body.voices || []).map(v => ({ voiceId: v.voice_id, name: v.name, category: v.category }));
+    res.json({ success: true, voices });
+  } catch (e) {
+    console.error('[lab voices] error', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /admin/lab/tts { text, voiceId? } — generate voiceover with the stored
+// ElevenLabs voice. Returns base64 mp3 the render step muxes under the video.
+router.post('/lab/tts', async (req, res) => {
+  try {
+    const Setting = require('../models/Setting');
+    const [el, v] = await Promise.all([
+      Setting.findOne({ key: 'elevenlabs_api_key' }),
+      Setting.findOne({ key: 'elevenlabs_voice_id' })
+    ]);
+    const key = el && el.value;
+    const voiceId = (req.body && req.body.voiceId) || (v && v.value);
+    if (!key) return res.status(400).json({ error: 'Connect your ElevenLabs key first' });
+    if (!voiceId) return res.status(400).json({ error: 'Set your ElevenLabs voice ID first' });
+    const text = (req.body && req.body.text || '').toString().trim();
+    if (!text) return res.status(400).json({ error: 'text required' });
+
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: { 'xi-api-key': key, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+      body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2', voice_settings: { stability: 0.5, similarity_boost: 0.75 } })
+    });
+    if (!r.ok) {
+      const detail = await r.text().catch(() => '');
+      return res.status(r.status).json({ error: `ElevenLabs error ${r.status}`, detail: detail.slice(0, 300) });
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.json({ success: true, audioBase64: buf.toString('base64'), mime: 'audio/mpeg' });
+  } catch (e) {
+    console.error('[lab tts] error', e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
