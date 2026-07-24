@@ -22,6 +22,7 @@ const EngagementController = require('./controllers/EngagementController');
 const CommentController = require('./controllers/CommentController');
 const ShareController = require('./controllers/ShareController');
 const TokenController = require('./controllers/TokenController');
+const ReelController = require('./controllers/ReelController');
 
 const app = express();
 
@@ -132,6 +133,7 @@ app.use('/api/v1/engage', EngagementController);
 app.use('/api/v1/comments', CommentController);
 app.use('/api/v1/share', ShareController);
 app.use('/api/v1/tokens', TokenController);
+app.use('/api/v1/reels', ReelController);
 
 // ONE-TIME SETUP - REMOVE AFTER USE
 app.post('/api/v1/setup-once', async (req, res) => {
