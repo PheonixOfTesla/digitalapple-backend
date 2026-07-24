@@ -1,10 +1,15 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const AnalyticsEvent = require('../models/AnalyticsEvent');
 const NebulaLog = require('../models/NebulaLog');
+const Project = require('../models/Project');
+const Node = require('../models/Node');
 const realtime = require('../services/realtime');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
+
+const oid = (v) => (v && mongoose.Types.ObjectId.isValid(v)) ? new mongoose.Types.ObjectId(v) : null;
 
 // ==================== PUBLIC TRACKING ====================
 
@@ -44,7 +49,7 @@ function classifySource(referrer, utmSource) {
 }
 
 router.post('/track', async (req, res) => {
-  const { event, app, path, referrer, standalone, sessionId, utmSource, utmMedium, utmCampaign } = req.body;
+  const { event, app, path, referrer, standalone, sessionId, cwSessionId, userId, utmSource, utmMedium, utmCampaign } = req.body;
 
   if (!event) {
     return res.status(400).json({ error: 'Event name required' });
@@ -59,7 +64,13 @@ router.post('/track', async (req, res) => {
     'standalone_launch',
     'discord_click',
     'instagram_click',
-    'creator_click'
+    'creator_click',
+    // Booking funnel (Chart / consultation page)
+    'booking_view',
+    'booking_start',
+    'booking_submit',
+    // Viewing a shared map / nebula
+    'map_open'
   ];
 
   if (!allowedEvents.includes(event)) {
@@ -79,6 +90,8 @@ router.post('/track', async (req, res) => {
       utmCampaign: utmCampaign || null,
       userAgent: req.headers['user-agent'] || null,
       sessionId: sessionId || null,
+      cwSessionId: cwSessionId || null,
+      userId: oid(userId),          // client-reported; analytics linkage only
       standalone: standalone === true
     });
 
@@ -237,6 +250,7 @@ router.get('/nebulas', verifyToken, requireAdmin, async (req, res) => {
     ]);
 
     const recentClean = recent.map(r => ({
+      id: r._id,
       creatorType: r.creatorType,
       who: r.creatorType === 'registered'
         ? (r.ownerId?.email || r.ownerId?.name || 'registered user')
@@ -246,6 +260,7 @@ router.get('/nebulas', verifyToken, requireAdmin, async (req, res) => {
       type: r.classificationType || 'unknown',
       forked: !!r.forked,
       forkedFromTitle: r.forkedFromTitle || null,
+      hasProject: !!r.projectId,
       createdAt: r.createdAt
     }));
 
@@ -294,6 +309,128 @@ router.get('/events', verifyToken, requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Analytics events error:', error);
     res.status(500).json({ error: 'Failed to get events' });
+  }
+});
+
+// ==================== BOOKING FUNNEL ====================
+// Reached the booking page → began booking → actually booked, with conversion.
+router.get('/funnel', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekAgo = new Date(todayStart); weekAgo.setDate(weekAgo.getDate() - 7);
+    const monthAgo = new Date(todayStart); monthAgo.setDate(monthAgo.getDate() - 30);
+
+    const stageIn = async (since) => {
+      const [view, start, book, visitors] = await Promise.all([
+        AnalyticsEvent.countDocuments({ event: 'booking_view', createdAt: { $gte: since } }),
+        AnalyticsEvent.countDocuments({ event: 'booking_start', createdAt: { $gte: since } }),
+        AnalyticsEvent.countDocuments({ event: 'booking_submit', createdAt: { $gte: since } }),
+        AnalyticsEvent.distinct('sessionId', { event: 'booking_view', createdAt: { $gte: since }, sessionId: { $ne: null } }).then(r => r.length)
+      ]);
+      const pct = (a, b) => b > 0 ? +((a / b) * 100).toFixed(1) : 0;
+      return {
+        reached: view, visitors, started: start, booked: book,
+        startRate: pct(start, view),          // reached → started
+        bookRate: pct(book, start),           // started → booked
+        conversion: pct(book, view)           // reached → booked (overall)
+      };
+    };
+
+    const [today, week, month] = await Promise.all([stageIn(todayStart), stageIn(weekAgo), stageIn(monthAgo)]);
+
+    // Where booking-page visitors came from (last 30 days)
+    const srcAgg = await AnalyticsEvent.aggregate([
+      { $match: { event: 'booking_view', createdAt: { $gte: monthAgo } } },
+      { $group: { _id: '$source', n: { $sum: 1 } } },
+      { $sort: { n: -1 } }
+    ]);
+
+    res.json({
+      success: true,
+      funnel: { today, week, month },
+      sources: srcAgg.map(s => ({ source: s._id || 'direct', count: s.n }))
+    });
+  } catch (error) {
+    console.error('Booking funnel error:', error);
+    res.status(500).json({ error: 'Failed to get booking funnel' });
+  }
+});
+
+// ==================== NEBULA DETAIL ("Open") ====================
+// What a specific creator MADE (the map) and what they SAW (their activity).
+router.get('/nebulas/:id/detail', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const log = await NebulaLog.findById(req.params.id).populate('ownerId', 'email name').lean();
+    if (!log) return res.status(404).json({ error: 'Nebula not found' });
+
+    // --- What they created: the project + its nodes (may be gone if anon+expired) ---
+    let map = { available: false, reason: 'no-project' };
+    if (log.projectId) {
+      const project = await Project.findById(log.projectId).lean();
+      if (project) {
+        const nodes = await Node.find({ projectId: project._id })
+          .select('title statement kind parentNodeId determination createdAt')
+          .sort({ createdAt: 1 })
+          .lean();
+        map = {
+          available: true,
+          name: project.name,
+          premise: project.premise || log.premise || '',
+          classification: project.blueprint?.classification?.type || log.classificationType || 'unknown',
+          nodeCount: nodes.length,
+          nodes: nodes.map(n => ({
+            title: n.title || '(untitled)',
+            statement: n.statement || '',
+            kind: n.kind || null,
+            determination: n.determination || null,
+            hasParent: !!n.parentNodeId
+          }))
+        };
+      } else {
+        map = { available: false, reason: 'expired' };  // anonymous Project TTL'd
+      }
+    }
+
+    // --- What they saw: their analytics activity trail ---
+    const or = [];
+    const ownerId = log.ownerId?._id || log.ownerId;
+    if (ownerId) or.push({ userId: ownerId });
+    if (log.anonymousSessionId) or.push({ cwSessionId: log.anonymousSessionId });
+
+    let activity = [];
+    if (or.length) {
+      activity = await AnalyticsEvent.find({ $or: or })
+        .sort({ createdAt: -1 })
+        .limit(150)
+        .select('event path source app createdAt standalone')
+        .lean();
+    }
+
+    res.json({
+      success: true,
+      nebula: {
+        id: log._id,
+        creatorType: log.creatorType,
+        who: log.creatorType === 'registered'
+          ? (log.ownerId?.email || log.ownerId?.name || 'registered user')
+          : 'anonymous',
+        title: log.title || log.premise || '(untitled)',
+        type: log.classificationType || 'unknown',
+        forked: !!log.forked,
+        forkedFromTitle: log.forkedFromTitle || null,
+        createdAt: log.createdAt
+      },
+      map,
+      activity: activity.map(a => ({
+        event: a.event, path: a.path || null, source: a.source || null,
+        app: a.app || null, at: a.createdAt
+      })),
+      activityLinked: or.length > 0
+    });
+  } catch (error) {
+    console.error('Nebula detail error:', error);
+    res.status(500).json({ error: 'Failed to get nebula detail' });
   }
 });
 

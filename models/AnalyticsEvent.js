@@ -35,6 +35,20 @@ const analyticsEventSchema = new mongoose.Schema({
   // Anonymous session identifier (not tied to user accounts)
   sessionId: String,
 
+  // Registered user, when the visitor is logged in (client-reported; analytics
+  // only, not an auth boundary). Lets the admin link "what a user saw" to them.
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true,
+    sparse: true
+  },
+
+  // The persistent Clockwork/blueprint session id (X-Session-Id / the id a
+  // NebulaLog is stored under). Lets anonymous activity link to nebulas made
+  // in the same session.
+  cwSessionId: { type: String, index: true, sparse: true },
+
   // Whether this is from a standalone/installed PWA
   standalone: {
     type: Boolean,
