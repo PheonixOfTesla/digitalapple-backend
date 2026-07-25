@@ -24,6 +24,27 @@ const LEADIN = 0.5;
 
 const jobs = new Map();            // id -> { status, step, error, asset, createdAt }
 let chain = Promise.resolve();     // serialize renders (one Chromium at a time)
+let cleaned = false;
+
+// Persist job state so an OOM/restart mid-render reports "failed" instead of
+// the job map vanishing into 404s. Best-effort: DB writes never break a render.
+function persist(job) {
+  try {
+    const RenderJob = require('../models/RenderJob');
+    RenderJob.updateOne({ jobId: job.id },
+      { $set: { status: job.status, step: job.step, error: job.error, asset: job.asset } },
+      { upsert: true }).exec().catch(() => {});
+  } catch (e) {}
+}
+async function bootCleanup() {
+  if (cleaned) return; cleaned = true;
+  try {
+    const RenderJob = require('../models/RenderJob');
+    await RenderJob.updateMany(
+      { status: { $in: ['queued', 'running'] } },
+      { $set: { status: 'failed', step: 'lost', error: 'Server restarted mid-render (likely out of memory) — try again' } });
+  } catch (e) {}
+}
 
 function which(bin) {
   try { return execSync(`which ${bin}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null; }
@@ -129,7 +150,7 @@ async function renderJob(job, spec) {
     if (!FF) throw new Error('ffmpeg not available on this host');
 
     // 1) voice (optional — silent render if no key/voice/anchors)
-    job.step = 'voice';
+    job.step = 'voice'; persist(job);
     let voice = null;
     try { voice = await makeVoice(spec, tmp); }
     catch (e) { console.error('[reelRender] VO failed, rendering silent:', e.message); }
@@ -137,16 +158,21 @@ async function renderJob(job, spec) {
     const cfg = voice ? Object.assign({}, spec, { t: voice.timing }) : spec;
 
     // 2) record the deployed template
-    job.step = 'record';
+    job.step = 'record'; persist(job);
     const { chromium } = require('playwright-core');
+    // dsf 1 keeps the raster at exactly 1080x1920 — dsf 2 (supersampling)
+    // quadruples memory and OOM-killed the container on Railway.
+    const DSF = Math.max(1, parseInt(process.env.RENDER_DSF || '1', 10) || 1);
     const browser = await chromium.launch({
       executablePath: CHROME,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-gl=swiftshader', '--autoplay-policy=no-user-gesture-required']
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-gl=swiftshader',
+        '--disable-gpu-compositing', '--disable-extensions', '--mute-audio', '--hide-scrollbars',
+        '--autoplay-policy=no-user-gesture-required']
     });
     let webm;
     try {
       const ctx = await browser.newContext({
-        viewport: { width: 1080, height: 1920 }, deviceScaleFactor: 2,
+        viewport: { width: 1080, height: 1920 }, deviceScaleFactor: DSF,
         recordVideo: { dir: tmp, size: { width: 1080, height: 1920 } }
       });
       const page = await ctx.newPage();
@@ -169,13 +195,14 @@ async function renderJob(job, spec) {
     } finally { await browser.close().catch(() => {}); }
 
     // 3) grade + mux
-    job.step = 'encode';
+    job.step = 'encode'; persist(job);
     const out = path.join(tmp, 'reel.mp4');
     const VF = 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,' +
                'eq=gamma=1.12:brightness=0.015:saturation=1.16:contrast=1.05,format=yuv420p';
-    const VBASE = ['-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2', '-preset', 'medium', '-crf', '17',
-      '-maxrate', '16M', '-bufsize', '24M', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709',
-      '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_range', 'tv', '-movflags', '+faststart'];
+    const VBASE = ['-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2', '-preset', 'fast', '-crf', '18',
+      '-maxrate', '10M', '-bufsize', '14M', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709',
+      '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_range', 'tv', '-movflags', '+faststart',
+      '-threads', '2'];
     const args = ['-y', '-ss', String(job.trim || 0), '-i', webm];
     if (voice) args.push('-i', voice.mix);
     args.push('-vf', VF, ...VBASE);
@@ -185,7 +212,7 @@ async function renderJob(job, spec) {
     execFileSync(FF, args, { stdio: 'ignore' });
 
     // 4) upload + persist
-    job.step = 'upload';
+    job.step = 'upload'; persist(job);
     const cloudinary = require('cloudinary').v2;
     const slug = String(spec.topic || spec.hook || 'reel').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-|-$/g, '') || 'reel';
     const up = await cloudinary.uploader.upload(out, {
@@ -205,6 +232,7 @@ async function renderJob(job, spec) {
     job.status = 'done';
     job.step = 'done';
     job.asset = { id: asset._id, name: asset.name, url: asset.url, voiced: asset.voiced, duration: T, bytes: asset.bytes };
+    persist(job);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -216,22 +244,35 @@ function enqueue(spec) {
   if (!CHROME || !FF) {
     throw new Error('Render engine not available on this deployment (chromium/ffmpeg missing)');
   }
+  bootCleanup();
+  const pending = [...jobs.values()].filter(j => j.status === 'queued' || j.status === 'running').length;
+  if (pending >= 2) throw new Error('Two renders are already in flight — wait for them to finish');
   const id = crypto.randomBytes(8).toString('hex');
   const job = { id, status: 'queued', step: 'queued', error: null, asset: null, createdAt: Date.now() };
   jobs.set(id, job);
+  persist(job);
   chain = chain.then(async () => {
-    job.status = 'running';
+    job.status = 'running'; persist(job);
     try { await renderJob(job, spec); }
     catch (e) {
       console.error('[reelRender] job failed:', e.message);
-      job.status = 'failed'; job.error = e.message;
+      job.status = 'failed'; job.error = e.message; persist(job);
     }
   });
   // keep the map small
   for (const [k, v] of jobs) if (Date.now() - v.createdAt > 3600e3) jobs.delete(k);
   return id;
 }
-function status(id) { return jobs.get(id) || null; }
+async function status(id) {
+  await bootCleanup();
+  if (jobs.has(id)) return jobs.get(id);
+  try {
+    const RenderJob = require('../models/RenderJob');
+    const doc = await RenderJob.findOne({ jobId: id }).lean();
+    if (doc) return { id, status: doc.status, step: doc.step, error: doc.error, asset: doc.asset };
+  } catch (e) {}
+  return null;
+}
 function engineAvailable() { return !!(findChromium() && findFfmpeg()); }
 
-module.exports = { enqueue, status, engineAvailable };
+module.exports = { enqueue, status, engineAvailable, bootCleanup };

@@ -1434,10 +1434,11 @@ router.post('/lab/reel-render', async (req, res) => {
   }
 });
 
-// GET /admin/lab/reel-render-status?id=… — poll the in-process render job
-router.get('/lab/reel-render-status', (req, res) => {
+// GET /admin/lab/reel-render-status?id=… — poll the render job (DB-backed, so
+// status survives a process restart instead of 404ing)
+router.get('/lab/reel-render-status', async (req, res) => {
   const reelRender = require('../services/reelRender');
-  const job = reelRender.status((req.query.id || '').toString());
+  const job = await reelRender.status((req.query.id || '').toString());
   if (!job) return res.status(404).json({ error: 'Unknown job' });
   res.json({ success: true, status: job.status, step: job.step, error: job.error, asset: job.asset });
 });
