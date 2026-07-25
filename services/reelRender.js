@@ -51,7 +51,17 @@ function which(bin) {
   catch (e) { return null; }
 }
 function findChromium() {
-  return process.env.CHROMIUM_PATH || which('chromium') || which('chromium-browser') ||
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  // Playwright's official image (Docker) ships browsers under /ms-playwright
+  try {
+    const base = process.env.PLAYWRIGHT_BROWSERS_PATH || '/ms-playwright';
+    const dir = fs.readdirSync(base).find(d => /^chromium-\d+$/.test(d));
+    if (dir) {
+      const p = path.join(base, dir, 'chrome-linux', 'chrome');
+      if (fs.existsSync(p)) return p;
+    }
+  } catch (e) {}
+  return which('chromium') || which('chromium-browser') ||
     ['/usr/bin/chromium', '/usr/bin/chromium-browser'].find(p => fs.existsSync(p)) || null;
 }
 function findFfmpeg() {

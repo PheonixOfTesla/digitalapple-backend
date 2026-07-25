@@ -95,10 +95,11 @@ const UNIT_COSTS = {
   nebula: 4
 };
 
-// Quota limits
+// Quota limits — anonymous users get 2 free maps; creating an account
+// unlocks 3 more (5 total). The gap is the signup incentive.
 const QUOTA = {
-  authenticated: { units: 15, projects: 3 },
-  anonymous: { units: 15, projects: 3 }
+  authenticated: { units: 15, projects: 5 },
+  anonymous: { units: 15, projects: 2 }
 };
 
 // Helper: get today's date string
