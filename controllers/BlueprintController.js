@@ -19,6 +19,7 @@ const TokenLedger = require('../models/TokenLedger');
 const NebulaLog = require('../models/NebulaLog');
 const { verifyToken } = require('../middleware/auth');
 const identity = require('../services/identity');
+const realtime = require('../services/realtime');
 
 // Token spending/refund (lazy loaded to avoid circular deps)
 let tokenOps = null;
@@ -1572,16 +1573,21 @@ router.post('/nebula', optionalAuth, async (req, res) => {
     }).catch((e) => console.error('NebulaLog write failed:', e.message));
 
     // Live-push to admin dashboards (row shape matches GET /analytics/nebulas).
-    realtime.emitNebula({
-      creatorType: req.userId ? 'registered' : 'anonymous',
-      who: req.userId ? (req.userEmail || 'registered user') : 'anonymous',
-      title: nebTitle,
-      premise: premise.slice(0, 1000),
-      type: nebType,
-      forked: false,
-      forkedFromTitle: null,
-      createdAt: new Date().toISOString()
-    });
+    // Non-fatal: a telemetry side-effect must never fail nebula generation.
+    try {
+      realtime.emitNebula({
+        creatorType: req.userId ? 'registered' : 'anonymous',
+        who: req.userId ? (req.userEmail || 'registered user') : 'anonymous',
+        title: nebTitle,
+        premise: premise.slice(0, 1000),
+        type: nebType,
+        forked: false,
+        forkedFromTitle: null,
+        createdAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error('emitNebula failed:', e.message);
+    }
 
     res.json({
       success: true,
