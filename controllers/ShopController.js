@@ -337,14 +337,24 @@ async function fulfill(session, stripeEventId) {
 
   const ship = session.shipping_details || session.customer_details || {};
   const addr = ship.address || {};
+  const email = (session.customer_details && session.customer_details.email) || null;
   const recipient = {
     name: ship.name || (session.customer_details && session.customer_details.name) || 'Clockwork Customer',
     address1: addr.line1 || '', address2: addr.line2 || undefined,
     city: addr.city || '', state_code: addr.state || undefined,
-    country_code: addr.country || 'US', zip: addr.postal_code || ''
+    country_code: addr.country || 'US', zip: addr.postal_code || '',
+    email: email || undefined   // Printful sends the customer shipping/tracking updates
   };
 
-  const email = (session.customer_details && session.customer_details.email) || null;
+  // Guarantee a Stripe receipt: setting receipt_email on the paid PaymentIntent
+  // makes Stripe email a receipt regardless of the dashboard "successful payment" toggle.
+  if (email && session.payment_intent) {
+    try {
+      const Stripe = require('stripe');
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+      await stripe.paymentIntents.update(session.payment_intent, { receipt_email: email });
+    } catch (e) { console.error('[shop] receipt_email set failed:', e.message); }
+  }
   const lineItems = items.map(i => ({ sku: i.sku, name: i.name, syncVariantId: i.syncVariantId || i.catalogVariantId, quantity: i.quantity, unitAmount: i.unitAmount }));
 
   // Upgrade the 'started' checkout record (or create one if tracking missed it).
