@@ -126,9 +126,12 @@ router.post('/checkout', async (req, res) => {
   } catch (e) {
     console.error('[shop] checkout error:', e.type || '', e.code || '', e.message);
     // Surface only the Stripe error category — never key material or raw messages.
+    const msg = String(e.message || '');
     const reason = e.type === 'StripeAuthenticationError' ? 'stripe_key'
       : e.type === 'StripePermissionError' ? 'stripe_permission'
-      : e.type === 'StripeInvalidRequestError' ? 'stripe_request'
+      : /live charges/i.test(msg) ? 'account_not_activated'
+      : /Stripe-Account|organization/i.test(msg) ? 'org_key'
+      : e.type === 'StripeInvalidRequestError' ? 'stripe_request:' + (e.param || e.code || '')
       : undefined;
     res.status(500).json({ error: 'Could not start checkout', reason });
   }
