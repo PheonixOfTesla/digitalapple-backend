@@ -176,6 +176,7 @@ async function renderJob(job, spec, meta = {}) {
     // sometimes crash pages unless Chromium runs single-process — try the
     // normal mode first, then retry once with the hardened flags.
     const BASE_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+      '--window-size=540,960', '--force-device-scale-factor=1',
       '--disable-extensions', '--mute-audio', '--hide-scrollbars', '--disable-crashpad', '--disable-breakpad',
       '--js-flags=--max-old-space-size=192', '--autoplay-policy=no-user-gesture-required'];
     const HARD_ARGS = BASE_ARGS.concat(['--no-zygote', '--single-process',
