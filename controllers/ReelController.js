@@ -46,7 +46,7 @@ Return ONLY a JSON object with EXACTLY these fields:
     "text": "ONE continuous ~20-second voiceover following the five beats. Use ellipses (…) at the two big transitions (before opening the part, before the summary) so the motion has room. End with 'Map yours, on Clockwork.'",
     "anchors": { "hook":"", "reveal":"", "gap":"", "zoom":"", "summary":"", "plan":"", "cta":"" }
   },
-  "caption": "an Instagram caption in the voice: a strong first line, 1-2 lines of substance, then 'Map yours — link in bio.' Use line breaks (\\n).",
+  "caption": "an Instagram caption in the voice: a strong first line, 1-2 lines of substance, then ONE platform line in plain user language (rotate between: 'Get as specific or general as you need — export the plan as a PDF.' / 'The Atlas is where people share how they actually did things — fork a map and edit it for yourself.' / 'A whole atlas of how people actually did things.'), then 'Map yours — link in bio.' Use line breaks (\\n).",
   "hashtags": array of 10-16 relevant hashtags WITHOUT the # (e.g. "economics", "inflation")
 }
 
