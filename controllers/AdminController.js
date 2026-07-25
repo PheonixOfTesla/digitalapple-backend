@@ -1414,6 +1414,59 @@ router.post('/lab/render', async (req, res) => {
   }
 });
 
+// ==================== ONE-CLICK REEL RENDER (in-process worker) ====================
+// POST /admin/lab/reel-render { spec } — render a reel definition (preset or
+// generated) to MP4 with VO from the stored ElevenLabs voice, upload to
+// Cloudinary, and list it in Lab -> Attachments.
+router.post('/lab/reel-render', async (req, res) => {
+  try {
+    const reelRender = require('../services/reelRender');
+    const spec = req.body && req.body.spec;
+    if (!spec || typeof spec !== 'object' || !Array.isArray(spec.nodes) || !spec.hook) {
+      return res.status(400).json({ error: 'A reel spec with hook + nodes is required' });
+    }
+    if (JSON.stringify(spec).length > 40000) return res.status(400).json({ error: 'Spec too large' });
+    const id = reelRender.enqueue(spec);
+    res.json({ success: true, jobId: id });
+  } catch (e) {
+    console.error('[reel-render] enqueue error', e.message);
+    res.status(503).json({ success: false, error: e.message });
+  }
+});
+
+// GET /admin/lab/reel-render-status?id=… — poll the in-process render job
+router.get('/lab/reel-render-status', (req, res) => {
+  const reelRender = require('../services/reelRender');
+  const job = reelRender.status((req.query.id || '').toString());
+  if (!job) return res.status(404).json({ error: 'Unknown job' });
+  res.json({ success: true, status: job.status, step: job.step, error: job.error, asset: job.asset });
+});
+
+// GET /admin/lab/assets — rendered reels for the Attachments tab (newest first)
+router.get('/lab/assets', async (req, res) => {
+  try {
+    const LabAsset = require('../models/LabAsset');
+    const reelRender = require('../services/reelRender');
+    const assets = await LabAsset.find({}).sort({ createdAt: -1 }).limit(40).lean();
+    res.json({ success: true, engine: reelRender.engineAvailable(), assets });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// DELETE /admin/lab/assets/:id — remove a rendered reel (Cloudinary + record)
+router.delete('/lab/assets/:id', async (req, res) => {
+  try {
+    const LabAsset = require('../models/LabAsset');
+    const doc = await LabAsset.findById(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    if (doc.publicId) {
+      const cloudinary = require('cloudinary').v2;
+      await cloudinary.uploader.destroy(doc.publicId, { resource_type: 'video' }).catch(() => {});
+    }
+    await doc.deleteOne();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /admin/lab/render-status?id=<taskId> — poll a render job
 router.get('/lab/render-status', async (req, res) => {
   try {

@@ -1,0 +1,4 @@
+# Render worker deps: the reel renderer drives a headless Chromium via
+# playwright-core and muxes with ffmpeg. "..." keeps the default Node toolchain.
+[phases.setup]
+nixPkgs = ["...", "chromium", "ffmpeg"]
