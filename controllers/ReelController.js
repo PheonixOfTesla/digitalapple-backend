@@ -132,20 +132,22 @@ function mapToSpec(project, roots, kidsByParent) {
   const kids = (kidsByParent.get(String(gapRoot && gapRoot._id)) || [])
     .slice(0, 3).map(k => String(k.title || '').slice(0, 26));
   while (kids.length < 3) kids.push('—');
+  // Beat structure for a map export: THEIR idea (the core) → the extension
+  // (a piece opened deeper) → the conclusion (the whole map) → Clockwork close.
   return {
     theme: 'cyan',
-    eyebrow: 'Nebula · Atlas',
-    hook: name,
+    eyebrow: 'A Clockwork Map',
+    hook: name,                                        // their idea, verbatim
     premise: (project.premise || '').slice(0, 120),
     nodes: labels.length >= 4 ? labels : labels.concat(['Parts', 'People', 'Money', 'Time']).slice(0, 6),
     gap,
     zoom: { crumb: `${name.slice(0, 22)} › ${(gapRoot && (gapRoot.constellationLabel || gapRoot.title) || 'Detail').slice(0, 22)}`,
-            children: kids, cap: 'Open it up — it keeps going.' },
-    reveal: 'Every part it takes.',
-    gapCap: 'Even the part most people miss.',
-    summary: { cap: 'The whole picture.' },
-    plan: 'Now it’s <em>a plan.</em>',
-    cta: 'Map <em>yours.</em>',
+            children: kids, cap: 'The extension — it keeps going.' },
+    reveal: 'The idea, mapped.',                       // the core
+    gapCap: 'The part that goes deeper.',
+    summary: { cap: 'The conclusion — the whole picture.' },
+    plan: 'From idea to <em>plan.</em>',
+    cta: 'Map <em>yours.</em>',                        // the Clockwork tag close
     url: 'theclockworkhub.com', free: 'Free to try',
     topic: name, title: name
   };
@@ -177,8 +179,18 @@ router.post('/render-map', verifyToken, async (req, res) => {
       .sort({ createdAt: -1 }).lean();
     if (cached) return res.json({ success: true, cached: true, asset: { url: cached.url, name: cached.name } });
 
-    // TOKEN WALL: a video export costs 1 token (real spend, ledgered; admins
-    // exempt inside spendToken). Refunded automatically if the render fails.
+    // TOKEN WALL: a video export costs 1 token. spendToken falls through to
+    // the nebula free tier at zero balance, so gate on the REAL balance first
+    // — no balance, no render. Admins exempt. Refunded if the render fails.
+    const User0 = require('../models/User');
+    const wallUser = await User0.findById(req.userId).select('role tokenBalance').lean();
+    if (!wallUser) return res.status(401).json({ error: 'User not found' });
+    if (wallUser.role !== 'admin' && (wallUser.tokenBalance || 0) < 1) {
+      return res.status(402).json({
+        error: 'out_of_tokens', needsPurchase: true,
+        message: 'Video export costs 1 token — purchase tokens to export.'
+      });
+    }
     const tokenOps = require('./TokenController');
     const spend = await tokenOps.spendToken(req.userId, null, project._id);
     if (!spend.success) {
