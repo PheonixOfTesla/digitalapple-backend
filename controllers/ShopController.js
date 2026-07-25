@@ -124,8 +124,13 @@ router.post('/checkout', async (req, res) => {
     });
     res.json({ success: true, checkoutUrl: session.url });
   } catch (e) {
-    console.error('[shop] checkout error:', e.message);
-    res.status(500).json({ error: 'Could not start checkout' });
+    console.error('[shop] checkout error:', e.type || '', e.code || '', e.message);
+    // Surface only the Stripe error category — never key material or raw messages.
+    const reason = e.type === 'StripeAuthenticationError' ? 'stripe_key'
+      : e.type === 'StripePermissionError' ? 'stripe_permission'
+      : e.type === 'StripeInvalidRequestError' ? 'stripe_request'
+      : undefined;
+    res.status(500).json({ error: 'Could not start checkout', reason });
   }
 });
 
