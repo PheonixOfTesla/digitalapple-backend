@@ -160,20 +160,21 @@ async function renderJob(job, spec, meta = {}) {
     // 2) record the deployed template
     job.step = 'record'; persist(job);
     const { chromium } = require('playwright-core');
-    // dsf 1 keeps the raster at exactly 1080x1920 — dsf 2 (supersampling)
-    // quadruples memory and OOM-killed the container on Railway.
-    const DSF = Math.max(1, parseInt(process.env.RENDER_DSF || '1', 10) || 1);
+    // Record at the template's native 540x960 and upscale in ffmpeg — a
+    // 1080x1920 screencast crashed Chromium on Railway's memory ceiling.
+    // The template is 2D canvas + CSS, so the GPU/GL stack is disabled.
     const browser = await chromium.launch({
       executablePath: CHROME,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-gl=swiftshader',
-        '--disable-gpu-compositing', '--disable-extensions', '--mute-audio', '--hide-scrollbars',
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote',
+        '--disable-extensions', '--mute-audio', '--hide-scrollbars',
+        '--js-flags=--max-old-space-size=192',
         '--autoplay-policy=no-user-gesture-required']
     });
     let webm;
     try {
       const ctx = await browser.newContext({
-        viewport: { width: 1080, height: 1920 }, deviceScaleFactor: DSF,
-        recordVideo: { dir: tmp, size: { width: 1080, height: 1920 } }
+        viewport: { width: 540, height: 960 }, deviceScaleFactor: 1,
+        recordVideo: { dir: tmp, size: { width: 540, height: 960 } }
       });
       const page = await ctx.newPage();
       const t0 = Date.now();
@@ -182,7 +183,7 @@ async function renderJob(job, spec, meta = {}) {
         html,body{padding:0!important;margin:0!important;background:#05060a!important;overflow:hidden!important}
         .caption{display:none!important}
         .stage{position:fixed!important;top:0!important;left:0!important;width:540px!important;height:960px!important;
-          max-width:none!important;border-radius:0!important;transform:scale(2)!important;transform-origin:top left!important;box-shadow:none!important}` });
+          max-width:none!important;border-radius:0!important;box-shadow:none!important}` });
       await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       await page.waitForTimeout(400);
       await page.evaluate(() => window.__reset && window.__reset());
