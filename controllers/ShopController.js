@@ -280,6 +280,36 @@ router.post('/checkout', async (req, res) => {
   }
 });
 
+// GET /shop/climate — public campaign counter. Aggregates only (no PII):
+// what every order commits to permanent carbon removal, and a transparent CO₂ estimate.
+const CLIMATE_RATE = 0.01;          // 1% of every order goes to carbon removal
+const CO2_PRICE_PER_TONNE_USD = 250; // conservative blended cost of permanent removal
+router.get('/climate', async (req, res) => {
+  try {
+    const ShopOrder = require('../models/ShopOrder');
+    const agg = await ShopOrder.aggregate([
+      { $match: { status: { $in: ['paid', 'submitted', 'draft'] } } },
+      { $group: { _id: null, revenue: { $sum: '$amountTotal' }, orders: { $sum: 1 } } }
+    ]);
+    const revenueCents = (agg[0] && agg[0].revenue) || 0;
+    const orders = (agg[0] && agg[0].orders) || 0;
+    const contributionCents = Math.round(revenueCents * CLIMATE_RATE);
+    // grams CO₂ ≈ ($ contributed / $ per tonne) * 1,000,000 g
+    const co2Grams = Math.round((contributionCents / 100) / CO2_PRICE_PER_TONNE_USD * 1e6);
+    res.set('Cache-Control', 'public, max-age=120');
+    res.json({
+      success: true,
+      ratePct: CLIMATE_RATE * 100,
+      pricePerTonneUsd: CO2_PRICE_PER_TONNE_USD,
+      orders,
+      contributionCents,
+      co2Grams
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load climate stats' });
+  }
+});
+
 // GET /shop/session?id=cs_... — payment status for the embedded-checkout return page.
 // Exposes only status fields, never customer data.
 router.get('/session', async (req, res) => {
