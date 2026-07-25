@@ -70,7 +70,14 @@ router.post('/track', async (req, res) => {
     'booking_start',
     'booking_submit',
     // Viewing a shared map / nebula
-    'map_open'
+    'map_open',
+    // In-map engagement (clockwork-map.js on blueprint + map pages)
+    'node_open',      // tapped/clicked a node
+    'sheet_open',     // opened the mobile summary sheet
+    'node_expand',    // expanded a node's children
+    'node_refine',    // submitted a refine on a node
+    'map_export',     // exported the map PDF
+    'map_publish'     // published to Atlas
   ];
 
   if (!allowedEvents.includes(event)) {
