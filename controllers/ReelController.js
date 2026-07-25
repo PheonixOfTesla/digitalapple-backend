@@ -117,4 +117,111 @@ router.post('/generate', verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// ==================== MAP → MP4 EXPORT (user-facing) ====================
+// Turn a REAL map into a reel spec deterministically (no LLM) and render it.
+// Auth required (signup driver for anonymous users); owners or any logged-in
+// user on a published (Atlas) map; 3 exports/day for non-admins.
+
+function mapToSpec(project, roots, kidsByParent) {
+  const name = (project.name || project.premise || 'My map').slice(0, 80);
+  const labels = roots.slice(0, 7).map(r => String(r.constellationLabel || r.title || '').slice(0, 22)).filter(Boolean);
+  // gap = the least-resolved root (pending/needs status), else the last one
+  let gap = roots.findIndex(r => /pending|needs|open/i.test(r.status || ''));
+  if (gap < 0 || gap >= labels.length) gap = Math.max(0, labels.length - 1);
+  const gapRoot = roots[gap];
+  const kids = (kidsByParent.get(String(gapRoot && gapRoot._id)) || [])
+    .slice(0, 3).map(k => String(k.title || '').slice(0, 26));
+  while (kids.length < 3) kids.push('—');
+  return {
+    theme: 'cyan',
+    eyebrow: 'Nebula · Atlas',
+    hook: name,
+    premise: (project.premise || '').slice(0, 120),
+    nodes: labels.length >= 4 ? labels : labels.concat(['Parts', 'People', 'Money', 'Time']).slice(0, 6),
+    gap,
+    zoom: { crumb: `${name.slice(0, 22)} › ${(gapRoot && (gapRoot.constellationLabel || gapRoot.title) || 'Detail').slice(0, 22)}`,
+            children: kids, cap: 'Open it up — it keeps going.' },
+    reveal: 'Every part it takes.',
+    gapCap: 'Even the part most people miss.',
+    summary: { cap: 'The whole picture.' },
+    plan: 'Now it’s <em>a plan.</em>',
+    cta: 'Map <em>yours.</em>',
+    url: 'theclockworkhub.com', free: 'Free to try',
+    topic: name, title: name
+  };
+}
+
+// POST /reels/render-map { projectId } — render a real map to MP4
+router.post('/render-map', verifyToken, async (req, res) => {
+  try {
+    const Project = require('../models/Project');
+    const Node = require('../models/Node');
+    const SharedMap = require('../models/SharedMap');
+    const LabAsset = require('../models/LabAsset');
+    const reelRender = require('../services/reelRender');
+
+    const projectId = (req.body && req.body.projectId || '').toString();
+    if (!projectId) return res.status(400).json({ error: 'projectId required' });
+    const project = await Project.findById(projectId).lean();
+    if (!project) return res.status(404).json({ error: 'Map not found' });
+
+    const isOwner = project.ownerId && String(project.ownerId) === String(req.userId);
+    const isAdmin = req.userRole === 'admin';
+    if (!isOwner && !isAdmin) {
+      const shared = await SharedMap.exists({ projectId: project._id });
+      if (!shared) return res.status(403).json({ error: 'You can only export your own or published maps' });
+    }
+
+    // Recent render of this map? Reuse it — no queue, no token spend.
+    const cached = await LabAsset.findOne({ projectId: project._id, createdAt: { $gte: new Date(Date.now() - 86400e3) } })
+      .sort({ createdAt: -1 }).lean();
+    if (cached) return res.json({ success: true, cached: true, asset: { url: cached.url, name: cached.name } });
+
+    // TOKEN WALL: a video export costs 1 token (real spend, ledgered; admins
+    // exempt inside spendToken). Refunded automatically if the render fails.
+    const tokenOps = require('./TokenController');
+    const spend = await tokenOps.spendToken(req.userId, null, project._id);
+    if (!spend.success) {
+      return res.status(402).json({
+        error: 'out_of_tokens', needsPurchase: true,
+        message: 'Video export costs 1 token — purchase tokens to export.'
+      });
+    }
+
+    const coreNode = await Node.findOne({ projectId: project._id, kind: 'core' }).lean();
+    const roots = await Node.find({ projectId: project._id, parentNodeId: coreNode ? coreNode._id : null })
+      .sort({ createdAt: 1 }).lean();
+    if (!roots.length) return res.status(400).json({ error: 'Map has no nodes to render' });
+    const kids = await Node.find({ projectId: project._id, parentNodeId: { $in: roots.map(r => r._id) } }).lean();
+    const kidsByParent = new Map();
+    kids.forEach(k => { const p = String(k.parentNodeId); if (!kidsByParent.has(p)) kidsByParent.set(p, []); kidsByParent.get(p).push(k); });
+
+    // Creator signature — baked into the rendered video's end card
+    const User = require('../models/User');
+    const creator = await User.findById(project.ownerId || req.userId).select('firstName lastName email').lean();
+    const sigName = creator
+      ? (creator.firstName ? `${creator.firstName}${creator.lastName ? ' ' + creator.lastName.charAt(0) + '.' : ''}` : creator.email.split('@')[0])
+      : 'a Clockwork user';
+
+    const spec = mapToSpec(project, roots, kidsByParent);
+    spec.sig = `Mapped by ${sigName}`;
+    const jobId = reelRender.enqueue(spec, {
+      kind: 'map-export', ownerId: req.userId, projectId: project._id,
+      refundUserId: spend.exempt ? null : req.userId   // refund the token if the render fails
+    });
+    res.json({ success: true, jobId, tokenSpent: !spend.exempt, newBalance: spend.newBalance });
+  } catch (error) {
+    console.error('render-map error:', error.message);
+    res.status(503).json({ error: error.message || 'Render unavailable' });
+  }
+});
+
+// GET /reels/render-status?id=… — poll (any signed-in user; ids are unguessable)
+router.get('/render-status', verifyToken, async (req, res) => {
+  const reelRender = require('../services/reelRender');
+  const job = await reelRender.status((req.query.id || '').toString());
+  if (!job) return res.status(404).json({ error: 'Unknown job' });
+  res.json({ success: true, status: job.status, step: job.step, error: job.error, asset: job.asset });
+});
+
 module.exports = router;

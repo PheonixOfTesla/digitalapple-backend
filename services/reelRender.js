@@ -141,7 +141,7 @@ async function makeVoice(spec, tmp) {
 }
 
 // ---- the render itself ----------------------------------------------------
-async function renderJob(job, spec) {
+async function renderJob(job, spec, meta = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-'));
   try {
     const CHROME = findChromium();
@@ -223,7 +223,8 @@ async function renderJob(job, spec) {
     const LabAsset = require('../models/LabAsset');
     const asset = await LabAsset.create({
       name: `${spec.title || spec.topic || spec.hook || 'Reel'}${voice ? ' — voiced' : ' — silent'}`,
-      kind: 'reel', url: up.secure_url, publicId: up.public_id,
+      kind: meta.kind || 'reel', ownerId: meta.ownerId || null, projectId: meta.projectId || null,
+      url: up.secure_url, publicId: up.public_id,
       bytes: up.bytes || fs.statSync(out).size, duration: T,
       voiced: !!voice, topic: spec.topic || '', spec,
       costUsd: voice ? voice.costUsd : 0
@@ -239,7 +240,7 @@ async function renderJob(job, spec) {
 }
 
 // ---- public API -----------------------------------------------------------
-function enqueue(spec) {
+function enqueue(spec, meta = {}) {
   const CHROME = findChromium(), FF = findFfmpeg();
   if (!CHROME || !FF) {
     throw new Error('Render engine not available on this deployment (chromium/ffmpeg missing)');
@@ -253,10 +254,16 @@ function enqueue(spec) {
   persist(job);
   chain = chain.then(async () => {
     job.status = 'running'; persist(job);
-    try { await renderJob(job, spec); }
+    try { await renderJob(job, spec, meta); }
     catch (e) {
       console.error('[reelRender] job failed:', e.message);
       job.status = 'failed'; job.error = e.message; persist(job);
+      // A failed map export refunds the token it charged
+      if (meta.refundUserId) {
+        try {
+          await require('../controllers/TokenController').refundToken(meta.refundUserId, null, meta.projectId, 'video_export_failed');
+        } catch (re) { console.error('[reelRender] refund failed:', re.message); }
+      }
     }
   });
   // keep the map small
