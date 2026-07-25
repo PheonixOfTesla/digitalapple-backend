@@ -6,7 +6,9 @@ const mongoose = require('mongoose');
 
 const labAssetSchema = new mongoose.Schema({
   name: { type: String, required: true, maxlength: 120 },
-  kind: { type: String, enum: ['reel'], default: 'reel' },
+  kind: { type: String, enum: ['reel', 'map-export'], default: 'reel' },
+  ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+  projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null, index: true },
   url: { type: String, required: true },          // Cloudinary secure_url
   publicId: { type: String, default: null },      // for deletion
   bytes: { type: Number, default: 0 },
