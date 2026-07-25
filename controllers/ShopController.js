@@ -22,7 +22,12 @@ const CATALOG = {
   'tee-m':   { sku: 'tee-m',   product: 'tee', name: 'Atlas Nebula Tee — M',   size: 'M',   unitAmount: 3499, syncVariantId: 5412788160 },
   'tee-l':   { sku: 'tee-l',   product: 'tee', name: 'Atlas Nebula Tee — L',   size: 'L',   unitAmount: 3499, syncVariantId: 5412788161 },
   'tee-xl':  { sku: 'tee-xl',  product: 'tee', name: 'Atlas Nebula Tee — XL',  size: 'XL',  unitAmount: 3499, syncVariantId: 5412788162 },
-  'tee-2xl': { sku: 'tee-2xl', product: 'tee', name: 'Atlas Nebula Tee — 2XL', size: '2XL', unitAmount: 3699, syncVariantId: 5412788164 }
+  'tee-2xl': { sku: 'tee-2xl', product: 'tee', name: 'Atlas Nebula Tee — 2XL', size: '2XL', unitAmount: 3699, syncVariantId: 5412788164 },
+  'crew-s':   { sku: 'crew-s',   product: 'crew', name: 'Clockwork Crewneck — S',   size: 'S',   unitAmount: 4999, syncVariantId: 5413075710 },
+  'crew-m':   { sku: 'crew-m',   product: 'crew', name: 'Clockwork Crewneck — M',   size: 'M',   unitAmount: 4999, syncVariantId: 5413075711 },
+  'crew-l':   { sku: 'crew-l',   product: 'crew', name: 'Clockwork Crewneck — L',   size: 'L',   unitAmount: 4999, syncVariantId: 5413075714 },
+  'crew-xl':  { sku: 'crew-xl',  product: 'crew', name: 'Clockwork Crewneck — XL',  size: 'XL',  unitAmount: 4999, syncVariantId: 5413075738 },
+  'crew-2xl': { sku: 'crew-2xl', product: 'crew', name: 'Clockwork Crewneck — 2XL', size: '2XL', unitAmount: 5199, syncVariantId: 5413075739 }
 };
 const SHIPPING_CENTS = 499;
 
@@ -38,12 +43,13 @@ async function productImages() {
   if (Date.now() - mockupCache.at < 600e3) return mockupCache.images;
   const images = {
     hat: 'https://www.theclockworkhub.com/merch/clockwork-hat.png',
-    tee: 'https://www.theclockworkhub.com/merch/nebula-back.png'
+    tee: 'https://www.theclockworkhub.com/merch/nebula-back.png',
+    crew: 'https://www.theclockworkhub.com/merch/sweater-print.png'
   };
   const h = pfHeaders();
   if (h) {
     try {
-      for (const [key, pid] of [['hat', 451894180], ['tee', 451894171]]) {
+      for (const [key, pid] of [['hat', 451894180], ['tee', 451894171], ['crew', 451937993]]) {
         const r = await fetch(`${PF_BASE}/store/products/${pid}`, { headers: h });
         if (!r.ok) continue;
         const d = await r.json();
@@ -76,6 +82,14 @@ router.get('/catalog', async (req, res) => {
           const c = CATALOG['tee-' + s];
           return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
         })
+      },
+      {
+        id: 'crew', name: 'Clockwork Crewneck', image: images.crew,
+        blurb: 'Heavyweight black crewneck — the corner of the nebula with the lockup below, printed front and back.',
+        variants: ['s', 'm', 'l', 'xl', '2xl'].map(s => {
+          const c = CATALOG['crew-' + s];
+          return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
+        })
       }
     ]
   });
@@ -96,9 +110,14 @@ router.post('/checkout', async (req, res) => {
 
     const Stripe = require('stripe');
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+    const embedded = req.body.embedded === true;
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
+      ...(embedded
+        ? { ui_mode: 'embedded', return_url: `${process.env.FRONTEND_URL}/shop.html?order=return&session_id={CHECKOUT_SESSION_ID}` }
+        : { success_url: `${process.env.FRONTEND_URL}/shop.html?order=success`,
+            cancel_url: `${process.env.FRONTEND_URL}/shop.html?order=cancelled` }),
       line_items: items.map(i => ({
         price_data: {
           currency: 'usd',
@@ -118,10 +137,9 @@ router.post('/checkout', async (req, res) => {
       metadata: {
         type: 'shop_order',
         cart: JSON.stringify(items.map(i => ({ s: i.sku, q: i.quantity })))
-      },
-      success_url: `${process.env.FRONTEND_URL}/shop.html?order=success`,
-      cancel_url: `${process.env.FRONTEND_URL}/shop.html?order=cancelled`
+      }
     });
+    if (embedded) return res.json({ success: true, clientSecret: session.client_secret });
     res.json({ success: true, checkoutUrl: session.url });
   } catch (e) {
     console.error('[shop] checkout error:', e.type || '', e.code || '', e.message);
@@ -134,6 +152,21 @@ router.post('/checkout', async (req, res) => {
       : e.type === 'StripeInvalidRequestError' ? 'stripe_request:' + (e.param || e.code || '')
       : undefined;
     res.status(500).json({ error: 'Could not start checkout', reason });
+  }
+});
+
+// GET /shop/session?id=cs_... — payment status for the embedded-checkout return page.
+// Exposes only status fields, never customer data.
+router.get('/session', async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    if (!/^cs_(live|test)_[A-Za-z0-9]+$/.test(id)) return res.status(400).json({ error: 'Bad session id' });
+    const Stripe = require('stripe');
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+    const s = await stripe.checkout.sessions.retrieve(id);
+    res.json({ success: true, status: s.status, paymentStatus: s.payment_status });
+  } catch (e) {
+    res.status(500).json({ error: 'Could not check session' });
   }
 });
 
