@@ -228,6 +228,44 @@ router.post('/render-map', verifyToken, async (req, res) => {
   }
 });
 
+// GET /reels/file/:id — stream a GridFS-stored render (public: ids are
+// unguessable ObjectIds and these are shareable deliverables). Range support
+// so <video> playback works in Safari/iOS.
+router.get('/file/:id', async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    let oid;
+    try { oid = new mongoose.Types.ObjectId(req.params.id); }
+    catch (e) { return res.status(400).json({ error: 'Bad id' }); }
+    const db = mongoose.connection.db;
+    const file = await db.collection('reels.files').findOne({ _id: oid });
+    if (!file) return res.status(404).json({ error: 'Not found' });
+    const bucket = new mongoose.mongo.GridFSBucket(db, { bucketName: 'reels' });
+    const size = file.length;
+    res.setHeader('Content-Type', file.contentType || 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Content-Disposition', `${req.query.dl ? 'attachment' : 'inline'}; filename="${(file.filename || 'reel.mp4').replace(/[^\w.\-]/g, '_')}"`);
+    const range = req.headers.range;
+    if (range) {
+      const m = /bytes=(\d*)-(\d*)/.exec(range);
+      let start = m && m[1] ? parseInt(m[1], 10) : 0;
+      let end = m && m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1;
+      if (isNaN(start) || start > end) { start = 0; end = size - 1; }
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+      res.setHeader('Content-Length', end - start + 1);
+      bucket.openDownloadStream(oid, { start, end: end + 1 }).pipe(res);
+    } else {
+      res.setHeader('Content-Length', size);
+      bucket.openDownloadStream(oid).pipe(res);
+    }
+  } catch (e) {
+    console.error('reel file stream error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Stream failed' });
+  }
+});
+
 // GET /reels/render-status?id=… — poll (any signed-in user; ids are unguessable)
 router.get('/render-status', verifyToken, async (req, res) => {
   const reelRender = require('../services/reelRender');

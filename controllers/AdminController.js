@@ -1459,7 +1459,11 @@ router.delete('/lab/assets/:id', async (req, res) => {
     const LabAsset = require('../models/LabAsset');
     const doc = await LabAsset.findById(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Not found' });
-    if (doc.publicId) {
+    if (doc.publicId && doc.publicId.startsWith('gridfs:')) {
+      const mongoose = require('mongoose');
+      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'reels' });
+      await bucket.delete(new mongoose.Types.ObjectId(doc.publicId.slice(7))).catch(() => {});
+    } else if (doc.publicId) {
       const cloudinary = require('cloudinary').v2;
       await cloudinary.uploader.destroy(doc.publicId, { resource_type: 'video' }).catch(() => {});
     }

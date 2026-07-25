@@ -232,23 +232,39 @@ async function renderJob(job, spec, meta = {}) {
     args.push('-t', String(T), out);
     execFileSync(FF, args, { stdio: 'ignore' });
 
-    // 4) upload + persist
+    // 4) upload + persist — Cloudinary when configured (CDN), else GridFS in
+    // the existing Mongo (self-contained; served by GET /reels/file/:id)
     job.step = 'upload'; persist(job);
     require('../config/cloudinary');            // ensures cloudinary.config() ran
     const cloudinary = require('cloudinary').v2;
-    if (!cloudinary.config().cloud_name) throw new Error('Cloudinary not configured (missing env vars)');
     const slug = String(spec.topic || spec.hook || 'reel').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-|-$/g, '') || 'reel';
-    const up = await cloudinary.uploader.upload(out, {
-      resource_type: 'video', folder: 'digitalapple/reels',
-      public_id: `${slug}-${Date.now()}`, overwrite: false
-    });
+    let fileUrl, filePublicId, fileBytes;
+    if (cloudinary.config().cloud_name) {
+      const up = await cloudinary.uploader.upload(out, {
+        resource_type: 'video', folder: 'digitalapple/reels',
+        public_id: `${slug}-${Date.now()}`, overwrite: false
+      });
+      fileUrl = up.secure_url; filePublicId = up.public_id; fileBytes = up.bytes || fs.statSync(out).size;
+    } else {
+      const mongoose = require('mongoose');
+      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'reels' });
+      const fileId = await new Promise((resolve, reject) => {
+        const us = bucket.openUploadStream(`${slug}-${Date.now()}.mp4`, { contentType: 'video/mp4' });
+        fs.createReadStream(out).pipe(us).on('error', reject);
+        us.on('finish', () => resolve(us.id)).on('error', reject);
+      });
+      const base = process.env.PUBLIC_API_BASE || 'https://digitalapple-backend-production.up.railway.app';
+      fileUrl = `${base}/api/v1/reels/file/${fileId}`;
+      filePublicId = `gridfs:${fileId}`;
+      fileBytes = fs.statSync(out).size;
+    }
 
     const LabAsset = require('../models/LabAsset');
     const asset = await LabAsset.create({
       name: `${spec.title || spec.topic || spec.hook || 'Reel'}${voice ? ' — voiced' : ' — silent'}`,
       kind: meta.kind || 'reel', ownerId: meta.ownerId || null, projectId: meta.projectId || null,
-      url: up.secure_url, publicId: up.public_id,
-      bytes: up.bytes || fs.statSync(out).size, duration: T,
+      url: fileUrl, publicId: filePublicId,
+      bytes: fileBytes, duration: T,
       voiced: !!voice, topic: spec.topic || '', spec,
       costUsd: voice ? voice.costUsd : 0
     });
