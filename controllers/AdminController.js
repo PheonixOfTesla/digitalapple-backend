@@ -1288,6 +1288,26 @@ router.post('/lab/tts', async (req, res) => {
       return res.status(r.status).json({ error: `ElevenLabs error ${r.status}`, detail: detail.slice(0, 300) });
     }
     const buf = Buffer.from(await r.arrayBuffer());
+
+    // Record the real TTS spend so it rolls into total Clockwork cost.
+    // ElevenLabs bills per character; rate defaults to Creator-tier pricing
+    // (~$22 / 100k chars) and can be pinned exactly via env.
+    try {
+      const perK = parseFloat(process.env.ELEVENLABS_PRICE_PER_1K_CHARS);
+      const rate = Number.isFinite(perK) ? perK : 0.22;
+      const usd = +((text.length / 1000) * rate).toFixed(4);
+      if (usd > 0) {
+        const AiCredit = require('../models/AiCredit');
+        let doc = await AiCredit.findOne({ key: 'global' });
+        if (!doc) doc = await AiCredit.create({ key: 'global' });
+        doc.labCostUsd = +((doc.labCostUsd || 0) + usd).toFixed(4);
+        doc.history.push({ type: 'load', amount: -usd, note: `ElevenLabs TTS · ${text.length} chars`, balanceAfter: null });
+        await doc.save();
+      }
+    } catch (costErr) {
+      console.error('[lab tts] cost record failed:', costErr.message);
+    }
+
     res.json({ success: true, audioBase64: buf.toString('base64'), mime: 'audio/mpeg' });
   } catch (e) {
     console.error('[lab tts] error', e.message);

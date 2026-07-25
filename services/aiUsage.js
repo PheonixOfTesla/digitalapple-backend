@@ -17,7 +17,12 @@ function rates(model) {
     'gpt-4o': [2.50, 10.00],
     'gpt-4.1-mini': [0.40, 1.60]
   };
-  return T[model] || [0.30, 1.20];
+  if (T[model]) return T[model];
+  // Prefix match so versioned/dated variants (kimi-k2-0905, gpt-4o-mini-2024…)
+  // still price at their family rate instead of the generic fallback.
+  const fam = Object.keys(T).sort((a, b) => b.length - a.length)
+    .find(k => model && model.startsWith(k));
+  return fam ? T[fam] : [0.30, 1.20];
 }
 
 function estimateCost(model, inTok, outTok) {
