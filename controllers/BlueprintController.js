@@ -98,7 +98,7 @@ const UNIT_COSTS = {
 // Quota limits
 const QUOTA = {
   authenticated: { units: 15, projects: 3 },
-  anonymous: { units: 5, projects: 1 }
+  anonymous: { units: 15, projects: 3 }
 };
 
 // Helper: get today's date string
