@@ -17,7 +17,6 @@ const PF_STORE = process.env.PRINTFUL_STORE_ID || '18516464';
 // Server-side catalog — prices in cents, Printful sync variants for fulfillment.
 // Keep in lockstep with the products in the Printful store.
 const CATALOG = {
-  'hat-os':  { sku: 'hat-os',  product: 'hat', name: 'Clockwork Dad Hat',      size: 'One size', unitAmount: 2999, syncVariantId: 5413109323 },
   'tee-s':   { sku: 'tee-s',   product: 'tee', name: 'Atlas Nebula Tee — S',   size: 'S',   unitAmount: 3499, syncVariantId: 5412788159 },
   'tee-m':   { sku: 'tee-m',   product: 'tee', name: 'Atlas Nebula Tee — M',   size: 'M',   unitAmount: 3499, syncVariantId: 5412788160 },
   'tee-l':   { sku: 'tee-l',   product: 'tee', name: 'Atlas Nebula Tee — L',   size: 'L',   unitAmount: 3499, syncVariantId: 5412788161 },
@@ -58,9 +57,41 @@ const APPAREL = {
   tee: { name: 'Clockwork Tee', single: 3499, colors: {
     blk: { label: 'Black',             variants: { s: 4016, m: 4017, l: 4018, xl: 4019, '2xl': 4020 } },
     nvy: { label: 'Navy',              variants: { s: 4111, m: 4112, l: 4113, xl: 4114, '2xl': 4115 } },
-    hth: { label: 'Dark Grey Heather', variants: { s: 8460, m: 8461, l: 8462, xl: 8463, '2xl': 8464 } }
+    hth: { label: 'Dark Grey Heather', variants: { s: 8460, m: 8461, l: 8462, xl: 8463, '2xl': 8464 } },
+    red: { label: 'Red',               variants: { s: 4141, m: 4142, l: 4143, xl: 4144, '2xl': 4145 } }
   } }
 };
+APPAREL.crew.colors.red = { label: 'Red', variants: { s: 5442, m: 5443, l: 5444, xl: 5445, '2xl': 5446 } };
+APPAREL.hood.colors.red = { label: 'Red', variants: { s: 5538, m: 5539, l: 5540, xl: 5541, '2xl': 5542 } };
+
+// The dad hat in every color it comes in. Embroidery thread flips white/black
+// so the serif wordmark always reads against the crown.
+const HAT_COLORS = {
+  blk:  { label: 'Black',      variantId: 7854,  thread: '#FFFFFF' },
+  nvy:  { label: 'Navy',       variantId: 7857,  thread: '#FFFFFF' },
+  dgry: { label: 'Dark Grey',  variantId: 12736, thread: '#FFFFFF' },
+  spr:  { label: 'Spruce',     variantId: 8745,  thread: '#FFFFFF' },
+  cran: { label: 'Cranberry',  variantId: 12735, thread: '#FFFFFF' },
+  camo: { label: 'Green Camo', variantId: 9794,  thread: '#FFFFFF' },
+  khk:  { label: 'Khaki',      variantId: 7855,  thread: '#000000' },
+  stn:  { label: 'Stone',      variantId: 7859,  thread: '#000000' },
+  wht:  { label: 'White',      variantId: 7853,  thread: '#000000' },
+  lbl:  { label: 'Light Blue', variantId: 7856,  thread: '#000000' },
+  pnk:  { label: 'Pink',       variantId: 7858,  thread: '#000000' }
+};
+for (const [ck, c] of Object.entries(HAT_COLORS)) {
+  CATALOG[`hat-${ck}`] = {
+    sku: `hat-${ck}`, product: 'hat',
+    name: `Clockwork Dad Hat · ${c.label}`, size: 'One size', unitAmount: 2999,
+    catalogVariantId: c.variantId,
+    file: { type: 'embroidery_front', url: `${MERCH_BASE}/clockwork-hat-sm.png` },
+    options: [
+      { id: 'embroidery_type', value: 'flat' },
+      { id: 'thread_colors', value: [c.thread] }
+    ]
+  };
+}
+CATALOG['hat-os'] = CATALOG['hat-blk'];   // legacy alias
 for (const [g, garment] of Object.entries(APPAREL)) {
   for (const [ck, color] of Object.entries(garment.colors)) {
     for (const [dk, design] of Object.entries(DESIGNS)) {
@@ -135,8 +166,9 @@ router.get('/catalog', async (req, res) => {
     products: [
       {
         id: 'hat', name: 'Clockwork Dad Hat', image: images.hat,
-        blurb: 'Unstructured black cap, flat-embroidered CLOCKWORK serif wordmark.',
-        variants: [{ sku: 'hat-os', size: 'One size', priceCents: 2999 }]
+        blurb: 'Unstructured cap, flat-embroidered CLOCKWORK serif wordmark. Eleven colors, thread matched.',
+        colors: Object.entries(HAT_COLORS).map(([k, c]) => ({ key: k, label: c.label })),
+        priceCents: 2999
       },
       ...['tee', 'crew', 'hood'].map(g => ({
         id: g, name: APPAREL[g].name, image: images.crew,
@@ -299,7 +331,8 @@ async function fulfill(session, stripeEventId) {
         recipient,
         items: items.map(i => i.syncVariantId
           ? { sync_variant_id: i.syncVariantId, quantity: i.quantity }
-          : { variant_id: i.catalogVariantId, quantity: i.quantity, files: [{ ...i.file }] }),
+          : { variant_id: i.catalogVariantId, quantity: i.quantity, files: [{ ...i.file }],
+              ...(i.options ? { options: i.options } : {}) }),
         confirm: true
       })
     });
