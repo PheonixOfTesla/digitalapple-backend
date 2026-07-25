@@ -387,6 +387,131 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// ==================== COMMERCE (merch orders + abandoned checkouts) ====================
+
+// GET /admin/shop/orders?status=&limit=&page=
+// Every checkout — paid, submitted, draft, failed, and 'started' (abandoned/in-progress).
+router.get('/shop/orders', async (req, res) => {
+  try {
+    const ShopOrder = require('../models/ShopOrder');
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 60));
+    const skip = (page - 1) * limit;
+    const filter = {};
+    if (req.query.status) filter.status = req.query.status;
+
+    const now = new Date();
+    const dayAgo = new Date(now.getTime() - 864e5);
+    // A 'started' record older than ~30 min with no payment is a genuine abandon.
+    const abandonCutoff = new Date(now.getTime() - 30 * 60e3);
+
+    const [rows, total, agg, paidCount, abandonedCount, startedRecent] = await Promise.all([
+      ShopOrder.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      ShopOrder.countDocuments(filter),
+      ShopOrder.aggregate([
+        { $match: { status: { $in: ['paid', 'submitted', 'draft'] } } },
+        { $group: { _id: null, revenue: { $sum: '$amountTotal' },
+          units: { $sum: { $sum: '$items.quantity' } }, orders: { $sum: 1 } } }
+      ]),
+      ShopOrder.countDocuments({ status: { $in: ['paid', 'submitted', 'draft'] } }),
+      ShopOrder.countDocuments({ status: 'started', createdAt: { $lt: abandonCutoff } }),
+      ShopOrder.countDocuments({ status: 'started', createdAt: { $gte: abandonCutoff } })
+    ]);
+
+    const a = agg[0] || { revenue: 0, units: 0, orders: 0 };
+    const started = abandonedCount + startedRecent;                 // all not-yet-paid
+    const conv = (a.orders + abandonedCount) > 0 ? a.orders / (a.orders + abandonedCount) : 0;
+
+    // Best-selling SKUs among paid orders
+    const topAgg = await ShopOrder.aggregate([
+      { $match: { status: { $in: ['paid', 'submitted', 'draft'] } } },
+      { $unwind: '$items' },
+      { $group: { _id: '$items.name', qty: { $sum: '$items.quantity' }, rev: { $sum: { $multiply: ['$items.unitAmount', '$items.quantity'] } } } },
+      { $sort: { qty: -1 } }, { $limit: 8 }
+    ]);
+
+    res.json({
+      success: true,
+      summary: {
+        revenueCents: a.revenue, paidOrders: a.orders, unitsSold: a.units,
+        avgOrderCents: a.orders ? Math.round(a.revenue / a.orders) : 0,
+        abandoned: abandonedCount, inProgress: startedRecent,
+        conversionRate: conv,
+        revenue24hCents: (await ShopOrder.aggregate([
+          { $match: { status: { $in: ['paid','submitted','draft'] }, paidAt: { $gte: dayAgo } } },
+          { $group: { _id: null, r: { $sum: '$amountTotal' } } }
+        ]))[0]?.r || 0
+      },
+      topProducts: topAgg.map(t => ({ name: t._id, qty: t.qty, revenueCents: t.rev })),
+      orders: rows.map(o => ({
+        id: o._id, session: o.stripeSessionId, status: o.status,
+        email: o.email, amountCents: o.amountTotal,
+        items: (o.items || []).map(i => ({ name: i.name, sku: i.sku, qty: i.quantity, unitCents: i.unitAmount })),
+        recipient: o.recipient ? {
+          name: o.recipient.name, city: o.recipient.city,
+          state: o.recipient.state_code, country: o.recipient.country_code
+        } : null,
+        printfulOrderId: o.printfulOrderId, error: o.error,
+        createdAt: o.createdAt, paidAt: o.paidAt,
+        abandoned: o.status === 'started' && new Date(o.createdAt) < abandonCutoff
+      })),
+      page, limit, total
+    });
+  } catch (e) {
+    console.error('Admin shop/orders error:', e);
+    res.status(500).json({ error: 'Failed to load orders' });
+  }
+});
+
+// ==================== OVERVIEW (whole-system snapshot) ====================
+router.get('/overview', async (req, res) => {
+  try {
+    const ShopOrder = require('../models/ShopOrder');
+    const TokenLedger = require('../models/TokenLedger');
+    const AiCredit = require('../models/AiCredit');
+    let AnalyticsEvent = null;
+    try { AnalyticsEvent = require('../models/AnalyticsEvent'); } catch (_) {}
+
+    const now = new Date();
+    const dayAgo = new Date(now.getTime() - 864e5);
+    const weekAgo = new Date(now.getTime() - 7 * 864e5);
+
+    const [users, newUsers, admins, marketing, products, reviews, pendingApps, signals,
+           revenueAgg, paidOrders, abandoned, tokenAgg, credit, events24h] = await Promise.all([
+      User.countDocuments(),
+      User.countDocuments({ createdAt: { $gte: weekAgo } }),
+      User.countDocuments({ role: 'admin' }),
+      User.countDocuments({ marketingOptIn: true }),
+      Product.countDocuments(),
+      Review.countDocuments(),
+      Application.countDocuments({ status: 'pending' }),
+      SignalEntry.countDocuments({ status: 'published' }),
+      ShopOrder.aggregate([{ $match: { status: { $in: ['paid','submitted','draft'] } } }, { $group: { _id: null, r: { $sum: '$amountTotal' }, n: { $sum: 1 } } }]),
+      ShopOrder.countDocuments({ status: { $in: ['paid','submitted','draft'] } }),
+      ShopOrder.countDocuments({ status: 'started', createdAt: { $lt: new Date(now.getTime() - 30*60e3) } }),
+      TokenLedger.aggregate([{ $group: { _id: '$reason', total: { $sum: '$amount' }, n: { $sum: 1 } } }]).catch(() => []),
+      AiCredit.findOne().sort({ createdAt: -1 }).lean().catch(() => null),
+      AnalyticsEvent ? AnalyticsEvent.countDocuments({ createdAt: { $gte: dayAgo } }).catch(() => 0) : 0
+    ]);
+
+    const rev = revenueAgg[0] || { r: 0, n: 0 };
+    res.json({
+      success: true,
+      snapshot: {
+        users: { total: users, newThisWeek: newUsers, admins, marketingOptIn: marketing },
+        commerce: { revenueCents: rev.r, paidOrders, abandoned, avgOrderCents: rev.n ? Math.round(rev.r / rev.n) : 0 },
+        catalog: { products, reviews, pendingApplications: pendingApps, signalEntries: signals },
+        tokens: (tokenAgg || []).reduce((m, t) => (m[t._id] = { total: t.total, count: t.n }, m), {}),
+        credits: credit ? { loadedUsd: credit.loaded || 0, labSpentUsd: credit.labCostUsd || 0 } : null,
+        activity: { events24h }
+      }
+    });
+  } catch (e) {
+    console.error('Admin overview error:', e);
+    res.status(500).json({ error: 'Failed to load overview' });
+  }
+});
+
 // ==================== SIGNAL ENTRIES ====================
 
 // List all Signal entries

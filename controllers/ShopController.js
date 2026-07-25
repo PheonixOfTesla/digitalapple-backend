@@ -252,6 +252,18 @@ router.post('/checkout', async (req, res) => {
         cart: JSON.stringify(items.map(i => ({ s: i.sku, q: i.quantity })))
       }
     });
+    // Record the checkout as 'started' so abandoned carts are visible in admin.
+    // fulfill() later upgrades this same record to paid/submitted.
+    try {
+      const ShopOrder = require('../models/ShopOrder');
+      await ShopOrder.create({
+        stripeSessionId: session.id,
+        items: items.map(i => ({ sku: i.sku, name: i.name, syncVariantId: i.syncVariantId || i.catalogVariantId, quantity: i.quantity, unitAmount: i.unitAmount })),
+        amountTotal: items.reduce((s, i) => s + i.unitAmount * i.quantity, 0),
+        status: 'started'
+      });
+    } catch (e) { /* non-fatal: never block checkout on our own bookkeeping */ }
+
     if (embedded) return res.json({ success: true, clientSecret: session.client_secret });
     res.json({ success: true, checkoutUrl: session.url });
   } catch (e) {
@@ -302,15 +314,26 @@ async function fulfill(session, stripeEventId) {
     country_code: addr.country || 'US', zip: addr.postal_code || ''
   };
 
-  let order;
+  const email = (session.customer_details && session.customer_details.email) || null;
+  const lineItems = items.map(i => ({ sku: i.sku, name: i.name, syncVariantId: i.syncVariantId || i.catalogVariantId, quantity: i.quantity, unitAmount: i.unitAmount }));
+
+  // Upgrade the 'started' checkout record (or create one if tracking missed it).
+  // Idempotent: a replayed webhook for an already-paid session bails out.
+  let order = await ShopOrder.findOne({ stripeSessionId: session.id });
+  if (order && order.status !== 'started') { console.log('[shop] session already fulfilled:', session.id); return; }
   try {
-    order = await ShopOrder.create({
-      stripeSessionId: session.id, stripeEventId,
-      email: (session.customer_details && session.customer_details.email) || null,
-      items: items.map(i => ({ sku: i.sku, name: i.name, syncVariantId: i.syncVariantId || i.catalogVariantId, quantity: i.quantity, unitAmount: i.unitAmount })),
-      amountTotal: session.amount_total || 0,
-      recipient, status: 'paid'
-    });
+    if (order) {
+      order.stripeEventId = stripeEventId; order.email = email; order.items = lineItems;
+      order.amountTotal = session.amount_total || order.amountTotal;
+      order.recipient = recipient; order.status = 'paid';
+      order.paidAt = new Date(); order.updatedAt = new Date();
+      await order.save();
+    } else {
+      order = await ShopOrder.create({
+        stripeSessionId: session.id, stripeEventId, email, items: lineItems,
+        amountTotal: session.amount_total || 0, recipient, status: 'paid', paidAt: new Date()
+      });
+    }
   } catch (e) {
     if (e.code === 11000) { console.log('[shop] duplicate session ignored:', session.id); return; }
     throw e;
