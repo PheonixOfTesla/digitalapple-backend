@@ -22,13 +22,50 @@ const CATALOG = {
   'tee-m':   { sku: 'tee-m',   product: 'tee', name: 'Atlas Nebula Tee — M',   size: 'M',   unitAmount: 3499, syncVariantId: 5412788160 },
   'tee-l':   { sku: 'tee-l',   product: 'tee', name: 'Atlas Nebula Tee — L',   size: 'L',   unitAmount: 3499, syncVariantId: 5412788161 },
   'tee-xl':  { sku: 'tee-xl',  product: 'tee', name: 'Atlas Nebula Tee — XL',  size: 'XL',  unitAmount: 3499, syncVariantId: 5412788162 },
-  'tee-2xl': { sku: 'tee-2xl', product: 'tee', name: 'Atlas Nebula Tee — 2XL', size: '2XL', unitAmount: 3699, syncVariantId: 5412788164 },
-  'crew-s':   { sku: 'crew-s',   product: 'crew', name: 'Clockwork Crewneck — S',   size: 'S',   unitAmount: 4999, syncVariantId: 5413075710 },
-  'crew-m':   { sku: 'crew-m',   product: 'crew', name: 'Clockwork Crewneck — M',   size: 'M',   unitAmount: 4999, syncVariantId: 5413075711 },
-  'crew-l':   { sku: 'crew-l',   product: 'crew', name: 'Clockwork Crewneck — L',   size: 'L',   unitAmount: 4999, syncVariantId: 5413075714 },
-  'crew-xl':  { sku: 'crew-xl',  product: 'crew', name: 'Clockwork Crewneck — XL',  size: 'XL',  unitAmount: 4999, syncVariantId: 5413075738 },
-  'crew-2xl': { sku: 'crew-2xl', product: 'crew', name: 'Clockwork Crewneck — 2XL', size: '2XL', unitAmount: 5199, syncVariantId: 5413075739 }
+  'tee-2xl': { sku: 'tee-2xl', product: 'tee', name: 'Atlas Nebula Tee — 2XL', size: '2XL', unitAmount: 3699, syncVariantId: 5412788164 }
 };
+
+// Crewnecks + hoodies come in 4 designs, printed front and back.
+// Design 1: serif CLOCKWORK (like the hat). Design 2: CLOCKWORK / think. bigger. lockup.
+// Design 3: nebula far right + lockup. Design 4: nebula off-center + lockup.
+const DESIGN_LABELS = {
+  1: 'Design 1 — CLOCKWORK serif',
+  2: 'Design 2 — think. bigger. lockup',
+  3: 'Design 3 — Nebula right',
+  4: 'Design 4 — Nebula off-center'
+};
+const SWEAT_VARIANTS = {
+  crew1: [5413089744, 5413089745, 5413089746, 5413089753, 5413089754],
+  crew2: [5413086674, 5413086675, 5413086676, 5413086677, 5413086678],
+  crew3: [5413075710, 5413075711, 5413075714, 5413075738, 5413075739],
+  crew4: [5413090723, 5413090725, 5413090727, 5413090728, 5413090731],
+  hood1: [5413089808, 5413089809, 5413089810, 5413089811, 5413089812],
+  hood2: [5413089814, 5413089815, 5413089816, 5413089817, 5413089818],
+  hood3: [5413089819, 5413089820, 5413089821, 5413089822, 5413089823],
+  hood4: [5413090746, 5413090747, 5413090749, 5413090750, 5413090751]
+};
+const SIZES = ['S', 'M', 'L', 'XL', '2XL'];
+for (const [key, ids] of Object.entries(SWEAT_VARIANTS)) {
+  const isHood = key.startsWith('hood');
+  const design = parseInt(key.slice(-1), 10);
+  const garment = isHood ? 'Clockwork Hoodie' : 'Clockwork Crewneck';
+  ids.forEach((syncVariantId, i) => {
+    const size = SIZES[i];
+    const base = isHood ? 5999 : 4999;
+    CATALOG[`${key}-${size.toLowerCase()}`] = {
+      sku: `${key}-${size.toLowerCase()}`, product: key,
+      name: `${garment} D${design} — ${size}`, size,
+      unitAmount: size === '2XL' ? base + 200 : base, syncVariantId
+    };
+  });
+}
+// Legacy sku aliases (pre-design carts)
+CATALOG['crew-s'] = CATALOG['crew3-s']; CATALOG['crew-m'] = CATALOG['crew3-m'];
+CATALOG['crew-l'] = CATALOG['crew3-l']; CATALOG['crew-xl'] = CATALOG['crew3-xl'];
+CATALOG['crew-2xl'] = CATALOG['crew3-2xl'];
+CATALOG['crewword-s'] = CATALOG['crew2-s']; CATALOG['crewword-m'] = CATALOG['crew2-m'];
+CATALOG['crewword-l'] = CATALOG['crew2-l']; CATALOG['crewword-xl'] = CATALOG['crew2-xl'];
+CATALOG['crewword-2xl'] = CATALOG['crew2-2xl'];
 const SHIPPING_CENTS = 499;
 
 function pfHeaders() {
@@ -44,12 +81,13 @@ async function productImages() {
   const images = {
     hat: 'https://www.theclockworkhub.com/merch/clockwork-hat.png',
     tee: 'https://www.theclockworkhub.com/merch/nebula-back.png',
-    crew: 'https://www.theclockworkhub.com/merch/sweater-print.png'
+    crew: 'https://www.theclockworkhub.com/merch/sweater-print.png',
+    crewword: 'https://www.theclockworkhub.com/merch/crew-wordmark.png'
   };
   const h = pfHeaders();
   if (h) {
     try {
-      for (const [key, pid] of [['hat', 451894180], ['tee', 451894171], ['crew', 451937993]]) {
+      for (const [key, pid] of [['hat', 451894180], ['tee', 451894171], ['crew', 451937993], ['crewword', 451939551]]) {
         const r = await fetch(`${PF_BASE}/store/products/${pid}`, { headers: h });
         if (!r.ok) continue;
         const d = await r.json();
@@ -85,11 +123,25 @@ router.get('/catalog', async (req, res) => {
       },
       {
         id: 'crew', name: 'Clockwork Crewneck', image: images.crew,
-        blurb: 'Heavyweight black crewneck — the corner of the nebula with the lockup below, printed front and back.',
-        variants: ['s', 'm', 'l', 'xl', '2xl'].map(s => {
-          const c = CATALOG['crew-' + s];
-          return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
-        })
+        blurb: 'Heavyweight black crewneck, printed front and back. Four designs — pick yours.',
+        designs: [1, 2, 3, 4].map(d => ({
+          key: 'crew' + d, label: DESIGN_LABELS[d],
+          variants: ['s', 'm', 'l', 'xl', '2xl'].map(s => {
+            const c = CATALOG[`crew${d}-${s}`];
+            return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
+          })
+        }))
+      },
+      {
+        id: 'hood', name: 'Clockwork Hoodie', image: images.crew,
+        blurb: 'Heavy blend black hoodie, printed front and back. Same four designs, built for the cold library nights.',
+        designs: [1, 2, 3, 4].map(d => ({
+          key: 'hood' + d, label: DESIGN_LABELS[d],
+          variants: ['s', 'm', 'l', 'xl', '2xl'].map(s => {
+            const c = CATALOG[`hood${d}-${s}`];
+            return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
+          })
+        }))
       }
     ]
   });
