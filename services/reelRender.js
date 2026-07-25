@@ -79,14 +79,16 @@ async function makeVoice(spec, tmp) {
     Setting.findOne({ key: 'elevenlabs_api_key' }),
     Setting.findOne({ key: 'elevenlabs_voice_id' })
   ]);
-  const key = el && el.value, voiceId = v && v.value;
+  // Key/voice can come from the admin Settings OR straight from Railway env —
+  // whichever is present. Without one, the reel renders silent (by design).
+  const key = (el && el.value) || process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_API_KEY;
+  const voiceId = (v && v.value) || process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_VOICE_ID;
   const vo = spec.vo;
   if (!key || !voiceId || !vo || !vo.text) return null;
 
   const TEXT = String(vo.text);
   const ANCH = vo.anchors || {};
-  const need = ['hook', 'reveal', 'gap', 'zoom', 'summary', 'plan', 'cta'];
-  if (!need.every(k => ANCH[k] && TEXT.indexOf(ANCH[k]) >= 0)) return null;  // anchors must be real substrings
+  const order = ['hook', 'reveal', 'gap', 'zoom', 'summary', 'plan', 'cta'];
 
   const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/with-timestamps?output_format=mp3_44100_128`, {
     method: 'POST', headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
@@ -98,10 +100,19 @@ async function makeVoice(spec, tmp) {
   const raw = path.join(tmp, 'vo-raw.mp3');
   fs.writeFileSync(raw, Buffer.from(j.audio_base64, 'base64'));
   const cs = j.alignment.character_start_times_seconds;
-  const at = sub => cs[TEXT.indexOf(sub)] + LEADIN;
 
-  const A = { hook: at(ANCH.hook), reveal: at(ANCH.reveal), gap: at(ANCH.gap),
-              zoom: at(ANCH.zoom), summary: at(ANCH.summary), plan: at(ANCH.plan), cta: at(ANCH.cta) };
+  // Prefer exact word-synced anchors; if any are missing/invalid, fall back to an
+  // even spread across the spoken window so voice STILL plays (just less tightly synced).
+  const allValid = order.every(k => ANCH[k] && TEXT.indexOf(ANCH[k]) >= 0);
+  const speechStart = cs[0] + LEADIN;
+  const speechEnd = cs[cs.length - 1] + LEADIN;
+  const span = Math.max(0.5, speechEnd - speechStart);
+  const A = {};
+  if (allValid) {
+    order.forEach(k => { A[k] = cs[TEXT.indexOf(ANCH[k])] + LEADIN; });
+  } else {
+    order.forEach((k, i) => { A[k] = +(speechStart + span * (i / order.length)).toFixed(3); });
+  }
   const audioEnd = cs[cs.length - 1] + LEADIN + 0.3;
   const T = +(audioEnd + 0.5).toFixed(2);
   const n = (spec.nodes || []).length || 6;

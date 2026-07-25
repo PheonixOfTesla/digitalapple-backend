@@ -134,6 +134,19 @@ function mapToSpec(project, roots, kidsByParent) {
   while (kids.length < 3) kids.push('—');
   // Beat structure for a map export: THEIR idea (the core) → the extension
   // (a piece opened deeper) → the conclusion (the whole map) → Clockwork close.
+  // Voiceover — one continuous line whose phrases are exact anchors for the beats,
+  // so the render worker syncs the visuals to the spoken words (and it's never silent).
+  const A = {
+    hook: 'This is ' + name + '.',
+    reveal: 'One idea, fully mapped.',
+    gap: 'Every part opens up.',
+    zoom: 'This one keeps going, deeper.',
+    summary: 'Until you can see the whole picture.',
+    plan: 'That is how an idea becomes a plan.',
+    cta: 'Map yours, at Clockwork.'
+  };
+  const voText = [A.hook, A.reveal, A.gap, A.zoom, A.summary, A.plan, A.cta].join(' ');
+
   return {
     theme: 'cyan',
     eyebrow: 'A Clockwork Map',
@@ -149,7 +162,8 @@ function mapToSpec(project, roots, kidsByParent) {
     plan: 'From idea to <em>plan.</em>',
     cta: 'Map <em>yours.</em>',                        // the Clockwork tag close
     url: 'theclockworkhub.com', free: 'Free to try',
-    topic: name, title: name
+    topic: name, title: name,
+    vo: { text: voText, anchors: A }
   };
 }
 
