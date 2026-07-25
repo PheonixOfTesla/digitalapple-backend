@@ -25,59 +25,71 @@ const CATALOG = {
   'tee-2xl': { sku: 'tee-2xl', product: 'tee', name: 'Atlas Nebula Tee — 2XL', size: '2XL', unitAmount: 3699, syncVariantId: 5412788164 }
 };
 
-// Tee, crewneck and hoodie each come in 5 designs.
-// 1: serif CLOCKWORK, front, centered. 2: lockup, front, centered. 3: lockup, front, far right.
-// 4: nebula far right + lockup, front AND back. 5: nebula centered + lockup, front AND back.
-const DESIGN_LABELS = {
-  1: 'Design 1 — CLOCKWORK serif',
-  2: 'Design 2 — Lockup center',
-  3: 'Design 3 — Lockup right',
-  4: 'Design 4 — Nebula right (front + back)',
-  5: 'Design 5 — Nebula center (front + back)'
+// ---- Apparel matrix: garment × color × design × placement × size ----
+// One print per garment; the buyer picks color, design, and front or back.
+// Fulfilled via Printful CATALOG variant + print file at order time (no sync products).
+const MERCH_BASE = 'https://www.theclockworkhub.com/merch';
+const DESIGNS = {
+  d1: { n: 1, label: 'Design 1 — CLOCKWORK serif', file: `${MERCH_BASE}/crew-serif.png` },
+  d2: { n: 2, label: 'Design 2 — Lockup right',    file: `${MERCH_BASE}/lockup-right.png` },
+  d3: { n: 3, label: 'Design 3 — Nebula right',    file: `${MERCH_BASE}/sweater-print.png?v=2` },
+  d4: { n: 4, label: 'Design 4 — Nebula center',   file: `${MERCH_BASE}/nebula-center.png` }
 };
-const SWEAT_VARIANTS = {
-  crew1: [5413089744, 5413089745, 5413089746, 5413089753, 5413089754],
-  crew2: [5413086674, 5413086675, 5413086676, 5413086677, 5413086678],
-  crew3: [5413105002, 5413105003, 5413105004, 5413105005, 5413105006],
-  crew4: [5413075710, 5413075711, 5413075714, 5413075738, 5413075739],
-  crew5: [5413090723, 5413090725, 5413090727, 5413090728, 5413090731],
-  hood1: [5413089808, 5413089809, 5413089810, 5413089811, 5413089812],
-  hood2: [5413089814, 5413089815, 5413089816, 5413089817, 5413089818],
-  hood3: [5413105106, 5413105107, 5413105108, 5413105109, 5413105110],
-  hood4: [5413089819, 5413089820, 5413089821, 5413089822, 5413089823],
-  hood5: [5413090746, 5413090747, 5413090749, 5413090750, 5413090751],
-  tee1: [5413096328, 5413096331, 5413096332, 5413096333, 5413096334],
-  tee2: [5413096421, 5413096442, 5413096443, 5413096444, 5413096446],
-  tee3: [5413105151, 5413105152, 5413105153, 5413105154, 5413105155],
-  tee4: [5413096451, 5413096452, 5413096457, 5413096459, 5413096460],
-  tee5: [5413096463, 5413096464, 5413096465, 5413096466, 5413096467]
+const PLACEMENTS = { f: { label: 'Front print', type: 'default' }, b: { label: 'Back print', type: 'back' } };
+const PRINT_POS = {
+  crew: { f: { area_width: 1800, area_height: 2400, width: 1800, height: 2400, top: 0, left: 0 },
+          b: { area_width: 1800, area_height: 2400, width: 1800, height: 2400, top: 0, left: 0 } },
+  hood: { f: { area_width: 2100, area_height: 2100, width: 1575, height: 2100, top: 0, left: 262 },
+          b: { area_width: 1800, area_height: 2400, width: 1800, height: 2400, top: 0, left: 0 } },
+  tee:  { f: { area_width: 3600, area_height: 4800, width: 3600, height: 4800, top: 0, left: 0 },
+          b: { area_width: 3600, area_height: 4800, width: 3600, height: 4800, top: 0, left: 0 } }
 };
-const SIZES = ['S', 'M', 'L', 'XL', '2XL'];
-// Designs 1-3 are single-print; 4-5 print front and back (higher cost).
-const PRICE = {
-  crew: { single: 4499, double: 4999 },
-  hood: { single: 5499, double: 5999 },
-  tee:  { single: 3499, double: 3999 }
+const APPAREL = {
+  crew: { name: 'Clockwork Crewneck', single: 4499, colors: {
+    blk: { label: 'Black',        variants: { s: 5434, m: 5435, l: 5436, xl: 5437, '2xl': 5438 } },
+    nvy: { label: 'Navy',         variants: { s: 5498, m: 5499, l: 5500, xl: 5501, '2xl': 5502 } },
+    hth: { label: 'Dark Heather', variants: { s: 10833, m: 10834, l: 10835, xl: 10836, '2xl': 10837 } }
+  } },
+  hood: { name: 'Clockwork Hoodie', single: 5499, colors: {
+    blk: { label: 'Black',        variants: { s: 5530, m: 5531, l: 5532, xl: 5533, '2xl': 5534 } },
+    nvy: { label: 'Navy',         variants: { s: 5594, m: 5595, l: 5596, xl: 5597, '2xl': 5598 } },
+    hth: { label: 'Dark Heather', variants: { s: 10806, m: 10807, l: 10808, xl: 10809, '2xl': 10810 } }
+  } },
+  tee: { name: 'Clockwork Tee', single: 3499, colors: {
+    blk: { label: 'Black',             variants: { s: 4016, m: 4017, l: 4018, xl: 4019, '2xl': 4020 } },
+    nvy: { label: 'Navy',              variants: { s: 4111, m: 4112, l: 4113, xl: 4114, '2xl': 4115 } },
+    hth: { label: 'Dark Grey Heather', variants: { s: 8460, m: 8461, l: 8462, xl: 8463, '2xl': 8464 } }
+  } }
 };
-const GARMENT_NAMES = { crew: 'Clockwork Crewneck', hood: 'Clockwork Hoodie', tee: 'Clockwork Tee' };
-for (const [key, ids] of Object.entries(SWEAT_VARIANTS)) {
-  const garment = key.replace(/\d$/, '');
-  const design = parseInt(key.slice(-1), 10);
-  const base = design >= 4 ? PRICE[garment].double : PRICE[garment].single;
-  ids.forEach((syncVariantId, i) => {
-    const size = SIZES[i];
-    CATALOG[`${key}-${size.toLowerCase()}`] = {
-      sku: `${key}-${size.toLowerCase()}`, product: key,
-      name: `${GARMENT_NAMES[garment]} D${design} — ${size}`, size,
-      unitAmount: size === '2XL' ? base + 200 : base, syncVariantId
-    };
-  });
+for (const [g, garment] of Object.entries(APPAREL)) {
+  for (const [ck, color] of Object.entries(garment.colors)) {
+    for (const [dk, design] of Object.entries(DESIGNS)) {
+      for (const [pk, place] of Object.entries(PLACEMENTS)) {
+        for (const [sz, catalogVariantId] of Object.entries(color.variants)) {
+          const SIZE = sz.toUpperCase();
+          const sku = `${g}-${ck}-${dk}-${pk}-${sz}`;
+          CATALOG[sku] = {
+            sku, product: g,
+            name: `${garment.name} · ${color.label} · D${design.n} ${place.label} — ${SIZE}`,
+            size: SIZE,
+            unitAmount: sz === '2xl' ? garment.single + 200 : garment.single,
+            catalogVariantId,
+            file: { type: place.type, url: design.file, position: { ...PRINT_POS[g][pk] } }
+          };
+        }
+      }
+    }
+  }
 }
-// Legacy sku aliases (pre-design carts)
+// Legacy sku aliases (older carts / stale pages) — map to black equivalents.
+const LEGACY_DESIGN = { 1: 'd1', 2: 'd2', 3: 'd2', 4: 'd3', 5: 'd4' };
 for (const s of ['s', 'm', 'l', 'xl', '2xl']) {
-  CATALOG['crew-' + s] = CATALOG['crew4-' + s];
-  CATALOG['crewword-' + s] = CATALOG['crew2-' + s];
-  CATALOG['tee-' + s] = CATALOG['tee5-' + s];
+  for (const g of ['crew', 'hood', 'tee']) {
+    for (let d = 1; d <= 5; d++) CATALOG[`${g}${d}-${s}`] = CATALOG[`${g}-blk-${LEGACY_DESIGN[d]}-f-${s}`];
+  }
+  CATALOG['crew-' + s] = CATALOG[`crew-blk-d3-f-${s}`];
+  CATALOG['crewword-' + s] = CATALOG[`crew-blk-d2-f-${s}`];
+  CATALOG['tee-' + s] = CATALOG[`tee-blk-d4-f-${s}`];
 }
 const SHIPPING_CENTS = 499;
 
@@ -126,39 +138,19 @@ router.get('/catalog', async (req, res) => {
         blurb: 'Unstructured black cap, flat-embroidered CLOCKWORK serif wordmark.',
         variants: [{ sku: 'hat-os', size: 'One size', priceCents: 2999 }]
       },
-      {
-        id: 'tee', name: 'Clockwork Tee', image: images.tee,
-        blurb: 'Black staple tee. Five designs — 1–3 single print, 4–5 printed front and back.',
-        designs: [1, 2, 3, 4, 5].map(d => ({
-          key: 'tee' + d, label: DESIGN_LABELS[d],
-          variants: ['s', 'm', 'l', 'xl', '2xl'].map(s => {
-            const c = CATALOG[`tee${d}-${s}`];
-            return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
-          })
+      ...['tee', 'crew', 'hood'].map(g => ({
+        id: g, name: APPAREL[g].name, image: images.crew,
+        blurb: g === 'tee' ? 'Staple tee. Pick a color, pick a design, front or back.'
+             : g === 'crew' ? 'Heavyweight crewneck. Pick a color, pick a design, front or back.'
+             : 'Heavy blend hoodie. Same designs, built for the cold library nights.',
+        colors: Object.entries(APPAREL[g].colors).map(([k, c]) => ({ key: k, label: c.label })),
+        designs: Object.entries(DESIGNS).map(([k, d]) => ({ key: k, label: d.label })),
+        placements: Object.entries(PLACEMENTS).map(([k, p]) => ({ key: k, label: p.label })),
+        sizes: ['s', 'm', 'l', 'xl', '2xl'].map(s => ({
+          key: s, label: s.toUpperCase(),
+          priceCents: s === '2xl' ? APPAREL[g].single + 200 : APPAREL[g].single
         }))
-      },
-      {
-        id: 'crew', name: 'Clockwork Crewneck', image: images.crew,
-        blurb: 'Heavyweight black crewneck. Five designs — 1–3 single print, 4–5 printed front and back.',
-        designs: [1, 2, 3, 4, 5].map(d => ({
-          key: 'crew' + d, label: DESIGN_LABELS[d],
-          variants: ['s', 'm', 'l', 'xl', '2xl'].map(s => {
-            const c = CATALOG[`crew${d}-${s}`];
-            return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
-          })
-        }))
-      },
-      {
-        id: 'hood', name: 'Clockwork Hoodie', image: images.crew,
-        blurb: 'Heavy blend black hoodie, same five designs — for the cold library nights.',
-        designs: [1, 2, 3, 4, 5].map(d => ({
-          key: 'hood' + d, label: DESIGN_LABELS[d],
-          variants: ['s', 'm', 'l', 'xl', '2xl'].map(s => {
-            const c = CATALOG[`hood${d}-${s}`];
-            return { sku: c.sku, size: c.size, priceCents: c.unitAmount };
-          })
-        }))
-      }
+      }))
     ]
   });
 });
@@ -244,7 +236,8 @@ async function fulfill(session, stripeEventId) {
   const ShopOrder = require('../models/ShopOrder');
   let cart = [];
   try { cart = JSON.parse(session.metadata.cart || '[]'); } catch (e) {}
-  const items = cart.map(c => ({ ...CATALOG[c.s], quantity: c.q })).filter(i => i && i.syncVariantId);
+  const items = cart.map(c => ({ ...CATALOG[c.s], quantity: c.q }))
+    .filter(i => i && (i.syncVariantId || i.catalogVariantId));
   if (!items.length) throw new Error('Empty shop cart in session ' + session.id);
 
   const ship = session.shipping_details || session.customer_details || {};
@@ -261,7 +254,7 @@ async function fulfill(session, stripeEventId) {
     order = await ShopOrder.create({
       stripeSessionId: session.id, stripeEventId,
       email: (session.customer_details && session.customer_details.email) || null,
-      items: items.map(i => ({ sku: i.sku, name: i.name, syncVariantId: i.syncVariantId, quantity: i.quantity, unitAmount: i.unitAmount })),
+      items: items.map(i => ({ sku: i.sku, name: i.name, syncVariantId: i.syncVariantId || i.catalogVariantId, quantity: i.quantity, unitAmount: i.unitAmount })),
       amountTotal: session.amount_total || 0,
       recipient, status: 'paid'
     });
@@ -283,7 +276,9 @@ async function fulfill(session, stripeEventId) {
       body: JSON.stringify({
         external_id: session.id.slice(-32),
         recipient,
-        items: items.map(i => ({ sync_variant_id: i.syncVariantId, quantity: i.quantity })),
+        items: items.map(i => i.syncVariantId
+          ? { sync_variant_id: i.syncVariantId, quantity: i.quantity }
+          : { variant_id: i.catalogVariantId, quantity: i.quantity, files: [{ ...i.file }] }),
         confirm: true
       })
     });
