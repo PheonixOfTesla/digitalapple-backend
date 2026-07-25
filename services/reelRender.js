@@ -234,7 +234,9 @@ async function renderJob(job, spec, meta = {}) {
 
     // 4) upload + persist
     job.step = 'upload'; persist(job);
+    require('../config/cloudinary');            // ensures cloudinary.config() ran
     const cloudinary = require('cloudinary').v2;
+    if (!cloudinary.config().cloud_name) throw new Error('Cloudinary not configured (missing env vars)');
     const slug = String(spec.topic || spec.hook || 'reel').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-|-$/g, '') || 'reel';
     const up = await cloudinary.uploader.upload(out, {
       resource_type: 'video', folder: 'digitalapple/reels',
@@ -277,8 +279,11 @@ function enqueue(spec, meta = {}) {
     job.status = 'running'; persist(job);
     try { await renderJob(job, spec, meta); }
     catch (e) {
-      console.error('[reelRender] job failed:', e.message);
-      job.status = 'failed'; job.error = e.message; persist(job);
+      // Cloudinary (and some SDK) errors have no .message — capture the shape
+      const msg = (e && (e.message || (e.error && e.error.message))) ||
+        (() => { try { return JSON.stringify(e).slice(0, 300); } catch (_) { return String(e); } })();
+      console.error('[reelRender] job failed:', msg);
+      job.status = 'failed'; job.error = msg || 'unknown error'; persist(job);
       // A failed map export refunds the token it charged
       if (meta.refundUserId) {
         try {
