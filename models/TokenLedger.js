@@ -32,7 +32,7 @@ const tokenLedgerSchema = new mongoose.Schema({
   // Transaction type
   reason: {
     type: String,
-    enum: ['purchase', 'spend', 'refund', 'grant', 'expire'],
+    enum: ['purchase', 'spend', 'refund', 'grant', 'expire', 'earn'],
     required: true
   },
 

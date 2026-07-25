@@ -375,6 +375,16 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       { $inc: { forkCount: 1 } }
     );
 
+    // Creator royalty: the map's creator earns 1 token per unique forker
+    // (never for forking your own map). Best-effort — never blocks the fork.
+    if (map.ownerId && String(map.ownerId) !== String(userId)) {
+      require('../services/tokenEarn').earnToken({
+        creatorId: map.ownerId, sourceUserId: userId,
+        kind: 'fork', mapId: map._id, projectId: project._id
+      }).then(r => { if (r.earned) console.log(`[royalty] fork: +1 token to ${map.ownerId}`); })
+        .catch(() => {});
+    }
+
     // Durable creation record for the admin nebula tracker (best-effort).
     const forkTitle = `Fork of: ${map.title}`.slice(0, 200);
     NebulaLog.create({

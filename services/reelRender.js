@@ -274,6 +274,16 @@ async function renderJob(job, spec, meta = {}) {
     job.step = 'done';
     job.asset = { id: asset._id, name: asset.name, url: asset.url, voiced: asset.voiced, duration: T, bytes: asset.bytes };
     persist(job);
+
+    // Creator royalty: the token the exporter spent transfers to the map's
+    // creator (only set for paid exports of someone else's published map).
+    if (meta.royaltyUserId) {
+      require('./tokenEarn').earnToken({
+        creatorId: meta.royaltyUserId, sourceUserId: meta.ownerId,
+        kind: 'video_export', projectId: meta.projectId
+      }).then(r => { if (r.earned) console.log(`[royalty] video_export: +1 token to ${meta.royaltyUserId}`); })
+        .catch(() => {});
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

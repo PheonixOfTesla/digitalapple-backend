@@ -219,7 +219,10 @@ router.post('/render-map', verifyToken, async (req, res) => {
     spec.sig = `Mapped by ${sigName}`;
     const jobId = reelRender.enqueue(spec, {
       kind: 'map-export', ownerId: req.userId, projectId: project._id,
-      refundUserId: spend.exempt ? null : req.userId   // refund the token if the render fails
+      refundUserId: spend.exempt ? null : req.userId,  // refund the token if the render fails
+      // Creator royalty: when someone ELSE pays to export a published map, the
+      // token they spent transfers to the map's creator on success.
+      royaltyUserId: (!isOwner && !spend.exempt && project.ownerId) ? project.ownerId : null
     });
     res.json({ success: true, jobId, tokenSpent: !spend.exempt, newBalance: spend.newBalance });
   } catch (error) {
