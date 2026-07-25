@@ -180,6 +180,17 @@ router.post('/webhook', async (req, res) => {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
 
+    // Shop orders share this verified webhook; fulfillment lives in ShopController.
+    if (session.metadata && session.metadata.type === 'shop_order') {
+      try {
+        await require('./ShopController').fulfill(session, event.id);
+        return res.json({ received: true, shop: true });
+      } catch (err) {
+        console.error('[shop] fulfillment error:', err.message);
+        return res.status(500).json({ error: 'Shop fulfillment failed' });
+      }
+    }
+
     try {
       await handleSuccessfulPayment(session, event.id);
       console.log(`[Tokens] Payment processed: ${session.id}`);

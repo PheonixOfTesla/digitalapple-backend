@@ -134,6 +134,7 @@ app.use('/api/v1/comments', CommentController);
 app.use('/api/v1/share', ShareController);
 app.use('/api/v1/tokens', TokenController);
 app.use('/api/v1/reels', ReelController);
+app.use('/api/v1/shop', require('./controllers/ShopController'));
 
 // ONE-TIME SETUP - REMOVE AFTER USE
 app.post('/api/v1/setup-once', async (req, res) => {
