@@ -1318,12 +1318,12 @@ async function answerAndLocate(question, nodes) {
   }));
 
   const sys = `You help a user navigate a "Clockwork" idea map. Nodes are parts of a plan/idea.
-Given a QUESTION and the map's NODES, do three things:
-1. Pick the ONE existing node most relevant to the question (its exact id).
-2. Decide if that node already COVERS the question (true) or if the map is missing this and should grow a new node for it (false).
-3. Give a short, plain answer (1-2 sentences) pointing the user to what they'll find there.
-If not covered, name the node the new node should hang under ("extendUnder") — usually the most relevant node or its parent.
-Return ONLY JSON: {"nodeId": "<id or empty>", "covered": true|false, "answer": "<1-2 sentences>", "extendUnder": "<id or empty>"}`;
+Given a QUESTION and the map's NODES:
+1. ANSWER the question directly in 1-3 sentences. If it's a factual question (dates, figures, names, dollar amounts, contract/payment specifics), give the real, concrete facts you know — don't just say "see this node". Be specific and accurate; if you genuinely don't know a specific figure, say so plainly rather than inventing one.
+2. Pick the ONE existing node most relevant to the question (its exact id) — where this answer belongs on the map.
+3. Decide if that node already COVERS the question (true) or if the map is missing this and should grow a new node for it (false). Specific facts not already stated on a node → covered:false.
+4. If not covered, name the node the new node should hang under ("extendUnder") — usually the most relevant node or its parent.
+Return ONLY JSON: {"nodeId": "<id or empty>", "covered": true|false, "answer": "<1-3 sentences that actually answer>", "extendUnder": "<id or empty>"}`;
 
   const usr = `QUESTION: "${String(question).slice(0, 400)}"
 

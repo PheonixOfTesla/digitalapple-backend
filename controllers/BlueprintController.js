@@ -1150,11 +1150,16 @@ router.post('/projects/:projectId/ask', optionalAuth, async (req, res) => {
     const r = await llm.answerAndLocate(question, nodes);
 
     const ids = new Set(nodes.map(n => n._id.toString()));
-    const nodeId = r.nodeId && ids.has(r.nodeId) ? r.nodeId : null;
-    const extendUnder = r.extendUnder && ids.has(r.extendUnder) ? r.extendUnder : nodeId;
-    // Covered → just point them at the node. Otherwise → suggest growing the map
-    // under the most relevant parent (only when we actually have a parent to grow under).
-    const mode = (r.covered && nodeId) ? 'locate' : (extendUnder ? 'extend' : 'locate');
+    const coreNode = nodes.find(n => n.kind === 'core') || nodes.find(n => !n.parentNodeId) || nodes[0];
+    const coreId = coreNode ? coreNode._id.toString() : null;
+
+    // Always resolve to a real node so the client can ALWAYS center on something.
+    const matched = r.nodeId && ids.has(r.nodeId) ? r.nodeId : null;
+    const nodeId = matched || (r.extendUnder && ids.has(r.extendUnder) ? r.extendUnder : coreId);
+    const extendUnder = (r.extendUnder && ids.has(r.extendUnder) ? r.extendUnder : matched) || coreId;
+    // Covered → center on the node. Otherwise → grow a node under the most relevant
+    // parent (extendUnder always resolves now, falling back to Core).
+    const mode = (r.covered && matched) ? 'locate' : (extendUnder ? 'extend' : 'locate');
 
     res.json({
       success: true,
@@ -1162,7 +1167,7 @@ router.post('/projects/:projectId/ask', optionalAuth, async (req, res) => {
       nodeId,
       extendUnder,
       reply: r.answer || (mode === 'extend'
-        ? 'Nothing in the map covers this yet — I can grow it here.'
+        ? 'Nothing in the map covered this — I grew a node for it.'
         : 'Here is the closest part of your map.')
     });
   } catch (error) {
