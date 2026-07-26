@@ -881,21 +881,40 @@ router.post('/seed-maps', async (req, res) => {
 
 let backfillState = {
   running: false, target: 0, created: 0, failed: 0, need: 0, total: 0,
-  startedAt: null, finishedAt: null, error: null
+  startedAt: null, finishedAt: null, error: null, lastError: null, lastProgressAt: null
 };
+
+// If a run claims to be `running` but hasn't made progress in this long, treat the
+// lock as stale (a worker hung on a DB/LLM call, or the request that spawned it died
+// without the process restarting) and allow a fresh run. Without this a single stuck
+// run permanently disables the button — the "I click Seed and nothing happens" bug.
+const BACKFILL_STALE_MS = 5 * 60 * 1000;
+
+function backfillIsStale() {
+  if (!backfillState.running) return false;
+  const last = backfillState.lastProgressAt || backfillState.startedAt;
+  return !last || (Date.now() - new Date(last).getTime()) > BACKFILL_STALE_MS;
+}
 
 // Start (or report already-running).
 // POST /admin/atlas/backfill { target } -> generate until the Atlas holds `target` maps
 // POST /admin/atlas/backfill { add }    -> generate `add` MORE maps on top of the current total
-// `add` wins if both are present. This makes "seed 10 more" behave intuitively even when
-// the Atlas already has maps (a plain `target` of 10 would create 0 when 11 already exist).
+// `add` wins if both are present. This makes "seed 400 more" behave intuitively even when
+// the Atlas already has maps (a plain `target` of 400 would create 0 when 500 already exist).
 router.post('/atlas/backfill', async (req, res) => {
   const body = req.body || {};
   const addRaw = parseInt(body.add);
   const useAdd = Number.isFinite(addRaw) && addRaw > 0;
 
-  if (backfillState.running) {
+  if (backfillState.running && !backfillIsStale()) {
     return res.json({ started: false, alreadyRunning: true, state: backfillState });
+  }
+  if (backfillState.running && backfillIsStale()) {
+    // Reclaim the stale lock so this request can start a fresh run.
+    console.warn('[atlas-backfill] reclaiming stale lock (no progress for >5m)');
+    backfillState.running = false;
+    backfillState.finishedAt = new Date();
+    backfillState.error = 'previous run stalled — restarted';
   }
 
   const { backfillTo, getCurrentAtlasCount } = require('../jobs/seedMaps');
@@ -910,12 +929,12 @@ router.post('/atlas/backfill', async (req, res) => {
     target = Math.min(5000, Math.max(1, parseInt(body.target) || 3000));
   }
 
-  backfillState = { running: true, target, created: 0, failed: 0, need: 0, total: 0, startedAt: new Date(), finishedAt: null, error: null };
+  backfillState = { running: true, target, created: 0, failed: 0, need: 0, total: 0, startedAt: new Date(), finishedAt: null, error: null, lastError: null, lastProgressAt: new Date() };
   realtime.adminEmit('atlas:progress', backfillState);
 
   // Fire-and-forget: do NOT await — return immediately, run in the background.
   backfillTo(target, { onProgress: (p) => {
-    Object.assign(backfillState, p);
+    Object.assign(backfillState, p, { lastProgressAt: new Date() });
     // Live-push each map as it lands so the admin sees the Atlas filling.
     realtime.adminEmit('atlas:progress', backfillState);
   } })

@@ -1152,18 +1152,28 @@ async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {
     .sort(() => Math.random() - 0.5)
     .slice(0, need);
 
-  let created = 0, failed = 0, idx = 0;
+  let created = 0, failed = 0, idx = 0, lastError = null;
+  // Hard ceiling per map so one hung map (e.g. a stalled DB write) can never
+  // freeze a worker and, through Promise.all, the whole run. createSeedMap has
+  // its own LLM timeouts; this bounds the total including the DB save.
+  const MAP_TIMEOUT_MS = 180000;
   async function worker() {
     while (idx < candidates.length) {
       const topic = candidates[idx++];
-      try { await createSeedMap(user, topic); created++; }
-      catch (e) { failed++; console.error('[backfill] fail:', e.message); }
-      onProgress({ created, failed, need: candidates.length, total: currentTotal + created });
+      try {
+        await Promise.race([
+          createSeedMap(user, topic),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('map timeout (>180s)')), MAP_TIMEOUT_MS))
+        ]);
+        created++;
+      }
+      catch (e) { failed++; lastError = e.message; console.error('[backfill] fail:', e.message); }
+      onProgress({ created, failed, need: candidates.length, total: currentTotal + created, lastError });
     }
   }
   const conc = Math.max(1, Math.min(3, concurrency));
   await Promise.all(Array.from({ length: conc }, () => worker()));
-  return { created, failed, total: currentTotal + created };
+  return { created, failed, total: currentTotal + created, lastError };
 }
 
 // Combined list of real names whose seed maps should be purged from the Atlas.
