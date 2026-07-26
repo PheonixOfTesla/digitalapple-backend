@@ -1129,6 +1129,48 @@ router.post('/projects/:projectId/chat', optionalAuth, async (req, res) => {
   }
 });
 
+// Ask → locate a node (or say it should be extended). Read-only: this route
+// never mutates the map. The frontend navigates to `nodeId`; when `mode` is
+// 'extend' it calls the existing /expand flow on `extendUnder` to grow the map.
+router.post('/projects/:projectId/ask', optionalAuth, async (req, res) => {
+  try {
+    const project = await verifyOwnership(req.params.projectId, req.userId, req.anonymousSessionId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const question = String((req.body && req.body.question) || '').trim();
+    if (!question) return res.status(400).json({ error: 'Question is required' });
+    if (question.length > 400) return res.status(400).json({ error: 'Question too long' });
+
+    const nodes = await Node.find({ projectId: project._id }).lean();
+    if (!nodes.length) {
+      return res.json({ success: true, mode: 'none', reply: 'This map has no nodes yet — generate it first.' });
+    }
+
+    const llm = getLLM();
+    const r = await llm.answerAndLocate(question, nodes);
+
+    const ids = new Set(nodes.map(n => n._id.toString()));
+    const nodeId = r.nodeId && ids.has(r.nodeId) ? r.nodeId : null;
+    const extendUnder = r.extendUnder && ids.has(r.extendUnder) ? r.extendUnder : nodeId;
+    // Covered → just point them at the node. Otherwise → suggest growing the map
+    // under the most relevant parent (only when we actually have a parent to grow under).
+    const mode = (r.covered && nodeId) ? 'locate' : (extendUnder ? 'extend' : 'locate');
+
+    res.json({
+      success: true,
+      mode,
+      nodeId,
+      extendUnder,
+      reply: r.answer || (mode === 'extend'
+        ? 'Nothing in the map covers this yet — I can grow it here.'
+        : 'Here is the closest part of your map.')
+    });
+  } catch (error) {
+    console.error('Ask error:', error);
+    res.status(500).json({ error: 'Failed to answer', message: error.message });
+  }
+});
+
 // Execute operations and return results with created IDs
 async function executeOperations(projectId, ops, existingNodes) {
   const results = [];

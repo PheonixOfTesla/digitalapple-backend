@@ -1299,6 +1299,59 @@ function validateNebula(nebula) {
   return errors;
 }
 
+/**
+ * Ask → locate (or decide to extend).
+ *
+ * Given a natural-language question and the map's nodes, pick the single most
+ * relevant existing node, decide whether that node already covers the question,
+ * and give a short answer/pointer. When it isn't covered, name the node under
+ * which a new node should be grown (the "extend to such case" path).
+ *
+ * Returns { nodeId, covered, answer, extendUnder }. Read-only — no mutation.
+ */
+async function answerAndLocate(question, nodes) {
+  const slim = (nodes || []).slice(0, 60).map(n => ({
+    id: n._id || n.id,
+    title: n.title || n.statement || '',
+    detail: (n.statement && n.statement !== n.title) ? String(n.statement).slice(0, 120) : '',
+    kind: n.kind
+  }));
+
+  const sys = `You help a user navigate a "Clockwork" idea map. Nodes are parts of a plan/idea.
+Given a QUESTION and the map's NODES, do three things:
+1. Pick the ONE existing node most relevant to the question (its exact id).
+2. Decide if that node already COVERS the question (true) or if the map is missing this and should grow a new node for it (false).
+3. Give a short, plain answer (1-2 sentences) pointing the user to what they'll find there.
+If not covered, name the node the new node should hang under ("extendUnder") — usually the most relevant node or its parent.
+Return ONLY JSON: {"nodeId": "<id or empty>", "covered": true|false, "answer": "<1-2 sentences>", "extendUnder": "<id or empty>"}`;
+
+  const usr = `QUESTION: "${String(question).slice(0, 400)}"
+
+NODES:
+${JSON.stringify(slim, null, 1)}`;
+
+  const params = {
+    model,
+    max_tokens: 500,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }],
+    response_format: { type: 'json_object' }
+  };
+  const response = await client.chat.completions.create(params);
+  let out = {};
+  try { out = JSON.parse(response.choices[0].message.content || '{}'); } catch (e) { out = {}; }
+
+  const ids = new Set(slim.map(n => String(n.id)));
+  const nodeId = ids.has(String(out.nodeId)) ? String(out.nodeId) : null;
+  let extendUnder = ids.has(String(out.extendUnder)) ? String(out.extendUnder) : null;
+  if (!extendUnder && nodeId) extendUnder = nodeId;
+  return {
+    nodeId,
+    covered: out.covered === true && !!nodeId,
+    answer: String(out.answer || '').slice(0, 400),
+    extendUnder
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1307,6 +1360,7 @@ module.exports = {
   generateNebula,
   expandStar,
   processChat,
+  answerAndLocate,
   branchNode,
   stressNode,
   costNode,
