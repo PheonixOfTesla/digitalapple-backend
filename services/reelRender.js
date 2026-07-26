@@ -79,10 +79,14 @@ async function makeVoice(spec, tmp) {
     Setting.findOne({ key: 'elevenlabs_api_key' }),
     Setting.findOne({ key: 'elevenlabs_voice_id' })
   ]);
-  // Key/voice can come from the admin Settings OR straight from Railway env —
-  // whichever is present. Without one, the reel renders silent (by design).
-  const key = (el && el.value) || process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_API_KEY;
-  const voiceId = (v && v.value) || process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_VOICE_ID;
+  // Key/voice come from Railway env FIRST (authoritative — set by the admin),
+  // then fall back to a non-empty admin Settings value. Env-first means a stale
+  // or blank Lab Setting can never shadow the real Railway credentials.
+  // Without either, the reel renders silent (by design).
+  const setKey = (el && typeof el.value === 'string') ? el.value.trim() : '';
+  const setVoice = (v && typeof v.value === 'string') ? v.value.trim() : '';
+  const key = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_API_KEY || setKey;
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_VOICE_ID || setVoice;
   const vo = spec.vo;
   if (!key || !voiceId || !vo || !vo.text) return null;
 
