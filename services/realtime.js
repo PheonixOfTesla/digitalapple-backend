@@ -41,4 +41,16 @@ function emitNebula(row) {
   adminEmit('nebula:created', row);
 }
 
-module.exports = { setIO, adminEmit, emitAnalytics, emitNebula };
+// Push an event to ONE signed-in member over the `/hub` namespace. Each socket
+// joins its own `user:<id>` room on connect (see server.js), so this reaches
+// every open tab that user has — and silently no-ops for offline users.
+function userEmit(userId, event, payload) {
+  if (!io || !userId) return;
+  try {
+    io.of('/hub').to('user:' + String(userId)).emit(event, payload);
+  } catch (e) {
+    // Never let realtime break a request path.
+  }
+}
+
+module.exports = { setIO, adminEmit, emitAnalytics, emitNebula, userEmit };

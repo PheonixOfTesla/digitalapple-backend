@@ -712,6 +712,27 @@ try {
     socket.emit('ready', { ok: true });
   });
 
+  // Hub channel — every signed-in member joins a personal `user:<id>` room so
+  // controllers can live-push events to just them (new messages, bell
+  // notifications) via realtime.userEmit(). Nothing sensitive is broadcast:
+  // events only ever go to the one user they belong to.
+  const hubNs = io.of('/hub');
+  hubNs.use((socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token ||
+                    (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!token) return next(new Error('unauthorized'));
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.userId = decoded.userId || decoded.id || decoded._id;
+      if (!socket.userId) return next(new Error('unauthorized'));
+      next();
+    } catch (e) { next(new Error('unauthorized')); }
+  });
+  hubNs.on('connection', (socket) => {
+    socket.join('user:' + String(socket.userId));
+    socket.emit('ready', { ok: true });
+  });
+
   // Studios channel — live connect rooms. Any authenticated member can connect;
   // this namespace only relays presence, WebRTC signaling, live chat, and the
   // "blueprint attached" event between peers in the same studio room. Media never
@@ -758,12 +779,15 @@ try {
     });
 
     // Ephemeral live chat within the room (persistent chat uses the REST API).
+    // Members who AREN'T in the room right now get a bell notification.
     socket.on('chat', (payload) => {
       if (!joined || !payload || !payload.body) return;
+      const chatBody = String(payload.body).slice(0, 1000);
       studioNs.to(joined).emit('chat', {
         from: socket.id, userId: socket.userId, name: socket.studioName,
-        body: String(payload.body).slice(0, 1000)
+        body: chatBody
       });
+      notifyStudioChat(joined, socket, chatBody);
     });
 
     // Presence flags (mic on/off, screen sharing on/off).
@@ -782,6 +806,35 @@ try {
       if (joined) socket.to(joined).emit('peer-left', { socketId: socket.id, userId: socket.userId });
     });
   });
+
+  // A studio message notifies members who aren't in the room right now —
+  // deduped to one unread notification per studio until they read it, exactly
+  // like thread messages. Fire-and-forget: never blocks the socket path.
+  async function notifyStudioChat(studioId, socket, chatBody) {
+    try {
+      const Conversation = require('./models/Conversation');
+      const Notification = require('./models/Notification');
+      const convo = await Conversation.findOne({ _id: studioId, closedAt: null })
+        .select('participants name').lean();
+      if (!convo) return;
+      const present = new Set();
+      const room = studioNs.adapter.rooms.get(String(studioId));
+      if (room) room.forEach((sid) => {
+        const s = studioNs.sockets.get(sid);
+        if (s && s.userId) present.add(String(s.userId));
+      });
+      const from = String(socket.studioName || socket.userName || 'Member').slice(0, 80);
+      const link = 'studio.html?id=' + String(studioId);
+      const text = from + ' in ' + (convo.name || 'Studio') + ': ' + chatBody.slice(0, 70);
+      for (const uid of (convo.participants || []).map(String)) {
+        if (uid === String(socket.userId) || present.has(uid)) continue;
+        const already = await Notification.findOne({ userId: uid, type: 'message', read: false, link }).select('_id').lean();
+        if (already) await Notification.updateOne({ _id: already._id }, { $set: { text, actorName: from, createdAt: new Date() } });
+        else await Notification.push({ userId: uid, channel: 'personal', type: 'message', actorName: from, text, link });
+        realtime.userEmit(uid, 'notify', { type: 'message', text, link });
+      }
+    } catch (e) { /* non-fatal — chat itself already went through */ }
+  }
 
   // Hand the io instance to the realtime service for controllers to use.
   realtime.setIO(io);

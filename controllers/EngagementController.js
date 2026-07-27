@@ -23,6 +23,29 @@ const realtime = require('../services/realtime');
 const { verifyToken } = require('../middleware/auth');
 const rateLimit = require('express-rate-limit');
 const identity = require('../services/identity');
+const Notification = require('../models/Notification');
+
+// Tell a map's creator someone starred / reposted / forked it. Skips self-
+// engagement, dedupes per actor+map while unread, and live-pushes to the bell.
+// Fire-and-forget: engagement never waits on (or fails because of) this.
+async function notifyMapOwner(map, actorId, type, verb) {
+  try {
+    if (!map || !map.ownerId || String(map.ownerId) === String(actorId)) return;
+    const actor = await User.findById(actorId).select('firstName lastName email').lean();
+    const actorName = actor
+      ? (([actor.firstName, actor.lastName].filter(Boolean).join(' ').trim()) ||
+         (actor.email ? actor.email.split('@')[0] : 'Someone')).slice(0, 80)
+      : 'Someone';
+    const link = 'map.html?id=' + String(map._id);
+    const text = actorName + ' ' + verb + ' "' + String(map.title || 'your map').slice(0, 60) + '"';
+    const already = await Notification.findOne({
+      userId: map.ownerId, type, actorId, read: false, link
+    }).select('_id').lean();
+    if (already) await Notification.updateOne({ _id: already._id }, { $set: { text, createdAt: new Date() } });
+    else await Notification.push({ userId: map.ownerId, channel: 'personal', type, actorId, actorName, text, link });
+    realtime.userEmit(map.ownerId, 'notify', { type, text, link });
+  } catch (e) { /* non-fatal */ }
+}
 
 // Rate limiters
 const starLimiter = rateLimit({
@@ -87,6 +110,8 @@ router.post('/star/:mapId', verifyToken, starLimiter, async (req, res) => {
 
       await session.commitTransaction();
 
+      notifyMapOwner(map, userId, 'star', 'starred');
+
       res.json({
         success: true,
         action: 'starred',
@@ -131,6 +156,8 @@ router.post('/repost/:mapId', verifyToken, repostLimiter, async (req, res) => {
     // Create repost
     await new Repost({ mapId, userId }).save();
     await SharedMap.updateOne({ _id: mapId }, { $inc: { repostCount: 1 } });
+
+    notifyMapOwner(map, userId, 'repost', 'reposted');
 
     res.json({
       success: true,
@@ -374,6 +401,8 @@ router.post('/fork/:mapId', verifyToken, forkLimiter, async (req, res) => {
       { _id: mapId },
       { $inc: { forkCount: 1 } }
     );
+
+    notifyMapOwner(map, userId, 'fork', 'forked');
 
     // Creator royalty: the map's creator earns 1 token per unique forker
     // (never for forking your own map). Best-effort — never blocks the fork.

@@ -19,11 +19,20 @@ const User = require('../models/User');
 const SharedMap = require('../models/SharedMap');
 const { verifyToken } = require('../middleware/auth');
 const { encryptText, decryptText } = require('../services/crypto');
+const realtime = require('../services/realtime');
 
 const router = express.Router();
 router.use(verifyToken);
 
 function clampStr(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
+
+// Server-side role check — the client's isAdmin flag is never trusted.
+async function isAdminUser(userId) {
+  try {
+    const u = await User.findById(userId).select('role').lean();
+    return !!(u && u.role === 'admin');
+  } catch (e) { return false; }
+}
 function nameOf(u) {
   if (!u) return 'Member';
   const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim();
@@ -46,6 +55,7 @@ router.get('/conversations', async (req, res) => {
       archivedBy: { $ne: req.userId },   // hidden-for-me threads stay out
       closedAt: null                     // owner-deleted rooms/Studios are gone
     }).sort({ updatedAt: -1 }).limit(50).lean();
+    const admin = await isAdminUser(req.userId);
     const out = [];
     for (const c of convos) {
       const other = c.isRoom
@@ -60,7 +70,11 @@ router.get('/conversations', async (req, res) => {
           body: decryptText(c.lastMessage.body) || (c.lastMessage.hasMap ? 'Shared a blueprint' : ''),
           mine: String(c.lastMessage.senderId) === String(req.userId), at: c.lastMessage.at
         } : null,
-        unread, updatedAt: c.updatedAt
+        unread, updatedAt: c.updatedAt,
+        isRoom: !!c.isRoom, isStudio: !!c.isStudio,
+        // Rename/delete rights: the host always, admins even when they're not.
+        canManage: (c.isRoom || c.isStudio) &&
+          (admin || (c.ownerId && String(c.ownerId) === String(req.userId)))
       });
     }
     res.json({ success: true, conversations: out });
@@ -116,15 +130,20 @@ router.post('/rooms', async (req, res) => {
 });
 
 // Archive / delete a thread. For everyone: archiving hides the thread from
-// YOUR list only. If you're the OWNER of a room/Studio, it deletes the actual
-// room — closedAt is set and it disappears for every member and from discover.
+// YOUR list only. If you're the OWNER of a room/Studio — or an admin, even one
+// who isn't the host — it deletes the actual room: closedAt is set and it
+// disappears for every member and from discover.
 router.post('/conversations/:id/archive', async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const convo = await Conversation.findOne({ _id: req.params.id, participants: req.userId });
+    const admin = await isAdminUser(req.userId);
+    // Admins can act on rooms they never joined; everyone else must be in it.
+    const convo = admin
+      ? await Conversation.findById(req.params.id)
+      : await Conversation.findOne({ _id: req.params.id, participants: req.userId });
     if (!convo) return res.status(404).json({ error: 'Thread not found' });
     const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
-    if (isOwner && (convo.isRoom || convo.isStudio)) {
+    if ((isOwner || admin) && (convo.isRoom || convo.isStudio)) {
       convo.closedAt = new Date();
       await convo.save();
       return res.json({ success: true, deleted: true });
@@ -135,6 +154,26 @@ router.post('/conversations/:id/archive', async (req, res) => {
     }
     res.json({ success: true, archived: true });
   } catch (e) { console.error('archive convo:', e.message); res.status(500).json({ error: 'Could not archive' }); }
+});
+
+// Rename a room/Studio — the host, or an admin even when they're not the host.
+router.post('/conversations/:id/rename', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const name = clampStr((req.body || {}).name, 80);
+    if (!name) return res.status(400).json({ error: 'Give it a name.' });
+    const convo = await Conversation.findOne({ _id: req.params.id, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    if (!convo.isRoom && !convo.isStudio) return res.status(400).json({ error: 'Only rooms and Studios can be renamed.' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can rename this.' });
+    }
+    convo.name = name;
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, name });
+  } catch (e) { console.error('rename convo:', e.message); res.status(500).json({ error: 'Could not rename' }); }
 });
 
 // Browse public rooms (all types, or by category) — anyone can join.
@@ -256,6 +295,11 @@ router.post('/conversations/:id/messages', async (req, res) => {
         const already = await Notification.exists({ userId: uid, type: 'message', read: false, link });
         if (already) { await Notification.updateOne({ _id: already._id }, { $set: { text: label, createdAt: new Date() } }); }
         else { await Notification.push({ userId: uid, channel: 'personal', type: 'message', actorName: nameOf(me), text: label, link }); }
+        // Live-push over the /hub socket so open messengers update instantly.
+        realtime.userEmit(uid, 'message:new', {
+          conversationId: String(convo._id), from: nameOf(me),
+          body: body.slice(0, 120), hasMap: !!msg.sharedMapId, at: msg.createdAt
+        });
       }
     } catch (e) { /* non-fatal */ }
 
