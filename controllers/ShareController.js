@@ -15,6 +15,47 @@ const Edge = require('../models/Edge');
 const User = require('../models/User');
 const { verifyToken } = require('../middleware/auth');
 
+// A NEW public map fans out to people whose focus matches it: followers of the
+// creator, plus members who've built or starred maps in the same category.
+// Fire-and-forget, capped, deduped per map while unread — never blocks publish.
+async function notifyFocusAudience(map, creatorId) {
+  try {
+    if (!map || map.visibility !== 'public') return;
+    const Follow = require('../models/Follow');
+    const Star = require('../models/Star');
+    const Notification = require('../models/Notification');
+    const realtime = require('../services/realtime');
+
+    const audience = new Set();
+    (await Follow.find({ followeeId: creatorId }).select('followerId').limit(500).lean())
+      .forEach(f => audience.add(String(f.followerId)));
+    if (map.category && map.category !== 'other') {
+      const catMaps = await SharedMap.find({ category: map.category, unpublishedAt: null, _id: { $ne: map._id } })
+        .select('_id ownerId').sort({ publishedAt: -1 }).limit(200).lean();
+      catMaps.forEach(m => { if (m.ownerId) audience.add(String(m.ownerId)); });
+      const catIds = catMaps.map(m => m._id);
+      if (catIds.length) {
+        (await Star.find({ mapId: { $in: catIds } }).select('userId').limit(500).lean())
+          .forEach(s => audience.add(String(s.userId)));
+      }
+    }
+    audience.delete(String(creatorId));
+
+    const link = 'map.html?id=' + String(map._id);
+    const text = 'New ' + (map.category && map.category !== 'other' ? map.category + ' ' : '') +
+      'map in your orbit: "' + String(map.title || 'Untitled').slice(0, 60) + '" by ' + (map.ownerName || 'a creator');
+    let sent = 0;
+    for (const uid of audience) {
+      if (sent >= 100) break; // cap the fan-out
+      const already = await Notification.exists({ userId: uid, type: 'new_map', read: false, link });
+      if (already) continue;
+      await Notification.push({ userId: uid, channel: 'personal', type: 'new_map', actorId: creatorId, actorName: map.ownerName || '', text, link });
+      realtime.userEmit(uid, 'notify', { type: 'new_map', text, link });
+      sent++;
+    }
+  } catch (e) { /* non-fatal */ }
+}
+
 // Helper: sanitize an attribution source. Returns a clean {name,url,handle,kind}
 // object or undefined. Only keeps http(s) URLs; never fabricates fields.
 function sanitizeSource(src) {
@@ -282,6 +323,7 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
 
     // Check for existing shared map
     let sharedMap = await SharedMap.findOne({ projectId });
+    let isFirstPublish = false;
 
     // Build snapshot with exclusions
     const { snapshot, nodeCount, coverage } = await buildSnapshot(
@@ -314,6 +356,7 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
       await sharedMap.save();
     } else {
       // Create new
+      isFirstPublish = true;
       sharedMap = new SharedMap({
         projectId,
         ownerId: req.userId,
@@ -335,6 +378,9 @@ router.post('/publish/:projectId', verifyToken, async (req, res) => {
 
       await sharedMap.save();
     }
+
+    // First publish of a public map → notify people whose focus matches.
+    if (isFirstPublish) notifyFocusAudience(sharedMap, req.userId);
 
     res.json({
       success: true,
