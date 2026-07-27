@@ -45,7 +45,9 @@ router.get('/conversations', async (req, res) => {
       .sort({ updatedAt: -1 }).limit(50).lean();
     const out = [];
     for (const c of convos) {
-      const other = await otherParticipant(c, req.userId);
+      const other = c.isRoom
+        ? { id: null, name: c.name || 'Business room', isRoom: true, count: (c.participants || []).length }
+        : await otherParticipant(c, req.userId);
       const unread = await Message.countDocuments({
         conversationId: c._id, senderId: { $ne: req.userId }, readBy: { $ne: req.userId }
       });
@@ -86,6 +88,23 @@ router.post('/conversations', async (req, res) => {
     }
     console.error('convo create error:', e.message); res.status(500).json({ error: 'Failed to start thread' });
   }
+});
+
+// Create a business room (group) with selected members
+router.post('/rooms', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const name = clampStr(b.name, 80) || 'Business room';
+    let ids = Array.isArray(b.memberIds) ? b.memberIds.filter(id => mongoose.isValidObjectId(id)) : [];
+    // Verify members are real users; always include the creator.
+    const members = ids.length ? await User.find({ _id: { $in: ids } }).select('_id').lean() : [];
+    const participants = Array.from(new Set([String(req.userId), ...members.map(m => String(m._id))]));
+    if (participants.length < 2) return res.status(400).json({ error: 'Add at least one member.' });
+    const convo = await Conversation.create({
+      participants, isRoom: true, name, ownerId: req.userId, updatedAt: new Date()
+    });
+    res.json({ success: true, id: convo._id, name });
+  } catch (e) { console.error('room create:', e.message); res.status(500).json({ error: 'Failed to create room' }); }
 });
 
 // Thread messages

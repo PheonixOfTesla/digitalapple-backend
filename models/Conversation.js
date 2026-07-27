@@ -6,7 +6,10 @@ const mongoose = require('mongoose');
  */
 const conversationSchema = new mongoose.Schema({
   participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }],
-  participantKey: { type: String, unique: true }, // sorted "idA:idB" — one thread per pair
+  participantKey: { type: String, unique: true, sparse: true }, // 1:1 dedupe key (null for rooms)
+  isRoom: { type: Boolean, default: false },   // business room (group) vs 1:1 DM
+  name: { type: String, trim: true, maxlength: 80 }, // room name
+  ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   lastMessage: {
     body: { type: String, trim: true, maxlength: 400 },
     senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

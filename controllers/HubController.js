@@ -107,6 +107,26 @@ router.get('/discover', optionalAuth, async (req, res) => {
   } catch (e) { res.json({ success: true, people: [] }); }
 });
 
+// ── Search the user base (to message / add / build a room) ────────────────────
+router.get('/people', verifyToken, async (req, res) => {
+  try {
+    const q = clampStr(req.query.q, 60);
+    if (q.length < 1) return res.json({ success: true, people: [] });
+    const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rx = new RegExp(esc, 'i');
+    const users = await User.find({
+      _id: { $ne: req.userId },
+      role: { $ne: 'system' },
+      $or: [{ firstName: rx }, { lastName: rx }, { email: rx }]
+    }).select('firstName lastName email profilePhotoThumb profilePhoto').limit(12).lean();
+    const people = users.map(u => {
+      const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || (u.email ? u.email.split('@')[0] : 'Member');
+      return { id: u._id, name: nm.slice(0, 80), avatar: u.profilePhotoThumb || u.profilePhoto || null };
+    });
+    res.json({ success: true, people });
+  } catch (e) { console.error('people search:', e.message); res.status(500).json({ error: 'Search failed' }); }
+});
+
 // ── Create a post ("Add to Clockwork Hub") ────────────────────────────────────
 router.post('/posts', verifyToken, async (req, res) => {
   try {
