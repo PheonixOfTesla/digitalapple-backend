@@ -298,7 +298,7 @@ router.post('/admin/enrich', verifyToken, requireAdmin, async (req, res) => {
     if (!process.env.GOOGLE_PLACES_API_KEY && !process.env.YELP_API_KEY) {
       return res.status(400).json({
         error: 'No review sources configured',
-        detail: 'Set GOOGLE_PLACES_API_KEY and/or YELP_API_KEY as Railway env vars, then run again.'
+        detail: 'Set GOOGLE_PLACES_API_KEY as a Railway env var (primary — most companies have Google reviews). YELP_API_KEY is an optional extra source.'
       });
     }
     const { enrichRatings } = require('../jobs/enrichRatings');

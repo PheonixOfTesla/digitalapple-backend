@@ -22,7 +22,10 @@ function nameOverlap(a, b) {
 }
 
 async function googleFor(c) {
-  const q = encodeURIComponent(c.name + (c.location && c.location.city ? ' ' + c.location.city : ''));
+  // Google is the PRIMARY source — most companies have Google reviews.
+  // Query with as much location context as the record carries.
+  const l = c.location || {};
+  const q = encodeURIComponent([c.name, l.city, l.region, l.country].filter(Boolean).join(' '));
   const r = await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?query=${q}&key=${G_KEY()}`);
   if (!r.ok) return null;
   const d = await r.json();
@@ -51,7 +54,7 @@ async function yelpFor(c) {
  */
 async function enrichRatings({ limit = 60 } = {}) {
   if (!G_KEY() && !Y_KEY()) {
-    throw new Error('No review sources configured — set GOOGLE_PLACES_API_KEY and/or YELP_API_KEY in Railway env vars.');
+    throw new Error('No review sources configured — set GOOGLE_PLACES_API_KEY (primary; most companies have Google reviews). YELP_API_KEY is an optional extra source.');
   }
   const companies = await Company.find({
     status: 'approved',
