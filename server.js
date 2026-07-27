@@ -790,10 +790,19 @@ try {
       notifyStudioChat(joined, socket, chatBody);
     });
 
-    // Presence flags (mic on/off, screen sharing on/off).
+    // Presence flags (mic / camera / screen). camId & screenId are the sender's
+    // MediaStream ids so receivers can route camera video to the person's tile
+    // and screen video to the stage.
     socket.on('presence', (payload) => {
       if (!joined || !payload) return;
-      socket.to(joined).emit('presence', { socketId: socket.id, userId: socket.userId, mic: !!payload.mic, screen: !!payload.screen });
+      socket.to(joined).emit('presence', {
+        socketId: socket.id, userId: socket.userId,
+        mic: !!payload.mic, screen: !!payload.screen, cam: !!payload.cam,
+        camId: payload.camId ? String(payload.camId).slice(0, 80) : null,
+        screenId: payload.screenId ? String(payload.screenId).slice(0, 80) : null,
+        // Which stage slot the share targets — the stage has two screens.
+        screenSlot: payload.screenSlot === 2 ? 2 : 1
+      });
     });
 
     // Host attached / opened a blueprint — everyone refreshes the canvas panel.

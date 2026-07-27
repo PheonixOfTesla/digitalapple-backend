@@ -28,6 +28,12 @@ const conversationSchema = new mongoose.Schema({
   // linked here so everyone who joins opens the same canvas.
   isStudio: { type: Boolean, default: false },
   blueprintProjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
+  // Host-assigned member roles inside a Studio (Co-host, Builder, …) — display
+  // labels chosen by the host; the Host badge itself always comes from ownerId.
+  memberRoles: [{
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    role: { type: String, trim: true, maxlength: 24 }
+  }],
   // Knock-to-enter: private rooms/Studios queue join requests here until the
   // host accepts (they get a notification) — public ones are free to join.
   joinRequests: [{

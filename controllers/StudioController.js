@@ -41,9 +41,12 @@ async function isAdminUser(userId) {
 async function members(convo) {
   const users = await User.find({ _id: { $in: convo.participants } })
     .select('firstName lastName email profilePhotoThumb profilePhoto verified').lean();
+  const roleOf = {};
+  (convo.memberRoles || []).forEach(r => { if (r.userId) roleOf[String(r.userId)] = r.role || ''; });
   return users.map(u => ({
     id: u._id, name: nameOf(u), avatar: u.profilePhotoThumb || u.profilePhoto || null,
-    verified: !!u.verified, isHost: String(u._id) === String(convo.ownerId)
+    verified: !!u.verified, isHost: String(u._id) === String(convo.ownerId),
+    role: roleOf[String(u._id)] || ''
   }));
 }
 
@@ -170,6 +173,30 @@ router.post('/:id/requests/:userId/:action', async (req, res) => {
     await convo.save();
     res.json({ success: true, declined: true });
   } catch (e) { console.error('studio request:', e.message); res.status(500).json({ error: 'Could not update request' }); }
+});
+
+// ── Host (or admin) assigns a member a role label (Co-host, Builder, …) ──────
+router.post('/:id/role', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const b = req.body || {};
+    if (!mongoose.isValidObjectId(b.userId)) return res.status(400).json({ error: 'Bad member id' });
+    const role = clampStr(b.role, 24); // empty string clears the role
+    const convo = await Conversation.findOne({ _id: req.params.id, isStudio: true, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Studio not found' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can assign roles' });
+    }
+    if (!(convo.participants || []).some(id => String(id) === String(b.userId))) {
+      return res.status(400).json({ error: 'Not a member of this Studio' });
+    }
+    convo.memberRoles = (convo.memberRoles || []).filter(r => String(r.userId) !== String(b.userId));
+    if (role) convo.memberRoles.push({ userId: b.userId, role });
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, role });
+  } catch (e) { console.error('studio role:', e.message); res.status(500).json({ error: 'Could not assign role' }); }
 });
 
 // ── Host creates + attaches a blueprint to the Studio ─────────────────────────
