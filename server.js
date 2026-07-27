@@ -136,6 +136,7 @@ app.use('/api/v1/tokens', TokenController);
 app.use('/api/v1/reels', ReelController);
 app.use('/api/v1/shop', require('./controllers/ShopController'));
 app.use('/api/v1/directory', require('./controllers/DirectoryController'));
+app.use('/api/v1/hub', require('./controllers/HubController'));
 
 // ONE-TIME SETUP - REMOVE AFTER USE
 app.post('/api/v1/setup-once', async (req, res) => {
