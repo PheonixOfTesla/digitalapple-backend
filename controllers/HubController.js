@@ -177,6 +177,14 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
       }
     }
 
+    // The personal "link-me": this person's open Studios & public rooms — their
+    // different hubs for different groups, joinable straight from their profile.
+    const Conversation = require('../models/Conversation');
+    const rooms = await Conversation.find({
+      ownerId: u._id, closedAt: null,
+      $or: [{ isStudio: true }, { isRoom: true, visibility: 'public' }]
+    }).select('name isStudio category participants updatedAt').sort({ updatedAt: -1 }).limit(8).lean();
+
     res.json({
       success: true,
       profile: {
@@ -184,7 +192,12 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         verified: !!u.verified, joined: u.createdAt, isMe,
         connectionState, connectionCount
       },
-      maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount }))
+      maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount })),
+      rooms: rooms.map(r => ({
+        id: r._id, name: r.name || (r.isStudio ? 'Studio' : 'Room'),
+        isStudio: !!r.isStudio, category: r.category || 'other',
+        members: (r.participants || []).length
+      }))
     });
   } catch (e) { console.error('profile:', e.message); res.status(500).json({ error: 'Failed to load profile' }); }
 });
