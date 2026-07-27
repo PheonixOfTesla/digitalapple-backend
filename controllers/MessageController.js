@@ -218,6 +218,22 @@ router.post('/conversations/:id/messages', async (req, res) => {
     convo.updatedAt = new Date();
     await convo.save();
 
+    // Notify every other participant — like Facebook. Deduped: one unread "X
+    // messaged you" per thread until they read it, so active threads don't spam.
+    try {
+      const Notification = require('../models/Notification');
+      const link = 'host-portal.html?room=' + convo._id;
+      const label = msg.sharedMapId
+        ? (nameOf(me) + ' sent you a blueprint')
+        : (nameOf(me) + ': ' + body.slice(0, 70));
+      const others = (convo.participants || []).filter(id => String(id) !== String(req.userId));
+      for (const uid of others) {
+        const already = await Notification.exists({ userId: uid, type: 'message', read: false, link });
+        if (already) { await Notification.updateOne({ _id: already._id }, { $set: { text: label, createdAt: new Date() } }); }
+        else { await Notification.push({ userId: uid, channel: 'personal', type: 'message', actorName: nameOf(me), text: label, link }); }
+      }
+    } catch (e) { /* non-fatal */ }
+
     res.json({ success: true, message: {
       id: msg._id, body: body, mine: true, senderName: msg.senderName, createdAt: msg.createdAt,
       sharedMapId: msg.sharedMapId || null, sharedMap: msg.sharedMap && msg.sharedMap.title ? msg.sharedMap : null
