@@ -102,6 +102,25 @@ router.get('/stories', optionalAuth, async (req, res) => {
 });
 
 // ── Discover (right rail): recent map creators to connect with ────────────────
+// ── Atlas creators: people who HAVE public maps, searched by name ────────────
+// Public (no auth) — the Hub search finds creators even for visitors.
+router.get('/creators', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().slice(0, 80);
+    if (!q) return res.json({ success: true, creators: [] });
+    const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const rows = await SharedMap.aggregate([
+      { $match: { visibility: 'public', publishedAt: { $ne: null }, unpublishedAt: null, ownerName: rx } },
+      { $group: { _id: '$ownerId', name: { $first: '$ownerName' }, avatar: { $first: '$ownerAvatar' }, maps: { $sum: 1 } } },
+      { $sort: { maps: -1 } },
+      { $limit: 6 }
+    ]);
+    res.json({ success: true, creators: rows.filter(r => r._id).map(r => ({
+      id: r._id, name: r.name || 'Creator', avatar: r.avatar || null, maps: r.maps
+    })) });
+  } catch (e) { console.error('creators search:', e.message); res.json({ success: true, creators: [] }); }
+});
+
 router.get('/discover', optionalAuth, async (req, res) => {
   try {
     const rows = await SharedMap.aggregate([
