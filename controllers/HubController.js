@@ -157,7 +157,7 @@ router.get('/people', verifyToken, async (req, res) => {
 router.get('/profile/:id', optionalAuth, async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const u = await User.findById(req.params.id).select('firstName lastName profilePhoto profilePhotoThumb verified createdAt role').lean();
+    const u = await User.findById(req.params.id).select('firstName lastName profilePhoto profilePhotoThumb verified createdAt role about').lean();
     if (!u || u.role === 'system') return res.status(404).json({ error: 'Profile not found' });
     const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || 'Member';
     const maps = await SharedMap.find({ ownerId: u._id, unpublishedAt: null })
@@ -183,13 +183,14 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     const rooms = await Conversation.find({
       ownerId: u._id, closedAt: null,
       $or: [{ isStudio: true }, { isRoom: true, visibility: 'public' }]
-    }).select('name isStudio category participants updatedAt').sort({ updatedAt: -1 }).limit(8).lean();
+    }).select('name isStudio category participants visibility updatedAt').sort({ updatedAt: -1 }).limit(8).lean();
 
     res.json({
       success: true,
       profile: {
         id: u._id, name, avatar: u.profilePhotoThumb || u.profilePhoto || null,
         verified: !!u.verified, joined: u.createdAt, isMe,
+        about: u.about || '',
         connectionState, connectionCount
       },
       maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount })),

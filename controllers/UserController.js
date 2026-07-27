@@ -28,7 +28,7 @@ router.get('/profile', verifyToken, async (req, res) => {
 
 // Update own profile (name, marketingOptIn)
 router.put('/profile', verifyToken, async (req, res) => {
-  const { firstName, lastName, marketingOptIn } = req.body;
+  const { firstName, lastName, marketingOptIn, about } = req.body;
 
   try {
     const user = await User.findById(req.userId);
@@ -46,6 +46,9 @@ router.put('/profile', verifyToken, async (req, res) => {
     }
     if (marketingOptIn !== undefined) {
       user.marketingOptIn = marketingOptIn === true;
+    }
+    if (about !== undefined) {
+      user.about = String(about || '').trim().slice(0, 500);
     }
 
     await user.save();

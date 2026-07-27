@@ -33,6 +33,13 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: 50
   },
+  // About me — shown on the public profile so people landing on your Connect
+  // know who you are before they knock.
+  about: {
+    type: String,
+    trim: true,
+    maxlength: 500
+  },
   profilePhoto: {
     type: String // Cloudinary URL
   },
@@ -111,6 +118,7 @@ userSchema.methods.toPrivateProfile = function() {
     email: this.email,
     firstName: this.firstName,
     lastName: this.lastName,
+    about: this.about,
     profilePhoto: this.profilePhoto,
     profilePhotoThumb: this.profilePhotoThumb,
     marketingOptIn: this.marketingOptIn,
