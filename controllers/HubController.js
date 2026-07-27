@@ -15,6 +15,7 @@ const Post = require('../models/Post');
 const User = require('../models/User');
 const SharedMap = require('../models/SharedMap');
 const Connection = require('../models/Connection');
+const Notification = require('../models/Notification');
 const { verifyToken, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -196,12 +197,22 @@ router.post('/connect/:userId', verifyToken, async (req, res) => {
       // If they already asked you, accept instead of duplicating.
       if (c.status === 'pending' && String(c.requestedBy) !== String(req.userId)) {
         c.status = 'accepted'; c.acceptedAt = new Date(); await c.save();
+        const me = await authorFor(req.userId, req.userEmail);
+        Notification.push({
+          userId: c.requestedBy, type: 'connect_accepted', actorId: req.userId, actorName: me.name, actorAvatar: me.avatar,
+          text: me.name + ' accepted your connection', link: 'hub-profile.html?id=' + req.userId
+        });
         return res.json({ success: true, state: 'connected' });
       }
       return res.json({ success: true, state: c.status === 'accepted' ? 'connected' : 'pending_out' });
     }
     const [a, b] = [String(req.userId), String(other)].sort();
     await Connection.create({ a, b, pairKey, requestedBy: req.userId, status: 'pending' });
+    const me = await authorFor(req.userId, req.userEmail);
+    Notification.push({
+      userId: other, type: 'connect_request', actorId: req.userId, actorName: me.name, actorAvatar: me.avatar,
+      text: me.name + ' wants to connect', link: 'hub-profile.html?id=' + req.userId
+    });
     res.json({ success: true, state: 'pending_out' });
   } catch (e) {
     if (e.code === 11000) return res.json({ success: true, state: 'pending_out' });
@@ -218,6 +229,11 @@ router.post('/connections/:userId/accept', verifyToken, async (req, res) => {
     if (!c || c.status !== 'pending') return res.status(404).json({ error: 'No pending request' });
     if (String(c.requestedBy) === String(req.userId)) return res.status(400).json({ error: "Can't accept your own request" });
     c.status = 'accepted'; c.acceptedAt = new Date(); await c.save();
+    const me = await authorFor(req.userId, req.userEmail);
+    Notification.push({
+      userId: c.requestedBy, type: 'connect_accepted', actorId: req.userId, actorName: me.name, actorAvatar: me.avatar,
+      text: me.name + ' accepted your connection', link: 'hub-profile.html?id=' + req.userId
+    });
     res.json({ success: true, state: 'connected' });
   } catch (e) { console.error('accept:', e.message); res.status(500).json({ error: 'Could not accept' }); }
 });
@@ -264,6 +280,40 @@ router.get('/connections/requests', verifyToken, async (req, res) => {
     });
     res.json({ success: true, people });
   } catch (e) { console.error('requests:', e.message); res.status(500).json({ error: 'Failed to load' }); }
+});
+
+// ── Notifications (the bell / notification box) ───────────────────────────────
+router.get('/notifications', verifyToken, async (req, res) => {
+  try {
+    const items = await Notification.find({ userId: req.userId }).sort({ createdAt: -1 }).limit(40).lean();
+    const unread = await Notification.countDocuments({ userId: req.userId, read: false });
+    res.json({
+      success: true, unread,
+      notifications: items.map(n => ({
+        id: n._id, type: n.type, actorName: n.actorName, actorAvatar: n.actorAvatar,
+        text: n.text, link: n.link, read: !!n.read, at: n.createdAt
+      }))
+    });
+  } catch (e) { console.error('notifications:', e.message); res.status(500).json({ error: 'Failed to load' }); }
+});
+
+// Unread count only — cheap poll for the bell badge.
+router.get('/notifications/count', verifyToken, async (req, res) => {
+  try {
+    const unread = await Notification.countDocuments({ userId: req.userId, read: false });
+    res.json({ success: true, unread });
+  } catch (e) { res.json({ success: true, unread: 0 }); }
+});
+
+// Mark all (or one) read.
+router.post('/notifications/read', verifyToken, async (req, res) => {
+  try {
+    const id = (req.body || {}).id;
+    const q = { userId: req.userId, read: false };
+    if (id && mongoose.isValidObjectId(id)) q._id = id;
+    await Notification.updateMany(q, { $set: { read: true } });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
 // ── Create a post ("Add to Clockwork Hub") ────────────────────────────────────
