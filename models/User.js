@@ -12,6 +12,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  // Set when the account was created via / linked to Google Sign-In.
+  googleId: {
+    type: String,
+    index: true,
+    sparse: true
+  },
   role: {
     type: String,
     enum: ['user', 'admin', 'system'],

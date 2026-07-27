@@ -245,4 +245,96 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// ==================== GOOGLE SIGN-IN (server-side OAuth) ====================
+const jwt = require('jsonwebtoken');
+
+const GOOGLE = {
+  clientId: () => process.env.GOOGLE_CLIENT_ID,
+  clientSecret: () => process.env.GOOGLE_CLIENT_SECRET,
+  redirectUri: () => process.env.GOOGLE_REDIRECT_URI ||
+    'https://digitalapple-backend-production.up.railway.app/api/v1/auth/google/callback',
+  frontend: () => process.env.FRONTEND_URL || 'https://theclockworkhub.com',
+  configured: () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
+};
+
+// Lets the frontend decide whether to show the "Continue with Google" button.
+router.get('/google/status', (req, res) => res.json({ configured: GOOGLE.configured() }));
+
+// Step 1 — bounce the user to Google's consent screen.
+router.get('/google', (req, res) => {
+  if (!GOOGLE.configured()) return res.status(503).json({ error: 'Google sign-in not configured' });
+  // Signed, short-lived state guards against CSRF on the callback.
+  const state = jwt.sign({ t: 'goauth' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  const params = new URLSearchParams({
+    client_id: GOOGLE.clientId(),
+    redirect_uri: GOOGLE.redirectUri(),
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'online',
+    include_granted_scopes: 'true',
+    prompt: 'select_account',
+    state
+  });
+  res.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString());
+});
+
+// Step 2 — Google redirects back with a code; exchange it, sign the user in.
+router.get('/google/callback', async (req, res) => {
+  const fail = (msg) => res.redirect(GOOGLE.frontend() + '/host-portal.html#gerror=' + encodeURIComponent(msg));
+  try {
+    if (!GOOGLE.configured()) return fail('not_configured');
+    const { code, state } = req.query;
+    if (!code) return fail('no_code');
+    try { jwt.verify(state, process.env.JWT_SECRET); } catch (e) { return fail('bad_state'); }
+
+    // Exchange the authorization code for tokens.
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: GOOGLE.clientId(), client_secret: GOOGLE.clientSecret(),
+        redirect_uri: GOOGLE.redirectUri(), grant_type: 'authorization_code'
+      })
+    });
+    const tokens = await tokenRes.json();
+    if (!tokens.access_token) return fail('token_exchange');
+
+    // Fetch the verified profile.
+    const uiRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: 'Bearer ' + tokens.access_token }
+    });
+    const p = await uiRes.json();
+    if (!p || !p.sub || !p.email) return fail('no_profile');
+    const email = String(p.email).toLowerCase();
+
+    // Find by googleId, then link by email, else create a fresh Hub.
+    let user = await User.findOne({ googleId: p.sub });
+    if (!user) user = await User.findOne({ email });
+    if (!user) {
+      const randomHash = await bcrypt.hash(require('crypto').randomBytes(24).toString('hex'), 10);
+      user = new User({
+        email, passwordHash: randomHash, role: 'user',
+        firstName: p.given_name || '', lastName: p.family_name || '',
+        googleId: p.sub, profilePhoto: p.picture || undefined,
+        emailVerified: !!p.email_verified
+      });
+      await user.save();
+      require('../models/Notification').pushAdmins({
+        type: 'admin_signup', text: `New Hub via Google: ${p.name || email}`, link: 'admin.html#users'
+      });
+    } else if (!user.googleId) {
+      user.googleId = p.sub;
+      if (!user.profilePhoto && p.picture) user.profilePhoto = p.picture;
+      await user.save();
+    }
+
+    const token = generateToken(user);
+    // Hand the JWT to the frontend via the URL fragment (never logged by servers).
+    res.redirect(GOOGLE.frontend() + '/host-portal.html#gtoken=' + token);
+  } catch (e) {
+    console.error('[google callback]', e.message);
+    fail('server_error');
+  }
+});
+
 module.exports = router;
