@@ -808,6 +808,20 @@ server.listen(PORT, () => {
   });
   console.log('Company Aggregation: Scheduled (Mondays 04:00 UTC)');
 
+  // One-time populate: if the directory has never been aggregated, do it now
+  // (in the background) so it isn't empty. Idempotent — skips once seeded.
+  setTimeout(async () => {
+    try {
+      const Company = require('./models/Company');
+      const have = await Company.countDocuments({ source: 'wikidata' });
+      if (have === 0) {
+        console.log('[BOOT] Directory has no aggregated companies — running first aggregation...');
+        const { aggregateCompanies } = require('./jobs/aggregateCompanies');
+        await aggregateCompanies({});
+      }
+    } catch (e) { console.error('[BOOT] Initial company aggregation skipped:', e.message); }
+  }, 8000);
+
   // Schedule seed map generation - 3x daily at 8am, 2pm, 8pm UTC
   cron.schedule('0 8,14,20 * * *', async () => {
     console.log('[CRON] Running seed map generation...');
