@@ -30,7 +30,21 @@ const app = express();
 app.use('/api/v1/tokens/webhook', express.raw({ type: 'application/json' }));
 
 // Trust proxy for Railway deployment
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
+
+// Security headers + NoSQL-injection sanitizing. Guarded so a missing module can
+// never block boot. CSP is off (this is a cross-origin API that also serves the
+// socket.io client to the Vercel frontend — the frontend sets its own CSP).
+try {
+  const helmet = require('helmet');
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: false,
+    crossOriginEmbedderPolicy: false
+  }));
+  app.disable('x-powered-by');
+  console.log('Security: helmet enabled');
+} catch (e) { console.error('Security: helmet unavailable —', e.message); }
 
 // Connect to MongoDB
 connectDB();
@@ -68,19 +82,32 @@ app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Strip Mongo operators ($, .) from user input — blocks NoSQL injection.
+try {
+  const mongoSanitize = require('express-mongo-sanitize');
+  app.use(mongoSanitize({ replaceWith: '_' }));
+  console.log('Security: mongo-sanitize enabled');
+} catch (e) { console.error('Security: mongo-sanitize unavailable —', e.message); }
+
 // Rate limiting
+// Global API limiter. A content-rich SPA legitimately fires many calls per page
+// (feed + stories + discover + notifications poll + …), so this ceiling is high
+// and exists only to stop abuse — auth endpoints have their own tighter limiters
+// below. Read-only GETs and pure telemetry don't consume the budget.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 1200, // per IP per 15 min
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.method === 'GET' || req.method === 'OPTIONS' ||
+                 (req.originalUrl || '').indexOf('/analytics/track') !== -1,
 });
 
 // Separate limiters for signup vs login (don't share budget)
 const signupLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // 10 signups per hour per IP
+  max: 30, // 30 signups per hour per IP (shared offices/NAT-friendly, still abuse-safe)
   message: { error: 'Too many signup attempts. Please try again in an hour.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -88,7 +115,7 @@ const signupLimiter = rateLimit({
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // 20 login attempts per 15 min per IP
+  max: 50, // 50 login attempts per 15 min per IP
   message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
   standardHeaders: true,
   legacyHeaders: false,
