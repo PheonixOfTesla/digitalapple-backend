@@ -906,6 +906,15 @@ router.post('/atlas/backfill', async (req, res) => {
   const addRaw = parseInt(body.add);
   const useAdd = Number.isFinite(addRaw) && addRaw > 0;
 
+  // Pre-flight: seeding generates maps through the LLM — fail loud and clear
+  // instead of starting a run doomed to error on every map.
+  if (!process.env.OPENAI_API_KEY && !process.env.MOONSHOT_API_KEY) {
+    return res.status(400).json({
+      started: false,
+      error: 'No AI key configured. Add OPENAI_API_KEY (or MOONSHOT_API_KEY) in Railway → Variables, wait for the redeploy, then press Seed Atlas again.'
+    });
+  }
+
   if (backfillState.running && !backfillIsStale()) {
     return res.json({ started: false, alreadyRunning: true, state: backfillState });
   }

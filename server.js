@@ -620,6 +620,7 @@ app.get('/health', (req, res) => {
     mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     cloudinary: isCloudinaryConfigured,
     google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+    ai: !!(process.env.OPENAI_API_KEY || process.env.MOONSHOT_API_KEY),
     environment: process.env.NODE_ENV || 'production'
   });
 });
