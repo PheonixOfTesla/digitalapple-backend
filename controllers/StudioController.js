@@ -175,6 +175,25 @@ router.post('/:id/requests/:userId/:action', async (req, res) => {
   } catch (e) { console.error('studio request:', e.message); res.status(500).json({ error: 'Could not update request' }); }
 });
 
+// ── Host (or admin) flips the room public/private ────────────────────────────
+// Public: anyone with the link walks straight in. Private: they knock and wait.
+router.post('/:id/visibility', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const vis = (req.body || {}).visibility === 'public' ? 'public' : 'private';
+    const convo = await Conversation.findOne({ _id: req.params.id, isStudio: true, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Studio not found' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can change this' });
+    }
+    convo.visibility = vis;
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, visibility: vis });
+  } catch (e) { console.error('studio visibility:', e.message); res.status(500).json({ error: 'Could not update' }); }
+});
+
 // ── Host (or admin) assigns a member a role label (Co-host, Builder, …) ──────
 router.post('/:id/role', async (req, res) => {
   try {
