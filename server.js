@@ -796,6 +796,18 @@ server.listen(PORT, () => {
   });
   console.log('Signal Generation: Scheduled (9am, 9pm UTC)');
 
+  // Weekly company aggregation — refresh the directory from Wikidata (Mon 04:00 UTC)
+  cron.schedule('0 4 * * 1', async () => {
+    console.log('[CRON] Aggregating companies into the directory...');
+    try {
+      const { aggregateCompanies } = require('./jobs/aggregateCompanies');
+      await aggregateCompanies({});
+    } catch (error) {
+      console.error('[CRON] Company aggregation failed:', error.message);
+    }
+  });
+  console.log('Company Aggregation: Scheduled (Mondays 04:00 UTC)');
+
   // Schedule seed map generation - 3x daily at 8am, 2pm, 8pm UTC
   cron.schedule('0 8,14,20 * * *', async () => {
     console.log('[CRON] Running seed map generation...');

@@ -272,6 +272,19 @@ router.get('/admin/pending', verifyToken, requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Failed to load pending' }); }
 });
 
+// Aggregate real companies across every industry from Wikidata into the directory.
+router.post('/admin/aggregate', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { aggregateCompanies } = require('../jobs/aggregateCompanies');
+    const perIndustry = parseInt((req.body || {}).perIndustry) || undefined;
+    const result = await aggregateCompanies({ perIndustry });
+    res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('company aggregate:', e.message);
+    res.status(500).json({ error: 'Aggregation failed', detail: e.message });
+  }
+});
+
 router.post('/admin/:id/approve', verifyToken, requireAdmin, async (req, res) => {
   try {
     const c = await Company.findByIdAndUpdate(req.params.id,

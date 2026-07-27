@@ -88,6 +88,12 @@ const companySchema = new mongoose.Schema({
   submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   submittedName: { type: String, trim: true, maxlength: 80 },
 
+  // Provenance. 'user' = submitted via the form; 'wikidata' = aggregated from the
+  // public knowledge base (real, registered entities — but legal.verified stays
+  // false until confirmed, and no reviews are invented).
+  source: { type: String, default: 'user' },
+  wikidataId: { type: String, trim: true, index: true, sparse: true }, // e.g. "Q95" — dedupe key for aggregation
+
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   approvedAt: { type: Date }
