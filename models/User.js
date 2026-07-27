@@ -33,6 +33,12 @@ const userSchema = new mongoose.Schema({
   profilePhotoThumb: {
     type: String // Thumbnail URL
   },
+  // Clockwork Verified — a trust badge (admin-granted for now; unifies with the
+  // Directory's legal verification). Surfaced across Connect / Hub / profiles.
+  verified: {
+    type: Boolean,
+    default: false
+  },
   marketingOptIn: {
     type: Boolean,
     default: false

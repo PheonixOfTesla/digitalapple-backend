@@ -14,6 +14,15 @@ const conversationSchema = new mongoose.Schema({
   visibility: { type: String, enum: ['private', 'public'], default: 'private' },
   category: { type: String, enum: ['ideas', 'network', 'social', 'business', 'other'], default: 'other' },
   description: { type: String, trim: true, maxlength: 300 },
+  // A room can be "about" something on the platform — an Atlas map, a Directory
+  // company, or a News/Signal item. That's the Connect ↔ content integration.
+  source: {
+    type: { type: String, enum: ['map', 'company', 'news', null], default: null },
+    refId: { type: String, trim: true },
+    title: { type: String, trim: true, maxlength: 140 },
+    url: { type: String, trim: true, maxlength: 300 }
+  },
+  sourceKey: { type: String, unique: true, sparse: true }, // "map:<id>" — one public room per source
   lastMessage: {
     body: { type: String, trim: true, maxlength: 400 },
     senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

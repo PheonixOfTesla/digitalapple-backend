@@ -121,9 +121,44 @@ router.get('/rooms/discover', async (req, res) => {
     res.json({ success: true, rooms: rooms.map(r => ({
       id: r._id, name: r.name || 'Room', category: r.category || 'other',
       description: r.description || '', members: (r.participants || []).length,
+      source: r.source && r.source.type ? { type: r.source.type, title: r.source.title || '', url: r.source.url || '' } : null,
       joined: (r.participants || []).some(id => String(id) === String(req.userId))
     })) });
   } catch (e) { res.status(500).json({ error: 'Failed to load rooms' }); }
+});
+
+// Connect ↔ content: find-or-create the public room ABOUT a map / company / news
+// item, join it, and return it. This is the integration primitive — "Discuss"
+// on any Atlas map or Directory company lands everyone in the same room.
+router.post('/rooms/for-source', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const type = ['map', 'company', 'news'].includes(b.type) ? b.type : null;
+    const refId = clampStr(b.refId, 80);
+    if (!type || !refId) return res.status(400).json({ error: 'A source type and id are required.' });
+    const sourceKey = type + ':' + refId;
+    let room = await Conversation.findOne({ sourceKey });
+    if (!room) {
+      const title = clampStr(b.title, 140) || 'Discussion';
+      const label = { map: 'Map', company: 'Company', news: 'Signal' }[type];
+      room = await Conversation.create({
+        participants: [req.userId], isRoom: true, visibility: 'public',
+        category: type === 'company' ? 'business' : type === 'news' ? 'social' : 'ideas',
+        name: title.slice(0, 80), ownerId: req.userId, sourceKey,
+        source: { type, refId, title: title.slice(0, 140), url: clampStr(b.url, 300) },
+        description: 'Discussion about this ' + label.toLowerCase(), updatedAt: new Date()
+      });
+    } else if (!(room.participants || []).some(id => String(id) === String(req.userId))) {
+      room.participants.push(req.userId); room.updatedAt = new Date(); await room.save();
+    }
+    res.json({ success: true, id: room._id, name: room.name });
+  } catch (e) {
+    if (e.code === 11000) { // race — fetch existing
+      const room = await Conversation.findOne({ sourceKey: (req.body.type + ':' + req.body.refId) });
+      if (room) return res.json({ success: true, id: room._id, name: room.name });
+    }
+    console.error('for-source:', e.message); res.status(500).json({ error: 'Failed to open discussion' });
+  }
 });
 
 // Join a public room

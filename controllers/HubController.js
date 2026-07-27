@@ -118,10 +118,10 @@ router.get('/people', verifyToken, async (req, res) => {
       _id: { $ne: req.userId },
       role: { $ne: 'system' },
       $or: [{ firstName: rx }, { lastName: rx }, { email: rx }]
-    }).select('firstName lastName email profilePhotoThumb profilePhoto').limit(12).lean();
+    }).select('firstName lastName email profilePhotoThumb profilePhoto verified').limit(12).lean();
     const people = users.map(u => {
       const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || (u.email ? u.email.split('@')[0] : 'Member');
-      return { id: u._id, name: nm.slice(0, 80), avatar: u.profilePhotoThumb || u.profilePhoto || null };
+      return { id: u._id, name: nm.slice(0, 80), avatar: u.profilePhotoThumb || u.profilePhoto || null, verified: !!u.verified };
     });
     res.json({ success: true, people });
   } catch (e) { console.error('people search:', e.message); res.status(500).json({ error: 'Search failed' }); }
