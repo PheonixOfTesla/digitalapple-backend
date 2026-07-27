@@ -90,21 +90,52 @@ router.post('/conversations', async (req, res) => {
   }
 });
 
-// Create a business room (group) with selected members
+const ROOM_CATS = ['ideas', 'network', 'social', 'business', 'other'];
+
+// Create a room — public (anyone can join) or private (invite selected members).
 router.post('/rooms', async (req, res) => {
   try {
     const b = req.body || {};
-    const name = clampStr(b.name, 80) || 'Business room';
+    const name = clampStr(b.name, 80) || 'Room';
+    const visibility = b.visibility === 'public' ? 'public' : 'private';
+    const category = ROOM_CATS.includes(b.category) ? b.category : 'other';
+    const description = clampStr(b.description, 300);
     let ids = Array.isArray(b.memberIds) ? b.memberIds.filter(id => mongoose.isValidObjectId(id)) : [];
-    // Verify members are real users; always include the creator.
     const members = ids.length ? await User.find({ _id: { $in: ids } }).select('_id').lean() : [];
     const participants = Array.from(new Set([String(req.userId), ...members.map(m => String(m._id))]));
-    if (participants.length < 2) return res.status(400).json({ error: 'Add at least one member.' });
+    // Public rooms can start with just the creator; private rooms need >=2.
+    if (visibility === 'private' && participants.length < 2) return res.status(400).json({ error: 'Add at least one member.' });
     const convo = await Conversation.create({
-      participants, isRoom: true, name, ownerId: req.userId, updatedAt: new Date()
+      participants, isRoom: true, name, ownerId: req.userId, visibility, category, description, updatedAt: new Date()
     });
     res.json({ success: true, id: convo._id, name });
   } catch (e) { console.error('room create:', e.message); res.status(500).json({ error: 'Failed to create room' }); }
+});
+
+// Browse public rooms (all types, or by category) — anyone can join.
+router.get('/rooms/discover', async (req, res) => {
+  try {
+    const q = { isRoom: true, visibility: 'public' };
+    if (ROOM_CATS.includes(req.query.category)) q.category = req.query.category;
+    const rooms = await Conversation.find(q).sort({ updatedAt: -1 }).limit(40).lean();
+    res.json({ success: true, rooms: rooms.map(r => ({
+      id: r._id, name: r.name || 'Room', category: r.category || 'other',
+      description: r.description || '', members: (r.participants || []).length,
+      joined: (r.participants || []).some(id => String(id) === String(req.userId))
+    })) });
+  } catch (e) { res.status(500).json({ error: 'Failed to load rooms' }); }
+});
+
+// Join a public room
+router.post('/rooms/:id/join', async (req, res) => {
+  try {
+    const room = await Conversation.findOne({ _id: req.params.id, isRoom: true, visibility: 'public' });
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (!(room.participants || []).some(id => String(id) === String(req.userId))) {
+      room.participants.push(req.userId); room.updatedAt = new Date(); await room.save();
+    }
+    res.json({ success: true, id: room._id, name: room.name });
+  } catch (e) { res.status(500).json({ error: 'Failed to join' }); }
 });
 
 // Thread messages
