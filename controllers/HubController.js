@@ -14,6 +14,7 @@ const mongoose = require('mongoose');
 const Post = require('../models/Post');
 const User = require('../models/User');
 const SharedMap = require('../models/SharedMap');
+const Connection = require('../models/Connection');
 const { verifyToken, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -152,15 +153,117 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || 'Member';
     const maps = await SharedMap.find({ ownerId: u._id, unpublishedAt: null })
       .select('title previewSvg coverage nodeCount publishedAt').sort({ publishedAt: -1 }).limit(24).lean();
+
+    const connectionCount = await Connection.countDocuments({ status: 'accepted', $or: [{ a: u._id }, { b: u._id }] });
+
+    // Relationship of the viewer to this person.
+    let connectionState = 'none';
+    const isMe = req.userId ? String(req.userId) === String(u._id) : false;
+    if (isMe) connectionState = 'self';
+    else if (req.userId) {
+      const c = await Connection.findOne({ pairKey: Connection.keyFor(req.userId, u._id) }).lean();
+      if (c) {
+        if (c.status === 'accepted') connectionState = 'connected';
+        else connectionState = String(c.requestedBy) === String(req.userId) ? 'pending_out' : 'pending_in';
+      }
+    }
+
     res.json({
       success: true,
       profile: {
         id: u._id, name, avatar: u.profilePhotoThumb || u.profilePhoto || null,
-        verified: !!u.verified, joined: u.createdAt, isMe: req.userId ? String(req.userId) === String(u._id) : false
+        verified: !!u.verified, joined: u.createdAt, isMe,
+        connectionState, connectionCount
       },
       maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount }))
     });
   } catch (e) { console.error('profile:', e.message); res.status(500).json({ error: 'Failed to load profile' }); }
+});
+
+// ── Connections graph ("add you") ─────────────────────────────────────────────
+// Send a connect request (or auto-accept if they already requested you).
+router.post('/connect/:userId', verifyToken, async (req, res) => {
+  try {
+    const other = req.params.userId;
+    if (!mongoose.isValidObjectId(other)) return res.status(400).json({ error: 'Bad id' });
+    if (String(other) === String(req.userId)) return res.status(400).json({ error: "That's you." });
+    const target = await User.findById(other).select('_id role').lean();
+    if (!target || target.role === 'system') return res.status(404).json({ error: 'Member not found' });
+
+    const pairKey = Connection.keyFor(req.userId, other);
+    let c = await Connection.findOne({ pairKey });
+    if (c) {
+      // If they already asked you, accept instead of duplicating.
+      if (c.status === 'pending' && String(c.requestedBy) !== String(req.userId)) {
+        c.status = 'accepted'; c.acceptedAt = new Date(); await c.save();
+        return res.json({ success: true, state: 'connected' });
+      }
+      return res.json({ success: true, state: c.status === 'accepted' ? 'connected' : 'pending_out' });
+    }
+    const [a, b] = [String(req.userId), String(other)].sort();
+    await Connection.create({ a, b, pairKey, requestedBy: req.userId, status: 'pending' });
+    res.json({ success: true, state: 'pending_out' });
+  } catch (e) {
+    if (e.code === 11000) return res.json({ success: true, state: 'pending_out' });
+    console.error('connect:', e.message); res.status(500).json({ error: 'Could not connect' });
+  }
+});
+
+// Accept an incoming request.
+router.post('/connections/:userId/accept', verifyToken, async (req, res) => {
+  try {
+    const other = req.params.userId;
+    if (!mongoose.isValidObjectId(other)) return res.status(400).json({ error: 'Bad id' });
+    const c = await Connection.findOne({ pairKey: Connection.keyFor(req.userId, other) });
+    if (!c || c.status !== 'pending') return res.status(404).json({ error: 'No pending request' });
+    if (String(c.requestedBy) === String(req.userId)) return res.status(400).json({ error: "Can't accept your own request" });
+    c.status = 'accepted'; c.acceptedAt = new Date(); await c.save();
+    res.json({ success: true, state: 'connected' });
+  } catch (e) { console.error('accept:', e.message); res.status(500).json({ error: 'Could not accept' }); }
+});
+
+// Remove a connection, cancel your request, or decline theirs.
+router.delete('/connect/:userId', verifyToken, async (req, res) => {
+  try {
+    const other = req.params.userId;
+    if (!mongoose.isValidObjectId(other)) return res.status(400).json({ error: 'Bad id' });
+    await Connection.deleteOne({ pairKey: Connection.keyFor(req.userId, other) });
+    res.json({ success: true, state: 'none' });
+  } catch (e) { res.status(500).json({ error: 'Could not remove' }); }
+});
+
+// My accepted connections.
+router.get('/connections', verifyToken, async (req, res) => {
+  try {
+    const rows = await Connection.find({ status: 'accepted', $or: [{ a: req.userId }, { b: req.userId }] })
+      .sort({ acceptedAt: -1 }).limit(200).lean();
+    const otherIds = rows.map(r => String(r.a) === String(req.userId) ? r.b : r.a);
+    const users = await User.find({ _id: { $in: otherIds } })
+      .select('firstName lastName email profilePhotoThumb profilePhoto verified').lean();
+    const people = users.map(u => {
+      const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || (u.email ? u.email.split('@')[0] : 'Member');
+      return { id: u._id, name: nm.slice(0, 80), avatar: u.profilePhotoThumb || u.profilePhoto || null, verified: !!u.verified };
+    });
+    res.json({ success: true, people });
+  } catch (e) { console.error('connections:', e.message); res.status(500).json({ error: 'Failed to load' }); }
+});
+
+// Incoming pending requests (people who asked to connect with me).
+router.get('/connections/requests', verifyToken, async (req, res) => {
+  try {
+    const rows = await Connection.find({ status: 'pending', requestedBy: { $ne: req.userId }, $or: [{ a: req.userId }, { b: req.userId }] })
+      .sort({ createdAt: -1 }).limit(100).lean();
+    const fromIds = rows.map(r => r.requestedBy);
+    const users = await User.find({ _id: { $in: fromIds } })
+      .select('firstName lastName email profilePhotoThumb profilePhoto verified').lean();
+    const byId = new Map(users.map(u => [String(u._id), u]));
+    const people = rows.filter(r => byId.has(String(r.requestedBy))).map(r => {
+      const u = byId.get(String(r.requestedBy));
+      const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || (u.email ? u.email.split('@')[0] : 'Member');
+      return { id: u._id, name: nm.slice(0, 80), avatar: u.profilePhotoThumb || u.profilePhoto || null, verified: !!u.verified };
+    });
+    res.json({ success: true, people });
+  } catch (e) { console.error('requests:', e.message); res.status(500).json({ error: 'Failed to load' }); }
 });
 
 // ── Create a post ("Add to Clockwork Hub") ────────────────────────────────────
