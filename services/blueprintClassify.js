@@ -17,7 +17,8 @@ Types:
 - personal-goal: learning a skill, fitness, habit, self-improvement
 - creative-work: a novel, film, album, game, art project
 - life-transition: moving, divorce, retirement, new baby, major life change
-- career: job search, promotion, switching fields
+- career: job search, promotion, switching fields (the direction is KNOWN — you know the role/field and are pursuing it)
+- vocation: finding your calling when the direction is UNKNOWN — "what should I do for work", "find my purpose", "what's my ikigai", "figure out what to do with my life". Framed around ikigai: what you love, what the world needs, what you'd be paid for, what brings you peace.
 - research: a study, investigation, thesis, deep question
 - campaign: a launch, fundraiser, movement, marketing push
 - procedure: a how-to, bureaucratic process, step-by-step task (e.g. "how to get my drivers license", "how to file a patent", "how to renew a passport")
@@ -55,7 +56,7 @@ const CLASSIFY_SCHEMA = {
         type: {
           type: "string",
           enum: ["venture", "event", "personal-goal", "creative-work",
-                 "life-transition", "career", "research", "campaign", "procedure", "unknown"]
+                 "life-transition", "career", "vocation", "research", "campaign", "procedure", "unknown"]
         },
         determination: {
           type: "string",
@@ -88,7 +89,7 @@ const CLASSIFY_SYSTEM = BLUEPRINT_SYSTEM_PREFIX + CLASSIFY_INSTRUCTION;
 // Frame types whose maps almost always resolve at doable steps
 const ACTIONABLE_TYPES = new Set([
   'venture', 'event', 'personal-goal', 'creative-work',
-  'life-transition', 'career', 'campaign', 'procedure'
+  'life-transition', 'career', 'vocation', 'campaign', 'procedure'
 ]);
 
 /**

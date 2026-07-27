@@ -80,6 +80,17 @@
       ],
       "stagesEnabled": true
     },
+    "vocation": {
+      "label": "Ikigai",
+      "description": "Finding your calling — what to do for work or life when the direction itself is unknown",
+      "roots": [
+        { "key": "what",  "label": "What You Love",          "covers": "what you enjoy, what energizes you, what you'd do for free" },
+        { "key": "who",   "label": "What The World Needs",   "covers": "problems worth solving, who you'd help" },
+        { "key": "where", "label": "What You'd Be Paid For",  "covers": "what people pay for, a viable living" },
+        { "key": "why",   "label": "What Brings You Peace",   "covers": "what settles you, a life you can sustain" }
+      ],
+      "stagesEnabled": false
+    },
     "research": {
       "label": "Research",
       "description": "A study, investigation, thesis, deep question",
