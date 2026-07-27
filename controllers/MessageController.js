@@ -303,9 +303,14 @@ router.post('/conversations/:id/messages', async (req, res) => {
         : (nameOf(me) + ': ' + body.slice(0, 70));
       const others = (convo.participants || []).filter(id => String(id) !== String(req.userId));
       for (const uid of others) {
-        const already = await Notification.exists({ userId: uid, type: 'message', read: false, link });
-        if (already) { await Notification.updateOne({ _id: already._id }, { $set: { text: label, createdAt: new Date() } }); }
-        else { await Notification.push({ userId: uid, channel: 'personal', type: 'message', actorName: nameOf(me), text: label, link }); }
+        // Studio chat persists through here too, but its bell notifications come
+        // from the /studio socket (better link, knows who's in the room) — don't
+        // double-ring. The live push below still updates open consoles.
+        if (!convo.isStudio) {
+          const already = await Notification.exists({ userId: uid, type: 'message', read: false, link });
+          if (already) { await Notification.updateOne({ _id: already._id }, { $set: { text: label, createdAt: new Date() } }); }
+          else { await Notification.push({ userId: uid, channel: 'personal', type: 'message', actorName: nameOf(me), text: label, link }); }
+        }
         // Live-push over the /hub socket so open messengers update instantly.
         realtime.userEmit(uid, 'message:new', {
           conversationId: String(convo._id), from: nameOf(me),
