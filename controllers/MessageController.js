@@ -20,11 +20,21 @@ const SharedMap = require('../models/SharedMap');
 const { verifyToken } = require('../middleware/auth');
 const { encryptText, decryptText } = require('../services/crypto');
 const realtime = require('../services/realtime');
+const { chatUpload } = require('../config/cloudinary');
 
 const router = express.Router();
 router.use(verifyToken);
 
 function clampStr(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
+
+// Validate a client-supplied attachment: must be our Cloudinary asset, known type.
+function cleanAttachment(a) {
+  if (!a || typeof a !== 'object') return null;
+  const url = clampStr(a.url, 500);
+  const type = ['image', 'gif', 'pdf'].includes(a.type) ? a.type : null;
+  if (!type || !/^https:\/\/res\.cloudinary\.com\//.test(url)) return null;
+  return { url, type, name: clampStr(a.name, 160) };
+}
 
 // Server-side role check — the client's isAdmin flag is never trusted.
 async function isAdminUser(userId) {
@@ -249,6 +259,17 @@ router.post('/rooms/:id/join', async (req, res) => {
 });
 
 // Thread messages
+// Upload a chat attachment (photo / GIF / PDF) — returns the hosted URL to
+// include in a message send. Multer + Cloudinary; nothing touches local disk.
+router.post('/uploads', chatUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file || !req.file.path) return res.status(400).json({ error: 'No file uploaded' });
+    const mt = req.file.mimetype || '';
+    const type = mt === 'application/pdf' ? 'pdf' : mt === 'image/gif' ? 'gif' : 'image';
+    res.json({ success: true, url: req.file.path, type, name: clampStr(req.file.originalname, 160) });
+  } catch (e) { console.error('chat upload error:', e.message); res.status(500).json({ error: 'Upload failed' }); }
+});
+
 router.get('/conversations/:id/messages', async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
@@ -263,7 +284,8 @@ router.get('/conversations/:id/messages', async (req, res) => {
         id: m._id, body: decryptText(m.body) || '', mine: String(m.senderId) === String(req.userId),
         senderName: m.senderName || 'Member', createdAt: m.createdAt,
         sharedMapId: m.sharedMapId || null,
-        sharedMap: m.sharedMap && m.sharedMap.title ? m.sharedMap : null
+        sharedMap: m.sharedMap && m.sharedMap.title ? m.sharedMap : null,
+        attachment: m.attachment && m.attachment.url ? m.attachment : null
       }))
     });
   } catch (e) { console.error('messages error:', e.message); res.status(500).json({ error: 'Failed to load messages' }); }
@@ -286,10 +308,13 @@ router.post('/conversations/:id/messages', async (req, res) => {
       const m = await SharedMap.findOne({ _id: smid, unpublishedAt: null }).select('title previewSvg coverage nodeCount').lean();
       if (m) { msg.sharedMapId = m._id; msg.sharedMap = { title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount }; }
     }
-    if (!msg.body && !msg.sharedMapId) return res.status(400).json({ error: 'Say something or share a blueprint.' });
+    const att = cleanAttachment((req.body || {}).attachment);
+    if (att) msg.attachment = att;
+    if (!msg.body && !msg.sharedMapId && !att) return res.status(400).json({ error: 'Say something or share a blueprint.' });
     await msg.save();
 
-    convo.lastMessage = { body: encryptText(body.slice(0, 400)), senderId: req.userId, hasMap: !!msg.sharedMapId, at: new Date() };
+    const previewBody = body || (att ? (att.type === 'pdf' ? 'Sent a PDF' : att.type === 'gif' ? 'Sent a GIF' : 'Sent a photo') : '');
+    convo.lastMessage = { body: encryptText(previewBody.slice(0, 400)), senderId: req.userId, hasMap: !!msg.sharedMapId, at: new Date() };
     convo.updatedAt = new Date();
     await convo.save();
 
@@ -321,7 +346,8 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
     res.json({ success: true, message: {
       id: msg._id, body: body, mine: true, senderName: msg.senderName, createdAt: msg.createdAt,
-      sharedMapId: msg.sharedMapId || null, sharedMap: msg.sharedMap && msg.sharedMap.title ? msg.sharedMap : null
+      sharedMapId: msg.sharedMapId || null, sharedMap: msg.sharedMap && msg.sharedMap.title ? msg.sharedMap : null,
+      attachment: att || null
     } });
   } catch (e) { console.error('send error:', e.message); res.status(500).json({ error: 'Failed to send' }); }
 });

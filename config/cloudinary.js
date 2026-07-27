@@ -54,4 +54,35 @@ const upload = multer({
   }
 });
 
-module.exports = { cloudinary, upload, isCloudinaryConfigured };
+// Chat attachments — photos, GIFs, and PDFs shared in Studio/thread chat.
+// No face-crop transformation; PDFs ride Cloudinary's image pipeline.
+let chatStorage;
+if (isCloudinaryConfigured) {
+  const { CloudinaryStorage } = require('multer-storage-cloudinary');
+  chatStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: 'digitalapple/chat',
+      resource_type: 'auto',
+      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf']
+    }
+  });
+} else {
+  chatStorage = multer.memoryStorage();
+}
+
+const chatUpload = multer({
+  storage: chatStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: (req, file, cb) => {
+    if (!isCloudinaryConfigured) {
+      cb(new Error('Uploads not configured. Contact administrator.'), false);
+      return;
+    }
+    const ok = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Only images, GIFs, and PDFs are allowed.'), false);
+  }
+});
+
+module.exports = { cloudinary, upload, chatUpload, isCloudinaryConfigured };

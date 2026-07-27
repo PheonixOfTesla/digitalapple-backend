@@ -782,13 +782,21 @@ try {
     // Ephemeral live chat within the room (persistent chat uses the REST API).
     // Members who AREN'T in the room right now get a bell notification.
     socket.on('chat', (payload) => {
-      if (!joined || !payload || !payload.body) return;
-      const chatBody = String(payload.body).slice(0, 1000);
+      if (!joined || !payload || (!payload.body && !payload.attachment)) return;
+      const chatBody = String(payload.body || '').slice(0, 1000);
+      // Attachment rides along verbatim IF it's our Cloudinary asset — the REST
+      // send path is what persists it; this is just the live relay.
+      let att = null;
+      const a = payload.attachment;
+      if (a && typeof a === 'object' && /^https:\/\/res\.cloudinary\.com\//.test(String(a.url || '')) && ['image', 'gif', 'pdf'].includes(a.type)) {
+        att = { url: String(a.url).slice(0, 500), type: a.type, name: String(a.name || '').slice(0, 160) };
+      }
+      if (!chatBody && !att) return;
       studioNs.to(joined).emit('chat', {
         from: socket.id, userId: socket.userId, name: socket.studioName,
-        body: chatBody
+        body: chatBody, attachment: att
       });
-      notifyStudioChat(joined, socket, chatBody);
+      notifyStudioChat(joined, socket, chatBody || (att ? (att.type === 'pdf' ? 'Sent a PDF' : att.type === 'gif' ? 'Sent a GIF' : 'Sent a photo') : ''));
     });
 
     // Presence flags (mic / camera / screen). camId & screenId are the sender's
@@ -813,6 +821,16 @@ try {
       socket.to(joined).emit('viewing', {
         socketId: socket.id,
         target: payload && payload.target ? String(payload.target).slice(0, 64) : null
+      });
+    });
+
+    // "<name> is typing…" in the room chat — pure relay, nothing persisted.
+    socket.on('typing', (payload) => {
+      if (!joined) return;
+      socket.to(joined).emit('typing', {
+        socketId: socket.id,
+        name: payload && payload.name ? String(payload.name).slice(0, 60) : 'Someone',
+        on: !!(payload && payload.on)
       });
     });
 

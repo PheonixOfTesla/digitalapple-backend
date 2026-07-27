@@ -41,6 +41,7 @@ function clean(s, max) { return String(s == null ? '' : s).trim().slice(0, max);
 async function fetchIndustry(qid, limit) {
   const query = `SELECT ?item ?itemLabel ?website ?countryLabel ?desc WHERE {
     ?item wdt:P452 wd:${qid} ; wdt:P856 ?website .
+    MINUS { ?item wdt:P576 ?dissolved . }
     OPTIONAL { ?item wdt:P17 ?country. }
     OPTIONAL { ?item schema:description ?desc FILTER(LANG(?desc)="en") }
     SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }

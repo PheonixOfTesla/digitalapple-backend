@@ -229,9 +229,15 @@ router.get('/nebulas', verifyToken, requireAdmin, async (req, res) => {
     const monthAgo = new Date(todayStart); monthAgo.setDate(monthAgo.getDate() - 30);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 40));
 
+    // This tracker measures ACTUAL usage — anonymous visitors and registered
+    // users. Admin-created nebulas (testing, seeding) are excluded everywhere.
+    const User = require('../models/User');
+    const adminIds = (await User.find({ role: 'admin' }).select('_id').lean()).map(u => u._id);
+    const notAdmin = { ownerId: { $nin: adminIds } }; // $nin also passes null/missing (anonymous)
+
     const countBy = async (match) => {
       const rows = await NebulaLog.aggregate([
-        { $match: match },
+        { $match: { $and: [notAdmin, match] } },
         { $group: { _id: '$creatorType', n: { $sum: 1 } } }
       ]);
       const out = { anonymous: 0, registered: 0, total: 0 };
@@ -245,11 +251,11 @@ router.get('/nebulas', verifyToken, requireAdmin, async (req, res) => {
       countBy({ createdAt: { $gte: weekAgo } }),
       countBy({ createdAt: { $gte: monthAgo } }),
       NebulaLog.aggregate([
-        { $match: { createdAt: { $gte: monthAgo } } },
+        { $match: { $and: [notAdmin, { createdAt: { $gte: monthAgo } }] } },
         { $group: { _id: { $ifNull: ['$classificationType', 'unknown'] }, n: { $sum: 1 } } },
         { $sort: { n: -1 } }
       ]),
-      NebulaLog.find({})
+      NebulaLog.find(notAdmin)
         .sort({ createdAt: -1 })
         .limit(limit)
         .populate('ownerId', 'email name')

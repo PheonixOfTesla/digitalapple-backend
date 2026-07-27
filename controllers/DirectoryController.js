@@ -291,6 +291,43 @@ router.post('/admin/aggregate', verifyToken, requireAdmin, async (req, res) => {
   }
 });
 
+// Pull REAL ratings (Google Places / Yelp Fusion) onto companies that don't
+// have them yet. Loud preflight: no keys, no run — numbers are never invented.
+router.post('/admin/enrich', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    if (!process.env.GOOGLE_PLACES_API_KEY && !process.env.YELP_API_KEY) {
+      return res.status(400).json({
+        error: 'No review sources configured',
+        detail: 'Set GOOGLE_PLACES_API_KEY and/or YELP_API_KEY as Railway env vars, then run again.'
+      });
+    }
+    const { enrichRatings } = require('../jobs/enrichRatings');
+    const limit = parseInt((req.body || {}).limit) || undefined;
+    const result = await enrichRatings({ limit });
+    res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('company enrich:', e.message);
+    res.status(500).json({ error: 'Enrichment failed', detail: e.message });
+  }
+});
+
+// Clear imported filler: Wikidata-sourced companies that never picked up a
+// single real review from any source. User submissions are never touched.
+router.post('/admin/purge-unreviewed', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const q = {
+      wikidataId: { $exists: true, $nin: [null, ''] },
+      $or: [{ aggregateCount: { $in: [null, 0] } }, { aggregateCount: { $exists: false } }]
+    };
+    const n = await Company.countDocuments(q);
+    const r = await Company.deleteMany(q);
+    res.json({ success: true, removed: r.deletedCount != null ? r.deletedCount : n });
+  } catch (e) {
+    console.error('company purge:', e.message);
+    res.status(500).json({ error: 'Purge failed', detail: e.message });
+  }
+});
+
 router.post('/admin/:id/approve', verifyToken, requireAdmin, async (req, res) => {
   try {
     const c = await Company.findByIdAndUpdate(req.params.id,

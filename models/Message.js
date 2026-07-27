@@ -10,6 +10,13 @@ const messageSchema = new mongoose.Schema({
   senderName: { type: String, trim: true, maxlength: 80 },
   body: { type: String, trim: true, maxlength: 4000 },
 
+  // Optional attachment (Cloudinary-hosted): photo, GIF, or PDF
+  attachment: {
+    url: { type: String, trim: true, maxlength: 500 },
+    type: { type: String, enum: ['image', 'gif', 'pdf'] },
+    name: { type: String, trim: true, maxlength: 160 }
+  },
+
   // Optional shared blueprint (denormalized preview)
   sharedMapId: { type: mongoose.Schema.Types.ObjectId, ref: 'SharedMap' },
   sharedMap: {
