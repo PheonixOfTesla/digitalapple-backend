@@ -100,6 +100,14 @@ router.post('/:id/blueprint', async (req, res) => {
     if (!convo) return res.status(404).json({ error: 'Studio not found' });
     if (String(convo.ownerId) !== String(req.userId)) return res.status(403).json({ error: 'Only the host can start the blueprint' });
 
+    // Import an EXISTING blueprint: host passes projectId of a project they own.
+    const importId = (req.body || {}).projectId;
+    if (importId && mongoose.isValidObjectId(importId)) {
+      const own = await Project.findOne({ _id: importId, ownerId: req.userId }).select('name').lean();
+      if (!own) return res.status(404).json({ error: 'Blueprint not found' });
+      convo.blueprintProjectId = own._id; convo.updatedAt = new Date(); await convo.save();
+      return res.json({ success: true, projectId: own._id, name: own.name, imported: true });
+    }
     // Reuse an already-attached blueprint if present.
     if (convo.blueprintProjectId) {
       const existing = await Project.findById(convo.blueprintProjectId).select('name').lean();
