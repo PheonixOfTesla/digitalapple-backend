@@ -38,6 +38,7 @@ async function authorFor(userId, fallbackEmail) {
 function publicPost(p, userId) {
   return {
     id: p._id,
+    authorId: p.authorId || null,
     authorName: p.authorName || 'Member',
     authorHandle: p.authorHandle || '',
     authorAvatar: p.authorAvatar || null,
@@ -98,12 +99,27 @@ router.get('/stories', optionalAuth, async (req, res) => {
 router.get('/discover', optionalAuth, async (req, res) => {
   try {
     const rows = await SharedMap.aggregate([
-      { $match: { unpublishedAt: null, ownerName: { $ne: null } } },
+      { $match: { unpublishedAt: null, ownerId: { $ne: null } } },
       { $sort: { publishedAt: -1 } },
-      { $group: { _id: '$ownerName', handle: { $first: '$ownerHandle' }, maps: { $sum: 1 } } },
+      { $group: { _id: '$ownerId', name: { $first: '$ownerName' }, handle: { $first: '$ownerHandle' }, maps: { $sum: 1 } } },
       { $limit: 8 }
     ]);
-    res.json({ success: true, people: rows.map(r => ({ name: r._id, handle: r.handle || '', maps: r.maps })) });
+    // Enrich with verified badge + freshest avatar/name.
+    const ids = rows.map(r => r._id).filter(Boolean);
+    const users = ids.length
+      ? await User.find({ _id: { $in: ids }, role: { $ne: 'system' } })
+          .select('firstName lastName profilePhotoThumb profilePhoto verified').lean()
+      : [];
+    const byId = new Map(users.map(u => [String(u._id), u]));
+    const people = rows.filter(r => byId.has(String(r._id))).map(r => {
+      const u = byId.get(String(r._id));
+      const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || r.name || 'Member';
+      return {
+        id: r._id, name: nm.slice(0, 80), handle: r.handle || '', maps: r.maps,
+        avatar: u.profilePhotoThumb || u.profilePhoto || null, verified: !!u.verified
+      };
+    });
+    res.json({ success: true, people });
   } catch (e) { res.json({ success: true, people: [] }); }
 });
 
