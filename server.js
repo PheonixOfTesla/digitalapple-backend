@@ -805,6 +805,16 @@ try {
       });
     });
 
+    // Who's looking at whose node — relays "I expanded X's node" so every node
+    // can show its viewer count. target = a socketId, or null when collapsed.
+    socket.on('viewing', (payload) => {
+      if (!joined) return;
+      socket.to(joined).emit('viewing', {
+        socketId: socket.id,
+        target: payload && payload.target ? String(payload.target).slice(0, 64) : null
+      });
+    });
+
     // Host attached / opened a blueprint — everyone refreshes the canvas panel.
     socket.on('blueprint', (payload) => {
       if (!joined || !payload) return;
