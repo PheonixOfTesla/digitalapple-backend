@@ -127,6 +127,26 @@ router.get('/people', verifyToken, async (req, res) => {
   } catch (e) { console.error('people search:', e.message); res.status(500).json({ error: 'Search failed' }); }
 });
 
+// ── Public profile: a person's Hub — name, badge, and their public blueprints ──
+router.get('/profile/:id', optionalAuth, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const u = await User.findById(req.params.id).select('firstName lastName profilePhoto profilePhotoThumb verified createdAt role').lean();
+    if (!u || u.role === 'system') return res.status(404).json({ error: 'Profile not found' });
+    const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || 'Member';
+    const maps = await SharedMap.find({ ownerId: u._id, unpublishedAt: null })
+      .select('title previewSvg coverage nodeCount publishedAt').sort({ publishedAt: -1 }).limit(24).lean();
+    res.json({
+      success: true,
+      profile: {
+        id: u._id, name, avatar: u.profilePhotoThumb || u.profilePhoto || null,
+        verified: !!u.verified, joined: u.createdAt, isMe: req.userId ? String(req.userId) === String(u._id) : false
+      },
+      maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount }))
+    });
+  } catch (e) { console.error('profile:', e.message); res.status(500).json({ error: 'Failed to load profile' }); }
+});
+
 // ── Create a post ("Add to Clockwork Hub") ────────────────────────────────────
 router.post('/posts', verifyToken, async (req, res) => {
   try {
