@@ -808,6 +808,31 @@ server.listen(PORT, () => {
   });
   console.log('Company Aggregation: Scheduled (Mondays 04:00 UTC)');
 
+  // System health watch — every 5 min. Notify admins only on a transition INTO
+  // 'down' (not every cycle), so the admin bell flags real outages without spam.
+  const _healthLast = {};
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const { runHealthChecks } = require('./services/healthChecks');
+      const Notification = require('./models/Notification');
+      const { checks } = await runHealthChecks();
+      for (const [name, c] of Object.entries(checks)) {
+        const was = _healthLast[name];
+        if (c.status === 'down' && was !== 'down') {
+          await Notification.pushAdmins({
+            type: 'system', text: `${name} is DOWN — ${c.detail || 'check failed'}`, link: 'admin.html#status'
+          });
+          console.error(`[HEALTH] ${name} DOWN: ${c.detail}`);
+        } else if (c.status === 'up' && was === 'down') {
+          await Notification.pushAdmins({ type: 'system', text: `${name} recovered — back up`, link: 'admin.html#status' });
+          console.log(`[HEALTH] ${name} recovered`);
+        }
+        _healthLast[name] = c.status;
+      }
+    } catch (e) { console.error('[HEALTH] check failed:', e.message); }
+  });
+  console.log('System Health Watch: Scheduled (every 5 min)');
+
   // One-time populate: if the directory has never been aggregated, do it now
   // (in the background) so it isn't empty. Idempotent — skips once seeded.
   setTimeout(async () => {

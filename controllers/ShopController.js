@@ -379,6 +379,12 @@ async function fulfill(session, stripeEventId) {
     throw e;
   }
 
+  try {
+    require('../models/Notification').pushAdmins({
+      type: 'admin_order', text: `New order — $${((session.amount_total || 0) / 100).toFixed(2)}${email ? ' · ' + email : ''}`, link: 'admin.html#orders'
+    });
+  } catch (e) { /* non-fatal */ }
+
   const h = pfHeaders();
   if (!h) {
     order.status = 'draft'; order.error = 'PRINTFUL_API_KEY not configured';

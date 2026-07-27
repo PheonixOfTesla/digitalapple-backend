@@ -223,6 +223,9 @@ router.post('/companies', verifyToken, async (req, res) => {
     });
     company.recomputeScores();
     await company.save();
+    require('../models/Notification').pushAdmins({
+      type: 'admin_company', text: `New company pending review: ${name}`, link: 'admin.html#directory'
+    });
     res.json({ success: true, message: 'Submitted for review. It appears once approved.', id: company._id });
   } catch (error) {
     console.error('Directory submit error:', error.message);
@@ -250,6 +253,9 @@ router.post('/companies/:id/reviews', verifyToken, async (req, res) => {
     );
 
     const updated = await recomputeClockwork(company._id);
+    require('../models/Notification').pushAdmins({
+      type: 'admin_review', text: `New ${rating}★ review on ${company.name} by ${authorName}`, link: 'admin.html#reviews'
+    });
     res.json({
       success: true,
       message: 'Review saved.',

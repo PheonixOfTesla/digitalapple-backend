@@ -283,12 +283,18 @@ router.get('/connections/requests', verifyToken, async (req, res) => {
 });
 
 // ── Notifications (the bell / notification box) ───────────────────────────────
+// Channel resolver — 'admin' only for admins; everyone else gets 'personal'.
+function resolveChannel(req) {
+  return (req.query.channel === 'admin' && req.userRole === 'admin') ? 'admin' : 'personal';
+}
+
 router.get('/notifications', verifyToken, async (req, res) => {
   try {
-    const items = await Notification.find({ userId: req.userId }).sort({ createdAt: -1 }).limit(40).lean();
-    const unread = await Notification.countDocuments({ userId: req.userId, read: false });
+    const channel = resolveChannel(req);
+    const items = await Notification.find({ userId: req.userId, channel }).sort({ createdAt: -1 }).limit(40).lean();
+    const unread = await Notification.countDocuments({ userId: req.userId, channel, read: false });
     res.json({
-      success: true, unread,
+      success: true, unread, channel,
       notifications: items.map(n => ({
         id: n._id, type: n.type, actorName: n.actorName, actorAvatar: n.actorAvatar,
         text: n.text, link: n.link, read: !!n.read, at: n.createdAt
@@ -297,19 +303,21 @@ router.get('/notifications', verifyToken, async (req, res) => {
   } catch (e) { console.error('notifications:', e.message); res.status(500).json({ error: 'Failed to load' }); }
 });
 
-// Unread count only — cheap poll for the bell badge.
+// Unread count only — cheap poll for the bell badge. Personal by default.
 router.get('/notifications/count', verifyToken, async (req, res) => {
   try {
-    const unread = await Notification.countDocuments({ userId: req.userId, read: false });
-    res.json({ success: true, unread });
+    const channel = resolveChannel(req);
+    const unread = await Notification.countDocuments({ userId: req.userId, channel, read: false });
+    res.json({ success: true, channel, unread });
   } catch (e) { res.json({ success: true, unread: 0 }); }
 });
 
-// Mark all (or one) read.
+// Mark all (or one) read — scoped to the requested channel.
 router.post('/notifications/read', verifyToken, async (req, res) => {
   try {
+    const channel = resolveChannel(req);
     const id = (req.body || {}).id;
-    const q = { userId: req.userId, read: false };
+    const q = { userId: req.userId, channel, read: false };
     if (id && mongoose.isValidObjectId(id)) q._id = id;
     await Notification.updateMany(q, { $set: { read: true } });
     res.json({ success: true });

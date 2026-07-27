@@ -1328,6 +1328,19 @@ function maskKey(v) {
 }
 
 // GET /admin/integrations — which integrations are connected
+// System health — live status of every subsystem (DB, payments, AI, uploads,
+// email, merch, scheduling). Powers the admin portal's status panel.
+router.get('/health', async (req, res) => {
+  try {
+    const { runHealthChecks } = require('../services/healthChecks');
+    const result = await runHealthChecks();
+    res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('[admin/health]', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 router.get('/integrations', async (req, res) => {
   try {
     const Setting = require('../models/Setting');

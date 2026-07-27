@@ -44,6 +44,10 @@ router.post('/register', async (req, res) => {
 
     const token = generateToken(user);
 
+    require('../models/Notification').pushAdmins({
+      type: 'admin_signup', text: `New Hub created: ${[user.firstName, user.lastName].filter(Boolean).join(' ') || user.email}`, link: 'admin.html#users'
+    });
+
     console.log(`User registered: ${user.email}`);
 
     res.json({
