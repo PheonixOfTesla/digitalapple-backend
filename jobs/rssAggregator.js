@@ -29,27 +29,23 @@ const RSS_FEEDS = [
   // academic jargon ("nonsense") in a general Signal feed. Curated,
   // reader-friendly outlets only.
 
-  // Science — high-signal, mind-blowing, plain-language (diverse sources, not just BBC)
+  // Science / research — high-signal, tech-adjacent only. General-news feeds
+  // (BBC World/Business/Culture, Guardian World) were REMOVED: they surfaced
+  // off-topic human-interest headlines ("Volunteer scheme credited with
+  // changing man's life") that have nothing to do with an AI & tech Signal.
   { url: 'https://www.quantamagazine.org/feed/', source: 'Quanta', category: 'science' },
-  { url: 'https://feeds.bbci.co.uk/news/science_and_environment/rss.xml', source: 'BBC Science', category: 'science' },
-  { url: 'https://www.theguardian.com/science/rss', source: 'The Guardian', category: 'science' },
-  { url: 'https://www.sciencedaily.com/rss/top/science.xml', source: 'ScienceDaily', category: 'science' },
+  { url: 'https://www.sciencedaily.com/rss/computers_math/artificial_intelligence.xml', source: 'ScienceDaily AI', category: 'ai' },
   { url: 'https://www.nasa.gov/news-release/feed/', source: 'NASA', category: 'science' },
 
-  // Markets / business / stocks (BBC works; CNBC 403s and Politico 404s from
-  // servers, so they're dropped — the Wikipedia signal generator covers markets)
-  { url: 'https://feeds.bbci.co.uk/news/business/rss.xml', source: 'BBC Business', category: 'business' },
-
-  // World & geopolitics (BBC + Guardian for source diversity)
-  { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', source: 'BBC World', category: 'world' },
-  { url: 'https://www.theguardian.com/world/rss', source: 'The Guardian', category: 'world' },
-
-  // Culture & notable people (arts, entertainment, public figures — royals, etc.)
-  { url: 'https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml', source: 'BBC Culture', category: 'culture' },
-
-  // Startup / cross-genre high-signal (front page — tech, science, culture)
+  // Startup / tech front page (relevance-filtered below)
   { url: 'https://news.ycombinator.com/rss', source: 'Hacker News', category: 'startup' }
 ];
+
+// Signal = "what's changing in AI & tech". Feeds tagged 'ai'/'tech' are already
+// on-topic and pass as-is; everything else (science, startup, HN) must match a
+// tech/innovation keyword so general/human-interest headlines are dropped.
+const ON_TOPIC = new Set(['ai', 'tech']);
+const TECH_RE = /\b(a\.?i\.?|artificial intelligence|machine learning|\bml\b|llm|gpt|openai|anthropic|claude|gemini|deepmind|mistral|meta|google|microsoft|apple|amazon|neural|model|robot|chip|semiconductor|gpu|nvidia|quantum|algorithm|automat|agent|software|hardware|\bapp\b|platform|startup|fund(ing|ed)|raise|series [a-e]|venture|\bipo\b|acqui|launch|releas|data|privacy|cyber|security|breach|encrypt|crypto|blockchain|space|rocket|satellite|spacex|biotech|genom|\bdna\b|energy|batter|fusion|solar|research|breakthrough|physics|\bmath|comput|cloud|\bapi\b|open source|patent|protein|fossil|telescope|climate)\b/i;
 
 async function fetchFeed(feedConfig) {
   const { url, source, category } = feedConfig;
@@ -59,17 +55,19 @@ async function fetchFeed(feedConfig) {
     const items = [];
 
     for (const item of feed.items.slice(0, 20)) { // Max 20 per feed
+      const title = item.title?.trim().substring(0, 500) || 'Untitled';
+      // Drop off-topic headlines from broad feeds (science/startup/HN): a Signal
+      // must be about AI/tech/innovation, not general human-interest news.
+      if (!ON_TOPIC.has(category) && !TECH_RE.test(title)) continue;
       // Extract only headline data - never full content
-      const newsItem = {
-        title: item.title?.trim().substring(0, 500) || 'Untitled',
+      items.push({
+        title,
         source,
         link: item.link || item.guid,
         publishedAt: item.pubDate ? new Date(item.pubDate) : new Date(),
         category,
         guid: item.guid || item.link
-      };
-
-      items.push(newsItem);
+      });
     }
 
     return items;
