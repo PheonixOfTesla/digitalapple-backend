@@ -357,18 +357,27 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
       const parsedLimit = parseInt(limit);
       const parsedOffset = parseInt(offset);
 
-      // MongoDB doesn't allow $text inside $or, so we run two queries:
-      // 1. Text index search (title, description)
-      // 2. OwnerName regex search (creator name)
-      // Then merge and deduplicate results
+      // Three queries, merged and deduplicated:
+      // 1. Text index (title/description) — stemmed relevance for FULL words
+      // 2. Substring regex (title/description) — partial words as people type
+      //    ("schoo" must find "school"; $text alone tokenizes whole words only)
+      // 3. OwnerName regex (creator name)
 
+      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = { $regex: escaped, $options: 'i' };
       const textQuery = { ...baseConditions, $text: { $search: searchTerm } };
-      const ownerQuery = { ...baseConditions, ownerName: { $regex: searchTerm, $options: 'i' } };
+      const partialQuery = { ...baseConditions, $or: [{ title: rx }, { description: rx }] };
+      const ownerQuery = { ...baseConditions, ownerName: rx };
 
-      const [textResults, ownerResults] = await Promise.all([
+      const [textResults, partialResults, ownerResults] = await Promise.all([
         SharedMap.find(textQuery)
           .sort({ score: { $meta: 'textScore' }, publishedAt: -1 })
           .limit(parsedLimit + parsedOffset) // Fetch extra for dedup
+          .select('-snapshot')
+          .lean(),
+        SharedMap.find(partialQuery)
+          .sort({ publishedAt: -1 })
+          .limit(parsedLimit + parsedOffset)
           .select('-snapshot')
           .lean(),
         SharedMap.find(ownerQuery)
@@ -381,7 +390,7 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
       // Merge and deduplicate (text results first for relevance)
       const seen = new Set();
       const merged = [];
-      for (const map of [...textResults, ...ownerResults]) {
+      for (const map of [...textResults, ...partialResults, ...ownerResults]) {
         const id = map._id.toString();
         if (!seen.has(id)) {
           seen.add(id);
