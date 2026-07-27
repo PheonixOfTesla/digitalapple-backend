@@ -138,6 +138,7 @@ app.use('/api/v1/shop', require('./controllers/ShopController'));
 app.use('/api/v1/directory', require('./controllers/DirectoryController'));
 app.use('/api/v1/hub', require('./controllers/HubController'));
 app.use('/api/v1/messages', require('./controllers/MessageController'));
+app.use('/api/v1/studios', require('./controllers/StudioController'));
 
 // ONE-TIME SETUP - REMOVE AFTER USE
 app.post('/api/v1/setup-once', async (req, res) => {
@@ -681,9 +682,80 @@ try {
     socket.emit('ready', { ok: true });
   });
 
+  // Studios channel — live connect rooms. Any authenticated member can connect;
+  // this namespace only relays presence, WebRTC signaling, live chat, and the
+  // "blueprint attached" event between peers in the same studio room. Media never
+  // touches the server (peer-to-peer, DTLS-SRTP encrypted).
+  const studioNs = io.of('/studio');
+  studioNs.use((socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token ||
+                    (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!token) return next(new Error('unauthorized'));
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.userId = decoded.userId || decoded.id || decoded._id;
+      socket.userName = decoded.name || decoded.email || 'Member';
+      next();
+    } catch (e) { next(new Error('unauthorized')); }
+  });
+  studioNs.on('connection', (socket) => {
+    let joined = null;
+
+    socket.on('join', (payload) => {
+      const studioId = payload && payload.studioId;
+      const name = (payload && payload.name) || socket.userName;
+      if (!studioId) return;
+      joined = String(studioId);
+      socket.studioName = String(name).slice(0, 80);
+      socket.join(joined);
+      // Tell the newcomer who's already here.
+      const peers = [];
+      const room = studioNs.adapter.rooms.get(joined);
+      if (room) room.forEach((sid) => {
+        if (sid === socket.id) return;
+        const s = studioNs.sockets.get(sid);
+        if (s) peers.push({ socketId: sid, userId: s.userId, name: s.studioName || s.userName });
+      });
+      socket.emit('peers', { peers });
+      // Announce this peer to everyone else.
+      socket.to(joined).emit('peer-joined', { socketId: socket.id, userId: socket.userId, name: socket.studioName });
+    });
+
+    // Generic WebRTC signaling passthrough (offer / answer / ICE) to one peer.
+    socket.on('signal', (payload) => {
+      if (!payload || !payload.to) return;
+      studioNs.to(payload.to).emit('signal', { from: socket.id, userId: socket.userId, data: payload.data });
+    });
+
+    // Ephemeral live chat within the room (persistent chat uses the REST API).
+    socket.on('chat', (payload) => {
+      if (!joined || !payload || !payload.body) return;
+      studioNs.to(joined).emit('chat', {
+        from: socket.id, userId: socket.userId, name: socket.studioName,
+        body: String(payload.body).slice(0, 1000)
+      });
+    });
+
+    // Presence flags (mic on/off, screen sharing on/off).
+    socket.on('presence', (payload) => {
+      if (!joined || !payload) return;
+      socket.to(joined).emit('presence', { socketId: socket.id, userId: socket.userId, mic: !!payload.mic, screen: !!payload.screen });
+    });
+
+    // Host attached / opened a blueprint — everyone refreshes the canvas panel.
+    socket.on('blueprint', (payload) => {
+      if (!joined || !payload) return;
+      studioNs.to(joined).emit('blueprint', { projectId: payload.projectId, name: payload.name || '' });
+    });
+
+    socket.on('disconnect', () => {
+      if (joined) socket.to(joined).emit('peer-left', { socketId: socket.id, userId: socket.userId });
+    });
+  });
+
   // Hand the io instance to the realtime service for controllers to use.
   realtime.setIO(io);
-  console.log('Socket.IO: enabled (/admin namespace)');
+  console.log('Socket.IO: enabled (/admin, /studio namespaces)');
 } catch (e) {
   console.error('Socket.IO disabled — continuing without live features:', e.message);
 }

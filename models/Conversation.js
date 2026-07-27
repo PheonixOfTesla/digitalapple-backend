@@ -23,6 +23,11 @@ const conversationSchema = new mongoose.Schema({
     url: { type: String, trim: true, maxlength: 300 }
   },
   sourceKey: { type: String, unique: true, sparse: true }, // "map:<id>" — one public room per source
+  // A Studio is a live room: chat channel + voice + screen share, hosted by the
+  // owner, where a blueprint is built together. The blueprint being worked on is
+  // linked here so everyone who joins opens the same canvas.
+  isStudio: { type: Boolean, default: false },
+  blueprintProjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
   lastMessage: {
     body: { type: String, trim: true, maxlength: 400 },
     senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
