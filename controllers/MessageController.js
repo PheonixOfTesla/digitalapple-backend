@@ -41,8 +41,11 @@ async function otherParticipant(convo, meId) {
 // List my threads
 router.get('/conversations', async (req, res) => {
   try {
-    const convos = await Conversation.find({ participants: req.userId })
-      .sort({ updatedAt: -1 }).limit(50).lean();
+    const convos = await Conversation.find({
+      participants: req.userId,
+      archivedBy: { $ne: req.userId },   // hidden-for-me threads stay out
+      closedAt: null                     // owner-deleted rooms/Studios are gone
+    }).sort({ updatedAt: -1 }).limit(50).lean();
     const out = [];
     for (const c of convos) {
       const other = c.isRoom
@@ -112,10 +115,32 @@ router.post('/rooms', async (req, res) => {
   } catch (e) { console.error('room create:', e.message); res.status(500).json({ error: 'Failed to create room' }); }
 });
 
+// Archive / delete a thread. For everyone: archiving hides the thread from
+// YOUR list only. If you're the OWNER of a room/Studio, it deletes the actual
+// room — closedAt is set and it disappears for every member and from discover.
+router.post('/conversations/:id/archive', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const convo = await Conversation.findOne({ _id: req.params.id, participants: req.userId });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (isOwner && (convo.isRoom || convo.isStudio)) {
+      convo.closedAt = new Date();
+      await convo.save();
+      return res.json({ success: true, deleted: true });
+    }
+    if (!convo.archivedBy.some(id => String(id) === String(req.userId))) {
+      convo.archivedBy.push(req.userId);
+      await convo.save();
+    }
+    res.json({ success: true, archived: true });
+  } catch (e) { console.error('archive convo:', e.message); res.status(500).json({ error: 'Could not archive' }); }
+});
+
 // Browse public rooms (all types, or by category) — anyone can join.
 router.get('/rooms/discover', async (req, res) => {
   try {
-    const q = { isRoom: true, visibility: 'public' };
+    const q = { isRoom: true, visibility: 'public', closedAt: null };
     if (ROOM_CATS.includes(req.query.category)) q.category = req.query.category;
     const rooms = await Conversation.find(q).sort({ updatedAt: -1 }).limit(40).lean();
     res.json({ success: true, rooms: rooms.map(r => ({

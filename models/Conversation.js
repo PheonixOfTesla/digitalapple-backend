@@ -28,6 +28,10 @@ const conversationSchema = new mongoose.Schema({
   // linked here so everyone who joins opens the same canvas.
   isStudio: { type: Boolean, default: false },
   blueprintProjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
+  // Archive/delete: archivedBy hides the thread for those users only; closedAt
+  // set by the owner shuts the room/Studio itself down for everyone.
+  archivedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  closedAt: { type: Date, default: null },
   lastMessage: {
     body: { type: String, trim: true, maxlength: 400 },
     senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
