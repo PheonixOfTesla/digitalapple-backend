@@ -196,7 +196,8 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
       rooms: rooms.map(r => ({
         id: r._id, name: r.name || (r.isStudio ? 'Studio' : 'Room'),
         isStudio: !!r.isStudio, category: r.category || 'other',
-        members: (r.participants || []).length
+        members: (r.participants || []).length,
+        visibility: r.visibility || 'private'
       }))
     });
   } catch (e) { console.error('profile:', e.message); res.status(500).json({ error: 'Failed to load profile' }); }

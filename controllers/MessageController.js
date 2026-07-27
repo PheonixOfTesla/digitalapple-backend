@@ -182,9 +182,20 @@ router.get('/rooms/discover', async (req, res) => {
     const q = { isRoom: true, visibility: 'public', closedAt: null };
     if (ROOM_CATS.includes(req.query.category)) q.category = req.query.category;
     const rooms = await Conversation.find(q).sort({ updatedAt: -1 }).limit(40).lean();
+    // "See who's already in it" — preview the first few members of every room
+    // in one batched query (Discord-style face pile).
+    const previewIds = new Set();
+    rooms.forEach(r => (r.participants || []).slice(0, 3).forEach(id => previewIds.add(String(id))));
+    const previewUsers = previewIds.size
+      ? await User.find({ _id: { $in: Array.from(previewIds) } })
+          .select('firstName lastName email profilePhotoThumb profilePhoto').lean()
+      : [];
+    const byId = {};
+    previewUsers.forEach(u => { byId[String(u._id)] = { name: nameOf(u), avatar: u.profilePhotoThumb || u.profilePhoto || null }; });
     res.json({ success: true, rooms: rooms.map(r => ({
       id: r._id, name: r.name || 'Room', category: r.category || 'other',
       description: r.description || '', members: (r.participants || []).length,
+      people: (r.participants || []).slice(0, 3).map(id => byId[String(id)]).filter(Boolean),
       source: r.source && r.source.type ? { type: r.source.type, title: r.source.title || '', url: r.source.url || '' } : null,
       joined: (r.participants || []).some(id => String(id) === String(req.userId))
     })) });

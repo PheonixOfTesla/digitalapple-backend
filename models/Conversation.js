@@ -28,6 +28,12 @@ const conversationSchema = new mongoose.Schema({
   // linked here so everyone who joins opens the same canvas.
   isStudio: { type: Boolean, default: false },
   blueprintProjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
+  // Knock-to-enter: private rooms/Studios queue join requests here until the
+  // host accepts (they get a notification) — public ones are free to join.
+  joinRequests: [{
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    at: { type: Date, default: Date.now }
+  }],
   // Archive/delete: archivedBy hides the thread for those users only; closedAt
   // set by the owner shuts the room/Studio itself down for everyone.
   archivedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
