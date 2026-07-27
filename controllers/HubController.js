@@ -175,8 +175,13 @@ router.get('/people', verifyToken, async (req, res) => {
 // ── Public profile: a person's Hub — name, badge, and their public blueprints ──
 router.get('/profile/:id', optionalAuth, async (req, res) => {
   try {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const u = await User.findById(req.params.id).select('firstName lastName profilePhoto profilePhotoThumb verified createdAt role about').lean();
+    // Accepts a user id OR a vanity handle (theclockworkhub.com/<handle>).
+    const key = String(req.params.id || '').toLowerCase();
+    const u = mongoose.isValidObjectId(req.params.id)
+      ? await User.findById(req.params.id).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about').lean()
+      : (/^[a-z0-9._-]{3,30}$/.test(key)
+          ? await User.findOne({ handle: key }).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about').lean()
+          : null);
     if (!u || u.role === 'system') return res.status(404).json({ error: 'Profile not found' });
     const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || 'Member';
     const maps = await SharedMap.find({ ownerId: u._id, unpublishedAt: null })
@@ -199,15 +204,19 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     // The personal "link-me": this person's open Studios & public rooms — their
     // different hubs for different groups, joinable straight from their profile.
     const Conversation = require('../models/Conversation');
+    // Lobby shows PUBLIC rooms only — private rooms stay invisible here.
+    // (Signed-in visitors can join public ones; private entry is by direct
+    // invite link, where the knock flow takes over.)
     const rooms = await Conversation.find({
-      ownerId: u._id, closedAt: null,
-      $or: [{ isStudio: true }, { isRoom: true, visibility: 'public' }]
+      ownerId: u._id, closedAt: null, visibility: 'public',
+      $or: [{ isStudio: true }, { isRoom: true }]
     }).select('name isStudio category participants visibility updatedAt').sort({ updatedAt: -1 }).limit(8).lean();
 
     res.json({
       success: true,
       profile: {
-        id: u._id, name, avatar: u.profilePhotoThumb || u.profilePhoto || null,
+        id: u._id, name, handle: u.handle || null,
+        avatar: u.profilePhotoThumb || u.profilePhoto || null,
         verified: !!u.verified, joined: u.createdAt, isMe,
         about: u.about || '',
         connectionState, connectionCount

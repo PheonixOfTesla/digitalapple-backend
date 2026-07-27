@@ -54,6 +54,11 @@ async function members(convo) {
 router.post('/', async (req, res) => {
   try {
     const b = req.body || {};
+    // A host runs up to 3 active Connect rooms at once (admins exempt).
+    const owned = await Conversation.countDocuments({ ownerId: req.userId, closedAt: null, $or: [{ isRoom: true }, { isStudio: true }] });
+    if (owned >= 3 && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'You host 3 Connect rooms already — delete one to open another.' });
+    }
     const name = clampStr(b.name, 80) || 'Studio';
     const guests = Array.isArray(b.guestIds) ? b.guestIds.filter(id => mongoose.isValidObjectId(id)) : [];
     const participants = Array.from(new Set([String(req.userId), ...guests.map(String)]));

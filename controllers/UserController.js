@@ -27,14 +27,32 @@ router.get('/profile', verifyToken, async (req, res) => {
 });
 
 // Update own profile (name, marketingOptIn)
+// Handles that can never be claimed — every real path plus obvious traps.
+const RESERVED_HANDLES = new Set(['admin','api','atlas','about','apply','architect','blueprint','brainstorm','build','chart','climate','connect','directory','discover','feed','host-portal','hub','hub-profile','index','lab','login','map','menu','news','privacy','profile','shared','shop','signal','signals','studio','support','terms','welcome','clockwork','digitalapple','root','www']);
+
 router.put('/profile', verifyToken, async (req, res) => {
-  const { firstName, lastName, marketingOptIn, about } = req.body;
+  const { firstName, lastName, marketingOptIn, about, handle } = req.body;
 
   try {
     const user = await User.findById(req.userId);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Vanity handle: theclockworkhub.com/<handle>. Lowercase url-safe,
+    // unique, never a real page name.
+    if (handle !== undefined) {
+      const h = String(handle || '').trim().toLowerCase();
+      if (h === '') {
+        user.handle = undefined;
+      } else {
+        if (!/^[a-z0-9._-]{3,30}$/.test(h)) return res.status(400).json({ error: 'Handles are 3–30 letters, numbers, dots, dashes.' });
+        if (RESERVED_HANDLES.has(h)) return res.status(400).json({ error: 'That handle is reserved.' });
+        const taken = await User.findOne({ handle: h, _id: { $ne: user._id } }).select('_id').lean();
+        if (taken) return res.status(409).json({ error: 'That handle is taken.' });
+        user.handle = h;
+      }
     }
 
     // Only allow updating specific fields - server-enforced scope

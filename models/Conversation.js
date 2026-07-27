@@ -9,6 +9,7 @@ const conversationSchema = new mongoose.Schema({
   participantKey: { type: String, unique: true, sparse: true }, // 1:1 dedupe key (null for rooms)
   isRoom: { type: Boolean, default: false },   // room (group) vs 1:1 DM
   name: { type: String, trim: true, maxlength: 80 }, // room name
+  photo: { type: String, trim: true, maxlength: 500 }, // room photo (Cloudinary URL)
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   // Social rooms of all types: public (anyone can join) or private (invite).
   visibility: { type: String, enum: ['private', 'public'], default: 'private' },

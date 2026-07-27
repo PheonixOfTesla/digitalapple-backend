@@ -35,6 +35,17 @@ const userSchema = new mongoose.Schema({
   },
   // About me — shown on the public profile so people landing on your Connect
   // know who you are before they knock.
+  // Vanity Connect URL: theclockworkhub.com/<handle> → this person's lobby
+  handle: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    minlength: 3,
+    maxlength: 30,
+    match: /^[a-z0-9._-]+$/,
+    unique: true,
+    sparse: true
+  },
   about: {
     type: String,
     trim: true,
@@ -118,6 +129,7 @@ userSchema.methods.toPrivateProfile = function() {
     email: this.email,
     firstName: this.firstName,
     lastName: this.lastName,
+    handle: this.handle || null,
     about: this.about,
     profilePhoto: this.profilePhoto,
     profilePhotoThumb: this.profilePhotoThumb,

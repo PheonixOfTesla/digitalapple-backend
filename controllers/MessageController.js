@@ -82,6 +82,7 @@ router.get('/conversations', async (req, res) => {
         } : null,
         unread, updatedAt: c.updatedAt,
         isRoom: !!c.isRoom, isStudio: !!c.isStudio,
+        photo: c.photo || null,
         // Rename/delete rights: the host always, admins even when they're not.
         canManage: (c.isRoom || c.isStudio) &&
           (admin || (c.ownerId && String(c.ownerId) === String(req.userId)))
@@ -132,6 +133,11 @@ router.post('/rooms', async (req, res) => {
     const participants = Array.from(new Set([String(req.userId), ...members.map(m => String(m._id))]));
     // Public rooms can start with just the creator; private rooms need >=2.
     if (visibility === 'private' && participants.length < 2) return res.status(400).json({ error: 'Add at least one member.' });
+    // A host runs up to 3 active Connect rooms at once (admins exempt).
+    const owned = await Conversation.countDocuments({ ownerId: req.userId, closedAt: null, $or: [{ isRoom: true }, { isStudio: true }] });
+    if (owned >= 3 && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'You host 3 Connect rooms already — delete one to open another.' });
+    }
     const convo = await Conversation.create({
       participants, isRoom: true, name, ownerId: req.userId, visibility, category, description, updatedAt: new Date()
     });
@@ -186,6 +192,27 @@ router.post('/conversations/:id/rename', async (req, res) => {
   } catch (e) { console.error('rename convo:', e.message); res.status(500).json({ error: 'Could not rename' }); }
 });
 
+// Room photo — host (or admin) uploads an image that fronts the room
+// everywhere its orb shows. Images only; hosted on Cloudinary like all uploads.
+router.post('/conversations/:id/photo', chatUpload.single('file'), async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    if (!req.file || !req.file.path) return res.status(400).json({ error: 'No file uploaded' });
+    if (!/^image\//.test(req.file.mimetype || '')) return res.status(400).json({ error: 'Room photos must be images.' });
+    const convo = await Conversation.findOne({ _id: req.params.id, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    if (!convo.isRoom && !convo.isStudio) return res.status(400).json({ error: 'Only rooms and Studios can have a photo.' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can change the photo.' });
+    }
+    convo.photo = req.file.path;
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, photo: convo.photo });
+  } catch (e) { console.error('room photo:', e.message); res.status(500).json({ error: 'Could not set photo' }); }
+});
+
 // Browse public rooms (all types, or by category) — anyone can join.
 router.get('/rooms/discover', async (req, res) => {
   try {
@@ -203,7 +230,7 @@ router.get('/rooms/discover', async (req, res) => {
     const byId = {};
     previewUsers.forEach(u => { byId[String(u._id)] = { name: nameOf(u), avatar: u.profilePhotoThumb || u.profilePhoto || null }; });
     res.json({ success: true, rooms: rooms.map(r => ({
-      id: r._id, name: r.name || 'Room', category: r.category || 'other',
+      id: r._id, name: r.name || 'Room', photo: r.photo || null, category: r.category || 'other',
       description: r.description || '', members: (r.participants || []).length,
       people: (r.participants || []).slice(0, 3).map(id => byId[String(id)]).filter(Boolean),
       source: r.source && r.source.type ? { type: r.source.type, title: r.source.title || '', url: r.source.url || '' } : null,
