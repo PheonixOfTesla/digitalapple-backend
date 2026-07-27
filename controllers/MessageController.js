@@ -18,6 +18,7 @@ const Message = require('../models/Message');
 const User = require('../models/User');
 const SharedMap = require('../models/SharedMap');
 const { verifyToken } = require('../middleware/auth');
+const { encryptText, decryptText } = require('../services/crypto');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -51,7 +52,7 @@ router.get('/conversations', async (req, res) => {
       out.push({
         id: c._id, with: other,
         lastMessage: c.lastMessage && c.lastMessage.at ? {
-          body: c.lastMessage.body || (c.lastMessage.hasMap ? 'Shared a blueprint' : ''),
+          body: decryptText(c.lastMessage.body) || (c.lastMessage.hasMap ? 'Shared a blueprint' : ''),
           mine: String(c.lastMessage.senderId) === String(req.userId), at: c.lastMessage.at
         } : null,
         unread, updatedAt: c.updatedAt
@@ -99,7 +100,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
     res.json({
       success: true,
       messages: msgs.reverse().map(m => ({
-        id: m._id, body: m.body || '', mine: String(m.senderId) === String(req.userId),
+        id: m._id, body: decryptText(m.body) || '', mine: String(m.senderId) === String(req.userId),
         senderName: m.senderName || 'Member', createdAt: m.createdAt,
         sharedMapId: m.sharedMapId || null,
         sharedMap: m.sharedMap && m.sharedMap.title ? m.sharedMap : null
@@ -117,7 +118,8 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
     const body = clampStr((req.body || {}).body, 4000);
     const me = await User.findById(req.userId).select('firstName lastName email').lean();
-    const msg = new Message({ conversationId: convo._id, senderId: req.userId, senderName: nameOf(me), body, readBy: [req.userId] });
+    // Store the body encrypted at rest; keep the plaintext to echo back to sender.
+    const msg = new Message({ conversationId: convo._id, senderId: req.userId, senderName: nameOf(me), body: encryptText(body), readBy: [req.userId] });
 
     const smid = (req.body || {}).sharedMapId;
     if (smid && mongoose.isValidObjectId(smid)) {
@@ -127,12 +129,12 @@ router.post('/conversations/:id/messages', async (req, res) => {
     if (!msg.body && !msg.sharedMapId) return res.status(400).json({ error: 'Say something or share a blueprint.' });
     await msg.save();
 
-    convo.lastMessage = { body: (msg.body || '').slice(0, 400), senderId: req.userId, hasMap: !!msg.sharedMapId, at: new Date() };
+    convo.lastMessage = { body: encryptText(body.slice(0, 400)), senderId: req.userId, hasMap: !!msg.sharedMapId, at: new Date() };
     convo.updatedAt = new Date();
     await convo.save();
 
     res.json({ success: true, message: {
-      id: msg._id, body: msg.body, mine: true, senderName: msg.senderName, createdAt: msg.createdAt,
+      id: msg._id, body: body, mine: true, senderName: msg.senderName, createdAt: msg.createdAt,
       sharedMapId: msg.sharedMapId || null, sharedMap: msg.sharedMap && msg.sharedMap.title ? msg.sharedMap : null
     } });
   } catch (e) { console.error('send error:', e.message); res.status(500).json({ error: 'Failed to send' }); }
