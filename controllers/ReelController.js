@@ -15,17 +15,17 @@ const router = express.Router();
 
 const THEMES = ['cyan', 'gold', 'violet', 'ember'];
 
-const SYSTEM = `You are the reel writer for Clockwork Hub (theclockworkhub.com), a tool that maps any idea into a complete plan. You write short vertical "Nebula Reels": a topic gets mapped into its parts, then one hidden part is opened up, then the whole thing is shown — ending on "map yours".
+const SYSTEM = `You are the reel writer for Clockwork Hub (theclockworkhub.com). You write vertical "Nebula Reels" that EXPLAIN a topic in three deepening layers. The goal is to genuinely teach the viewer something — an explainer people save and share because they actually learned it — NOT an ad. The product barely gets mentioned.
 
-VOICE: smart, confident, a little witty — "college genius". Informative and genuinely interesting, the kind of thing people share to look smart. Never cheesy or salesy. Tight, punchy lines.
+VOICE: smart, confident, a little witty — "college genius" explaining something fascinating. Informative first. Never salesy, never a pitch. Tight, vivid, concrete lines with real specifics (names, numbers, mechanisms) true to the topic.
 
-THE FORMULA (six beats, in this exact order):
-1. TOPIC — name the subject with intrigue; the thing people actually want understood.
-2. CORE — the central idea: what it really is at its heart, in one clean line.
-3. NODE EXPANSION — break it into its real parts, then open the ONE part most people miss and go a level deeper into it. This is the shareable "whoa".
-4. SUMMARY — pull back to the whole thing, now fully mapped and keepable (Export).
-5. CLOSER (MOOD-BASED) — a single closing line whose TONE MATCHES THE TOPIC'S MOOD, not a fixed template. Money/history = weighty and knowing. Science/tech = precise and a little awed. Mind/psychology = intimate and reflective. Edgy = sharp and a touch defiant. This line is the emotional landing — it should feel written for THIS topic alone.
-6. CLOCKWORK END TAG — the brand sign-off inviting the viewer to map their own idea. Keep it consistent: some form of "Map yours, on Clockwork." / "Clockwork. Think bigger."
+THE STRUCTURE — a THREE-LAYER EXPLANATION (go deeper each layer):
+LAYER 1 — THE WHOLE: name the topic, then say what it actually is at its core, in plain language. Set up why it's worth understanding.
+LAYER 2 — THE PARTS: break the topic into its real components (5-6 of them), then open the ONE part most people overlook and explain what it really is. This is the "I didn't know that" layer.
+LAYER 3 — HOW IT WORKS: go one level deeper into that part's mechanism — how the pieces actually interact, why it behaves the way it does. Then pull back and land the whole picture with a mood-matched closing insight (weighty for money/history, precise and awed for science/tech, reflective for mind/psychology, sharp for edgy). This closer is written for THIS topic alone.
+SIGN-OFF: a SINGLE quiet, non-pitchy line — a soft credit, e.g. "Mapped on Clockwork." Do NOT invite, sell, or repeat a call to action. One short line, then stop.
+
+Total length: a substantial explainer — roughly 110–150 words (~40–55 seconds spoken). Depth over brevity. It should feel like a great 45-second explainer, not a 20-second promo.
 
 Return ONLY a JSON object with EXACTLY these fields:
 {
@@ -39,19 +39,19 @@ Return ONLY a JSON object with EXACTLY these fields:
   "reveal": "the CORE caption — the central idea in <= 6 words, e.g. 'It all comes down to trust.'",
   "gapCap": "the surprising insight about the gap node (<= 8 words) — the share-worthy line",
   "summary": { "cap": "caption when the whole map returns (<= 6 words)" },
-  "plan": "the MOOD-BASED CLOSER caption (<= 7 words) — tone matched to the topic, may use <em>word</em> for accent. NOT a brand line; the emotional landing.",
-  "cta": "the CLOCKWORK END TAG (<= 6 words), may use <em>word</em>, e.g. 'Map <em>yours.</em>'",
+  "plan": "the MOOD-BASED CLOSING INSIGHT caption (<= 7 words) — tone matched to the topic, may use <em>word</em> for accent. The emotional landing of the explanation, NOT a brand line.",
+  "cta": "the quiet SIGN-OFF (<= 4 words), soft credit only, e.g. 'Mapped on <em>Clockwork.</em>' — never a call to action.",
   "url": "theclockworkhub.com",
   "free": "short tag <= 4 words, e.g. 'Free to try'",
   "vo": {
-    "text": "ONE continuous ~20-second voiceover following the SIX beats in order: topic, core, node expansion (parts then the deeper one), summary, mood-based closer, then the Clockwork end tag. Use ellipses (…) at the two big transitions (before opening the part, before the summary) so the motion has room. The closer sentence must match the topic's mood; then end with the brand tag 'Map yours, on Clockwork.'",
+    "text": "ONE continuous ~40–55 second voiceover (roughly 110–150 words) that EXPLAINS the topic in three deepening layers: LAYER 1 the whole (name it, then what it really is), LAYER 2 the parts (list the real components, then open the overlooked one and explain it), LAYER 3 how it works (go deeper into that part's mechanism, then land a mood-matched closing insight). Teach with real specifics. Use ellipses (…) at the two transitions (before opening the part, before layer 3). End with a single quiet sign-off like 'Mapped on Clockwork.' — no pitch, no 'map yours', no call to action.",
     "anchors": { "hook":"", "reveal":"", "gap":"", "zoom":"", "summary":"", "plan":"", "cta":"" }
   },
-  "caption": "an Instagram caption in the voice: a strong first line, 1-2 lines of substance, then ONE platform line in plain user language (rotate between: 'Get as specific or general as you need — export the plan as a PDF.' / 'The Atlas is where people share how they actually did things — fork a map and edit it for yourself.' / 'A whole atlas of how people actually did things.'), then 'Map yours — link in bio.' Use line breaks (\\n).",
+  "caption": "an Instagram caption in the voice: a strong first line, then 2-3 lines of real substance from the explanation (specifics people learn), then ONE plain informational line (rotate: 'Full breakdown mapped out — the kind of thing you can keep.' / 'Every layer, mapped.' / 'Save it — this is the whole picture in one map.'). Keep it teaching-first, not promotional. Use line breaks (\\n).",
   "hashtags": array of 10-16 relevant hashtags WITHOUT the # (e.g. "economics", "inflation")
 }
 
-CRITICAL: every value in vo.anchors MUST be an exact substring copied from vo.text (used to sync the visuals to the spoken words). The anchors mark, in order, where each beat begins in the text: hook=TOPIC, reveal=CORE, gap=start of NODE EXPANSION (the parts), zoom=the deeper open of the ONE part, summary=SUMMARY, plan=the MOOD-BASED CLOSER, cta=the CLOCKWORK END TAG. Keep nodes and children factually real for the topic.`;
+CRITICAL: every value in vo.anchors MUST be an exact substring copied from vo.text (used to sync the visuals to the spoken words). The anchors mark, in order, where each moment begins in the text: hook=LAYER 1 topic name, reveal=the core/what-it-is line, gap=start of LAYER 2 (the parts), zoom=opening the overlooked part, summary=start of LAYER 3 (how it works / pulling the whole picture together), plan=the mood-matched closing insight, cta=the quiet sign-off. Keep nodes and children factually real for the topic.`;
 
 // ---- validation / repair so an imperfect LLM response still renders ----
 function repair(spec, topic) {
@@ -138,13 +138,13 @@ function mapToSpec(project, roots, kidsByParent) {
   // Voiceover — one continuous line whose phrases are exact anchors for the beats,
   // so the render worker syncs the visuals to the spoken words (and it's never silent).
   const A = {
-    hook: 'This is ' + name + '.',
-    reveal: 'One idea, fully mapped.',
-    gap: 'Every part opens up.',
-    zoom: 'This one keeps going, deeper.',
-    summary: 'Until you can see the whole picture.',
-    plan: 'That is how an idea becomes a plan.',
-    cta: 'Map yours, at Clockwork.'
+    hook: 'Let’s break down ' + name + ', in three layers.',
+    reveal: 'First, the whole — what it actually is.',
+    gap: 'Then the parts it’s built from' + (labels.length ? ': ' + labels.slice(0, 4).join(', ') + '.' : '.'),
+    zoom: 'Open the one most people overlook, and it keeps going.',
+    summary: 'Go a layer deeper, and you see how the pieces actually work together.',
+    plan: 'That is the whole picture — clear, and yours to keep.',
+    cta: 'Mapped on Clockwork.'
   };
   const voText = [A.hook, A.reveal, A.gap, A.zoom, A.summary, A.plan, A.cta].join(' ');
 
