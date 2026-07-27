@@ -50,7 +50,7 @@ router.post('/', async (req, res) => {
       category: 'ideas', updatedAt: new Date()
     });
     res.json({ success: true, id: convo._id, name: convo.name });
-  } catch (e) { console.error('studio create:', e.message); res.status(500).json({ error: 'Could not create studio', detail: e.message, code: e.code }); }
+  } catch (e) { console.error('studio create:', e.message); res.status(500).json({ error: 'Could not create studio' }); }
 });
 
 // ── Studio details ────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const migrateQuotaIndexes = require('../scripts/migrateQuotaIndexes');
+const migrateConversationIndexes = require('../scripts/migrateConversationIndexes');
 
 async function connectDB() {
   try {
@@ -8,6 +9,7 @@ async function connectDB() {
 
     // Run migrations after connection
     await migrateQuotaIndexes();
+    await migrateConversationIndexes();
   } catch (error) {
     console.error('MongoDB connection error:', error.message);
     process.exit(1);
