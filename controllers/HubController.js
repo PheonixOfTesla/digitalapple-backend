@@ -62,6 +62,10 @@ router.get('/feed', optionalAuth, async (req, res) => {
     const before = req.query.before ? new Date(req.query.before) : null;
     const q = { hidden: { $ne: true } };
     if (before && !isNaN(before)) q.createdAt = { $lt: before };
+    // Keep admin/system/test accounts out of the public feed — the same rule the
+    // Discover rail uses. Their posts are seeds/tests, not social content.
+    const staff = await User.find({ role: { $in: ['system', 'admin'] } }).select('_id').lean();
+    if (staff.length) q.authorId = { $nin: staff.map(s => s._id) };
     const posts = await Post.find(q).sort({ createdAt: -1 }).limit(limit).lean();
     res.json({
       success: true,
