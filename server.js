@@ -751,6 +751,9 @@ try {
     return { 1: p[1] === 'open' ? 'open' : 'host', 2: p[2] === 'open' ? 'open' : 'host' };
   };
   const slotOpen = (room, slot) => policyOf(room)[slot === 2 ? 2 : 1] === 'open';
+  // The host's stage layout (auto / single / split) — pushed to the room so
+  // everyone sees the same stage, held for late joiners.
+  const stageLayout = new Map();
   studioNs.use((socket, next) => {
     try {
       const token = socket.handshake.auth?.token ||
@@ -808,9 +811,10 @@ try {
         if (s) peers.push({ socketId: sid, userId: s.userId, name: s.studioName || s.userName });
       });
       socket.emit('peers', { peers });
-      // Newcomers learn the room's sharing policy right away.
+      // Newcomers learn the room's sharing policy and stage layout right away.
       const np = policyOf(joined);
       socket.emit('share-policy', { policy: np, open: np[1] === 'open' || np[2] === 'open' });
+      if (stageLayout.get(joined)) socket.emit('stage-layout', { layout: stageLayout.get(joined) });
       // Announce this peer to everyone else.
       socket.to(joined).emit('peer-joined', { socketId: socket.id, userId: socket.userId, name: socket.studioName });
     });
@@ -957,6 +961,14 @@ try {
       });
     });
 
+    // Host sets the stage layout — the whole room follows it live.
+    socket.on('stage-layout', (payload) => {
+      if (!joined || !socket.isHost || !payload) return;
+      const layout = ['auto', 'single', 'split'].includes(payload.layout) ? payload.layout : 'auto';
+      stageLayout.set(joined, layout);
+      socket.to(joined).emit('stage-layout', { layout, by: socket.studioName || 'The host' });
+    });
+
     // Host attached / opened a blueprint — everyone refreshes the canvas panel.
     socket.on('blueprint', (payload) => {
       if (!joined || !payload) return;
@@ -966,8 +978,8 @@ try {
     socket.on('disconnect', () => {
       if (joined) {
         socket.to(joined).emit('peer-left', { socketId: socket.id, userId: socket.userId });
-        // Last one out: the room's live policy goes with them.
-        if (!studioNs.adapter.rooms.get(joined)) sharePolicy.delete(joined);
+        // Last one out: the room's live policy and layout go with them.
+        if (!studioNs.adapter.rooms.get(joined)) { sharePolicy.delete(joined); stageLayout.delete(joined); }
       }
     });
   });
