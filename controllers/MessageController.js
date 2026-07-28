@@ -85,7 +85,7 @@ router.get('/conversations', async (req, res) => {
         isRoom: !!c.isRoom, isStudio: !!c.isStudio,
         photo: c.photo || null,
         visibility: c.visibility || 'private',
-        hours: hoursPublic(c), openNow: roomOpenNow(c),
+        hours: hoursPublic(c), openNow: roomOpenNow(c), price: c.price || 0,
         // Rename/delete rights: the host always, admins even when they're not.
         canManage: (c.isRoom || c.isStudio) &&
           (admin || (c.ownerId && String(c.ownerId) === String(req.userId)))
@@ -223,6 +223,25 @@ router.post('/conversations/:id/hours', async (req, res) => {
     await convo.save();
     res.json({ success: true, hours: hoursPublic(convo), openNow: roomOpenNow(convo) });
   } catch (e) { console.error('room hours:', e.message); res.status(500).json({ error: 'Could not save hours' }); }
+});
+
+// Entry price — host (or admin) makes a room paid (cents) or free (0).
+router.post('/conversations/:id/price', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const amount = Math.max(0, Math.min(50000, parseInt((req.body || {}).amount) || 0));
+    const convo = await Conversation.findOne({ _id: req.params.id, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    if (!convo.isRoom && !convo.isStudio) return res.status(400).json({ error: 'Only rooms and Studios have entry pricing.' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can set the price.' });
+    }
+    convo.price = amount;
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, price: amount });
+  } catch (e) { console.error('room price:', e.message); res.status(500).json({ error: 'Could not set price' }); }
 });
 
 // Visibility — host (or admin) flips a room/Studio between public and private.

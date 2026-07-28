@@ -35,9 +35,9 @@ router.get('/live', (req, res) => {
 router.get('/:id/public', async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('name visibility isStudio isRoom photo hours').lean();
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('name visibility isStudio isRoom photo hours price').lean();
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
-    res.json({ success: true, studio: { id: c._id, name: c.name || 'Studio', visibility: c.visibility || 'private', photo: c.photo || null, openNow: roomOpenNow(c), hours: hoursPublic(c) } });
+    res.json({ success: true, studio: { id: c._id, name: c.name || 'Studio', visibility: c.visibility || 'private', photo: c.photo || null, openNow: roomOpenNow(c), hours: hoursPublic(c), price: c.price || 0 } });
   } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
@@ -52,6 +52,7 @@ router.post('/:id/guest', async (req, res) => {
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
     if (c.visibility !== 'public') return res.status(403).json({ error: 'This room is private — sign in and knock.' });
     if (noticeOf(c) > 0) return res.status(403).json({ error: 'This room takes visits by advance request — sign in and ask about ' + noticeOf(c) + ' hours ahead.', hours: hoursPublic(c) });
+    if ((c.price || 0) > 0) return res.status(403).json({ error: 'This room has paid entry — sign in to buy your spot.', price: c.price });
     if (!roomOpenNow(c)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(c) });
     const jwt = require('jsonwebtoken');
     const token = jwt.sign({ guest: true, studioId: String(c._id), name }, process.env.JWT_SECRET, { expiresIn: '12h' });
@@ -165,6 +166,20 @@ router.post('/:id/join', async (req, res) => {
     // queues as a join request the host answers on their own schedule.
     if (convo.visibility === 'public' && noticeOf(convo) === 0) {
       if (!roomOpenNow(convo)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(convo) });
+      // Paid rooms: the door is a Stripe checkout — the verified webhook
+      // (metadata type room_entry) makes them a member once payment lands.
+      if ((convo.price || 0) > 0) {
+        const Stripe = require('stripe');
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+        const session = await stripe.checkout.sessions.create({
+          mode: 'payment',
+          success_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}&paid=1`,
+          cancel_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}`,
+          line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Entry — ' + (convo.name || 'Studio') }, unit_amount: convo.price }, quantity: 1 }],
+          metadata: { type: 'room_entry', roomId: String(convo._id), userId: String(req.userId) }
+        });
+        return res.json({ success: true, payRequired: true, url: session.url, amount: convo.price });
+      }
       convo.participants.push(req.userId); convo.updatedAt = new Date(); await convo.save();
       return res.json({ success: true, id: convo._id, name: convo.name, member: true });
     }
@@ -184,6 +199,33 @@ router.post('/:id/join', async (req, res) => {
     }
     res.json({ success: true, pending: true, id: convo._id, name: convo.name });
   } catch (e) { console.error('studio join:', e.message); res.status(500).json({ error: 'Could not join' }); }
+});
+
+// Invite someone — plain, or "come at this time". Host (or admin) only. The
+// invitee becomes a member right away; the bell carries the when.
+router.post('/:id/invite', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(b.userId)) return res.status(400).json({ error: 'Bad id' });
+    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }], closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Studio not found' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) return res.status(403).json({ error: 'Only the host can invite.' });
+    const target = await User.findById(b.userId).select('_id').lean();
+    if (!target) return res.status(404).json({ error: 'No Clockwork Hub found for that person.' });
+    if (!(convo.participants || []).some(id => String(id) === String(b.userId))) {
+      convo.participants.push(b.userId); convo.updatedAt = new Date(); await convo.save();
+    }
+    const me = await User.findById(req.userId).select('firstName lastName email').lean();
+    const when = clampStr(b.atLabel, 60);
+    const link = 'studio.html?id=' + String(convo._id);
+    const text = nameOf(me) + ' invited you to "' + (convo.name || 'a Studio') + '"' + (when ? (' — ' + when) : '');
+    try {
+      await Notification.push({ userId: b.userId, channel: 'personal', type: 'studio_invite', actorId: req.userId, actorName: nameOf(me), text, link });
+      realtime.userEmit(b.userId, 'notify', { type: 'studio_invite', text, link });
+    } catch (e) { /* non-fatal */ }
+    res.json({ success: true, when: when || null });
+  } catch (e) { console.error('studio invite:', e.message); res.status(500).json({ error: 'Could not invite' }); }
 });
 
 // ── Host (or admin) accepts / declines a pending join request ────────────────

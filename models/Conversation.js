@@ -24,6 +24,8 @@ const conversationSchema = new mongoose.Schema({
     // Advance notice: visitors can't walk in — they request ahead (hours).
     noticeHours: { type: Number, default: 0, min: 0, max: 168 }
   },
+  // Entry price in cents (0 = free). Paid rooms collect via Stripe at the door.
+  price: { type: Number, default: 0, min: 0, max: 50000 },
   category: { type: String, enum: ['ideas', 'network', 'social', 'business', 'other'], default: 'other' },
   description: { type: String, trim: true, maxlength: 300 },
   // A room can be "about" something on the platform — an Atlas map, a Directory

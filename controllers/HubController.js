@@ -216,7 +216,7 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     };
     if (!isMe) roomQuery.visibility = 'public';
     const rooms = await Conversation.find(roomQuery)
-      .select('name isStudio category participants visibility hours updatedAt').sort({ updatedAt: -1 }).limit(12).lean();
+      .select('name isStudio category participants visibility hours price updatedAt').sort({ updatedAt: -1 }).limit(12).lean();
 
     res.json({
       success: true,
@@ -235,7 +235,7 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         isStudio: !!r.isStudio, category: r.category || 'other',
         members: (r.participants || []).length,
         visibility: r.visibility || 'private',
-        hours: hoursPublic(r), openNow: roomOpenNow(r)
+        hours: hoursPublic(r), openNow: roomOpenNow(r), price: r.price || 0
       }))
     });
   } catch (e) { console.error('profile:', e.stack || e.message); res.status(500).json({ error: 'Failed to load profile' }); }

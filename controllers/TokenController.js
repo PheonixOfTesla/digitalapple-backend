@@ -180,6 +180,31 @@ router.post('/webhook', async (req, res) => {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
 
+    // Paid room entry shares this verified webhook: payment lands → membership.
+    if (session.metadata && session.metadata.type === 'room_entry') {
+      try {
+        const Conversation = require('../models/Conversation');
+        const convo = await Conversation.findOne({ _id: session.metadata.roomId, closedAt: null });
+        if (convo && !(convo.participants || []).some(id => String(id) === String(session.metadata.userId))) {
+          convo.participants.push(session.metadata.userId);
+          convo.updatedAt = new Date();
+          await convo.save();
+          try {
+            const Notification = require('../models/Notification');
+            const realtime = require('../services/realtime');
+            const link = 'studio.html?id=' + String(convo._id);
+            const text = 'You\'re in — entry paid for "' + (convo.name || 'the room') + '"';
+            await Notification.push({ userId: session.metadata.userId, channel: 'personal', type: 'room_entry', text, link });
+            realtime.userEmit(session.metadata.userId, 'notify', { type: 'room_entry', text, link });
+          } catch (e) { /* non-fatal */ }
+        }
+        return res.json({ received: true, room: true });
+      } catch (err) {
+        console.error('[room] entry error:', err.message);
+        return res.status(500).json({ error: 'Room entry failed' });
+      }
+    }
+
     // Shop orders share this verified webhook; fulfillment lives in ShopController.
     if (session.metadata && session.metadata.type === 'shop_order') {
       try {
