@@ -20,7 +20,9 @@ const conversationSchema = new mongoose.Schema({
     open: { type: String, default: '09:00' },
     close: { type: String, default: '17:00' },
     days: { type: [Number], default: [0, 1, 2, 3, 4, 5, 6] }, // 0=Sun … 6=Sat
-    tzOffset: { type: Number, default: 0 }
+    tzOffset: { type: Number, default: 0 },
+    // Advance notice: visitors can't walk in — they request ahead (hours).
+    noticeHours: { type: Number, default: 0, min: 0, max: 168 }
   },
   category: { type: String, enum: ['ideas', 'network', 'social', 'business', 'other'], default: 'other' },
   description: { type: String, trim: true, maxlength: 300 },

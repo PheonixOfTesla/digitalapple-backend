@@ -24,11 +24,19 @@ function roomOpenNow(convo) {
   return (days.includes(day) && t >= o) || (days.includes((day + 6) % 7) && t < c);
 }
 
-// The shape clients get — nothing when hours aren't in force.
-function hoursPublic(convo) {
+// Advance-notice requirement in hours (0 = walk-ins welcome).
+function noticeOf(convo) {
   const h = convo && convo.hours;
-  if (!h || !h.enabled) return null;
-  return { enabled: true, open: h.open, close: h.close, days: h.days || [], tzOffset: h.tzOffset || 0 };
+  const n = h && parseInt(h.noticeHours);
+  return (n && n > 0) ? Math.min(168, n) : 0;
 }
 
-module.exports = { roomOpenNow, hoursPublic, minutes };
+// The shape clients get — nothing when neither hours nor notice are in force.
+function hoursPublic(convo) {
+  const h = convo && convo.hours;
+  const notice = noticeOf(convo);
+  if (!h || (!h.enabled && !notice)) return null;
+  return { enabled: !!h.enabled, open: h.open, close: h.close, days: h.days || [], tzOffset: h.tzOffset || 0, noticeHours: notice };
+}
+
+module.exports = { roomOpenNow, hoursPublic, noticeOf, minutes };

@@ -19,7 +19,7 @@ const Project = require('../models/Project');
 const Notification = require('../models/Notification');
 const realtime = require('../services/realtime');
 const { verifyToken } = require('../middleware/auth');
-const { roomOpenNow, hoursPublic } = require('../utils/roomHours');
+const { roomOpenNow, hoursPublic, noticeOf } = require('../utils/roomHours');
 
 const router = express.Router();
 
@@ -51,6 +51,7 @@ router.post('/:id/guest', async (req, res) => {
     const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('visibility isStudio isRoom name hours').lean();
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
     if (c.visibility !== 'public') return res.status(403).json({ error: 'This room is private — sign in and knock.' });
+    if (noticeOf(c) > 0) return res.status(403).json({ error: 'This room takes visits by advance request — sign in and ask about ' + noticeOf(c) + ' hours ahead.', hours: hoursPublic(c) });
     if (!roomOpenNow(c)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(c) });
     const jwt = require('jsonwebtoken');
     const token = jwt.sign({ guest: true, studioId: String(c._id), name }, process.env.JWT_SECRET, { expiresIn: '12h' });
@@ -160,7 +161,9 @@ router.post('/:id/join', async (req, res) => {
     if ((convo.participants || []).some(id => String(id) === String(req.userId))) {
       return res.json({ success: true, id: convo._id, name: convo.name, member: true });
     }
-    if (convo.visibility === 'public') {
+    // Advance-notice rooms take no walk-ins even when public: the ask below
+    // queues as a join request the host answers on their own schedule.
+    if (convo.visibility === 'public' && noticeOf(convo) === 0) {
       if (!roomOpenNow(convo)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(convo) });
       convo.participants.push(req.userId); convo.updatedAt = new Date(); await convo.save();
       return res.json({ success: true, id: convo._id, name: convo.name, member: true });

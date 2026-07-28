@@ -208,14 +208,16 @@ router.post('/conversations/:id/hours', async (req, res) => {
       return res.status(403).json({ error: 'Only the host can set business hours.' });
     }
     const enabled = b.enabled === true;
+    // Advance notice rides with hours but works on its own too.
+    const notice = Math.max(0, Math.min(168, parseInt(b.noticeHours) || 0));
     if (enabled) {
       if (minutes(b.open) == null || minutes(b.close) == null) return res.status(400).json({ error: 'Times are HH:MM.' });
       const days = Array.from(new Set((Array.isArray(b.days) ? b.days : []).map(Number).filter(d => d >= 0 && d <= 6)));
       if (!days.length) return res.status(400).json({ error: 'Pick at least one open day.' });
       const tz = Math.max(-840, Math.min(840, parseInt(b.tzOffset) || 0));
-      convo.hours = { enabled: true, open: b.open, close: b.close, days, tzOffset: tz };
+      convo.hours = { enabled: true, open: b.open, close: b.close, days, tzOffset: tz, noticeHours: notice };
     } else {
-      convo.hours = { enabled: false };
+      convo.hours = { enabled: false, noticeHours: notice };
     }
     convo.updatedAt = new Date();
     await convo.save();
