@@ -86,6 +86,12 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Stripe Express account — hosts collect room-entry payments here.
+  stripeAccountId: {
+    type: String,
+    trim: true,
+    maxlength: 64
+  },
   emailVerified: {
     type: Boolean,
     default: false

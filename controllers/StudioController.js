@@ -48,23 +48,10 @@ router.post('/:id/guest', async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
     const name = clampStr((req.body || {}).name, 60);
     if (!name) return res.status(400).json({ error: 'Tell us your name first.' });
-    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null });
+    // Anonymous guests are PUBLIC-only — private rooms take sign-in + knock.
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('visibility isStudio isRoom name hours price').lean();
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
-    if (c.visibility !== 'public') {
-      // Private: an anonymous guest can still KNOCK — the host decides.
-      const crypto = require('crypto');
-      const key = crypto.randomBytes(24).toString('hex');
-      c.guestKnocks = (c.guestKnocks || []).filter(k => k.status !== 'declined').slice(-49);
-      c.guestKnocks.push({ key, name, at: new Date(), status: 'pending' });
-      await c.save();
-      try {
-        const link = 'studio.html?id=' + String(c._id);
-        const text = name + ' (guest) is knocking on "' + (c.name || 'your room') + '"';
-        await Notification.push({ userId: c.ownerId, channel: 'personal', type: 'join_request', actorName: name, text, link });
-        realtime.userEmit(c.ownerId, 'notify', { type: 'join_request', text, link });
-      } catch (e) { /* non-fatal */ }
-      return res.json({ success: true, pending: true, key });
-    }
+    if (c.visibility !== 'public') return res.status(403).json({ error: 'This room is private — sign in and knock.' });
     if (noticeOf(c) > 0) return res.status(403).json({ error: 'This room takes visits by advance request — sign in and ask about ' + noticeOf(c) + ' hours ahead.', hours: hoursPublic(c) });
     if ((c.price || 0) > 0) return res.status(403).json({ error: 'This room has paid entry — sign in to buy your spot.', price: c.price });
     if (!roomOpenNow(c)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(c) });
@@ -72,25 +59,6 @@ router.post('/:id/guest', async (req, res) => {
     const token = jwt.sign({ guest: true, studioId: String(c._id), name }, process.env.JWT_SECRET, { expiresIn: '12h' });
     res.json({ success: true, token, name, studio: { id: c._id, name: c.name || 'Studio' } });
   } catch (e) { console.error('guest pass:', e.message); res.status(500).json({ error: 'Could not create guest pass' }); }
-});
-
-// A knocking guest polls this with their key; acceptance turns it into a pass.
-router.get('/:id/guest-status', async (req, res) => {
-  try {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const key = String(req.query.key || '').slice(0, 64);
-    if (!key) return res.status(400).json({ error: 'No key' });
-    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('guestKnocks name').lean();
-    if (!c) return res.status(404).json({ error: 'Studio not found' });
-    const k = (c.guestKnocks || []).find(g => g.key === key);
-    if (!k) return res.status(404).json({ error: 'No knock' });
-    if (k.status === 'accepted') {
-      const jwt = require('jsonwebtoken');
-      const token = jwt.sign({ guest: true, studioId: String(c._id), name: k.name }, process.env.JWT_SECRET, { expiresIn: '12h' });
-      return res.json({ success: true, status: 'accepted', token, name: k.name });
-    }
-    res.json({ success: true, status: k.status });
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
 router.use(verifyToken);
@@ -109,6 +77,22 @@ async function isAdminUser(userId) {
     return !!(u && u.role === 'admin');
   } catch (e) { return false; }
 }
+
+// Where a room's entry fee lands: the host's Express account when it can take
+// transfers (Clockwork keeps 10%), otherwise the platform account.
+const PLATFORM_FEE = 0.10;
+async function payoutDest(convo) {
+  try {
+    const host = await User.findById(convo.ownerId).select('stripeAccountId').lean();
+    if (!host || !host.stripeAccountId) return null;
+    const Stripe = require('stripe');
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+    const acct = await stripe.accounts.retrieve(host.stripeAccountId);
+    if (acct && acct.capabilities && acct.capabilities.transfers === 'active') return host.stripeAccountId;
+  } catch (e) { /* fall back to platform */ }
+  return null;
+}
+function feeFor(price) { return Math.max(1, Math.round(price * PLATFORM_FEE)); }
 
 async function members(convo) {
   const users = await User.find({ _id: { $in: convo.participants } })
@@ -174,12 +158,6 @@ router.get('/:id', async (req, res) => {
         return { id: u._id, name: nameOf(u), avatar: u.profilePhotoThumb || u.profilePhoto || null, paid: !!(e && e.paid) };
       });
     }
-    // Anonymous guest knocks ride the same accept UI, keyed instead of id'd.
-    if (isHost || await isAdminUser(req.userId)) {
-      (convo.guestKnocks || []).filter(k => k.status === 'pending').forEach(k => {
-        requests.push({ id: 'guest:' + k.key, name: (k.name || 'Guest') + ' (guest)', avatar: null, guest: true, key: k.key });
-      });
-    }
     res.json({
       success: true,
       studio: {
@@ -213,11 +191,13 @@ router.post('/:id/join', async (req, res) => {
       if ((convo.price || 0) > 0) {
         const Stripe = require('stripe');
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+        const dest = await payoutDest(convo);
         const session = await stripe.checkout.sessions.create({
           mode: 'payment',
           success_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}&paid=1`,
           cancel_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}`,
           line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Entry — ' + (convo.name || 'Studio') }, unit_amount: convo.price }, quantity: 1 }],
+          ...(dest ? { payment_intent_data: { application_fee_amount: feeFor(convo.price), transfer_data: { destination: dest } } } : {}),
           metadata: { type: 'room_entry', roomId: String(convo._id), userId: String(req.userId) }
         });
         return res.json({ success: true, payRequired: true, url: session.url, amount: convo.price });
@@ -232,11 +212,13 @@ router.post('/:id/join', async (req, res) => {
     if (!alreadyAsked && (convo.price || 0) > 0) {
       const Stripe = require('stripe');
       const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+      const dest = await payoutDest(convo);
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         success_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}&requested=1`,
         cancel_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}`,
         line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Entry request — ' + (convo.name || 'Studio') }, unit_amount: convo.price }, quantity: 1 }],
+        ...(dest ? { payment_intent_data: { application_fee_amount: feeFor(convo.price), transfer_data: { destination: dest } } } : {}),
         metadata: { type: 'room_request', roomId: String(convo._id), userId: String(req.userId) }
       });
       return res.json({ success: true, payRequired: true, url: session.url, amount: convo.price, request: true });
@@ -284,24 +266,6 @@ router.post('/:id/invite', async (req, res) => {
   } catch (e) { console.error('studio invite:', e.message); res.status(500).json({ error: 'Could not invite' }); }
 });
 
-// Host (or admin) answers an anonymous guest knock — accept turns the guest's
-// key into a pass (their poll picks it up); decline ends it.
-router.post('/:id/guest-requests/:key/:action', async (req, res) => {
-  try {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    if (req.params.action !== 'accept' && req.params.action !== 'decline') return res.status(400).json({ error: 'Bad action' });
-    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }], closedAt: null });
-    if (!convo) return res.status(404).json({ error: 'Studio not found' });
-    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
-    if (!isOwner && !(await isAdminUser(req.userId))) return res.status(403).json({ error: 'Only the host can manage requests' });
-    const k = (convo.guestKnocks || []).find(g => g.key === String(req.params.key || ''));
-    if (!k) return res.status(404).json({ error: 'No knock' });
-    k.status = req.params.action === 'accept' ? 'accepted' : 'declined';
-    await convo.save();
-    res.json({ success: true, status: k.status });
-  } catch (e) { console.error('guest request:', e.message); res.status(500).json({ error: 'Could not update request' }); }
-});
-
 // ── Host (or admin) accepts / declines a pending join request ────────────────
 router.post('/:id/requests/:userId/:action', async (req, res) => {
   try {
@@ -342,7 +306,14 @@ router.post('/:id/requests/:userId/:action', async (req, res) => {
       try {
         const Stripe = require('stripe');
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-        await stripe.refunds.create({ payment_intent: entry.paymentIntent });
+        // Destination charges (host payouts) refund with the transfer pulled
+        // back and the platform fee returned — the payer is made whole.
+        const opts = { payment_intent: entry.paymentIntent };
+        try {
+          const pi = await stripe.paymentIntents.retrieve(entry.paymentIntent);
+          if (pi && pi.transfer_data) { opts.reverse_transfer = true; opts.refund_application_fee = true; }
+        } catch (e) { /* plain refund */ }
+        await stripe.refunds.create(opts);
         try {
           await Notification.push({
             userId: uid, channel: 'personal', type: 'join_declined', actorId: req.userId,

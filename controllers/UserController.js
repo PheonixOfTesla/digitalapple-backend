@@ -123,6 +123,45 @@ router.put('/profile', verifyToken, async (req, res) => {
   }
 });
 
+// ── Stripe Express payouts: hosts collect their rooms' entry fees ────────────
+// Onboarding is Stripe-hosted; we only hold the account id. Fees route to the
+// host automatically at checkout once their account can take transfers.
+router.post('/stripe/onboard', verifyToken, async (req, res) => {
+  try {
+    const Stripe = require('stripe');
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user.stripeAccountId) {
+      const acct = await stripe.accounts.create({ type: 'express', email: user.email, capabilities: { transfers: { requested: true } } });
+      user.stripeAccountId = acct.id;
+      await user.save();
+    }
+    const link = await stripe.accountLinks.create({
+      account: user.stripeAccountId,
+      refresh_url: `${process.env.FRONTEND_URL}/profile.html?payouts=retry`,
+      return_url: `${process.env.FRONTEND_URL}/profile.html?payouts=done`,
+      type: 'account_onboarding'
+    });
+    res.json({ success: true, url: link.url });
+  } catch (e) { console.error('stripe onboard:', e.message); res.status(500).json({ error: 'Could not start payout setup' }); }
+});
+
+router.get('/stripe/status', verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('stripeAccountId').lean();
+    if (!user || !user.stripeAccountId) return res.json({ success: true, connected: false });
+    const Stripe = require('stripe');
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+    const acct = await stripe.accounts.retrieve(user.stripeAccountId);
+    res.json({
+      success: true, connected: true,
+      transfersActive: !!(acct && acct.capabilities && acct.capabilities.transfers === 'active'),
+      payoutsEnabled: !!(acct && acct.payouts_enabled)
+    });
+  } catch (e) { res.json({ success: true, connected: false }); }
+});
+
 // Upload profile photo
 router.post('/profile/photo', verifyToken, upload.single('photo'), async (req, res) => {
   try {
