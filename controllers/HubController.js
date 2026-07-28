@@ -178,9 +178,9 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     // Accepts a user id OR a vanity handle (theclockworkhub.com/<handle>).
     const key = String(req.params.id || '').toLowerCase();
     const u = mongoose.isValidObjectId(req.params.id)
-      ? await User.findById(req.params.id).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about').lean()
+      ? await User.findById(req.params.id).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about specialties links').lean()
       : (/^[a-z0-9._-]{3,30}$/.test(key)
-          ? await User.findOne({ handle: key }).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about').lean()
+          ? await User.findOne({ handle: key }).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about specialties links').lean()
           : null);
     if (!u || u.role === 'system') return res.status(404).json({ error: 'Profile not found' });
     const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || 'Member';
@@ -219,6 +219,8 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         avatar: u.profilePhotoThumb || u.profilePhoto || null,
         verified: !!u.verified, joined: u.createdAt, isMe,
         about: u.about || '',
+        specialties: u.specialties || [],
+        links: u.links || {},
         connectionState, connectionCount
       },
       maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount })),

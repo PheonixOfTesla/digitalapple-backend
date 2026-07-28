@@ -51,6 +51,24 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: 500
   },
+  // Connect profile: what you're good at — shown as tags on the public profile.
+  specialties: {
+    type: [String],
+    default: undefined
+  },
+  // Where else to find you — social/platform URLs, shown on the public profile.
+  links: {
+    x: String,
+    instagram: String,
+    facebook: String,
+    twitch: String,
+    youtube: String,
+    tiktok: String,
+    linkedin: String,
+    github: String,
+    maps: String,
+    website: String
+  },
   profilePhoto: {
     type: String // Cloudinary URL
   },
@@ -118,7 +136,10 @@ userSchema.methods.toPublicProfile = function() {
     firstName: this.firstName,
     lastName: this.lastName,
     profilePhoto: this.profilePhoto,
-    profilePhotoThumb: this.profilePhotoThumb
+    profilePhotoThumb: this.profilePhotoThumb,
+    handle: this.handle || null,
+    specialties: this.specialties || [],
+    links: this.links || {}
   };
 };
 
@@ -131,6 +152,8 @@ userSchema.methods.toPrivateProfile = function() {
     lastName: this.lastName,
     handle: this.handle || null,
     about: this.about,
+    specialties: this.specialties || [],
+    links: this.links || {},
     profilePhoto: this.profilePhoto,
     profilePhotoThumb: this.profilePhotoThumb,
     marketingOptIn: this.marketingOptIn,

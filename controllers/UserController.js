@@ -30,8 +30,22 @@ router.get('/profile', verifyToken, async (req, res) => {
 // Handles that can never be claimed — every real path plus obvious traps.
 const RESERVED_HANDLES = new Set(['admin','api','atlas','about','apply','architect','blueprint','brainstorm','build','chart','climate','connect','directory','discover','feed','host-portal','hub','hub-profile','index','lab','login','map','menu','news','privacy','profile','shared','shop','signal','signals','studio','support','terms','welcome','clockwork','digitalapple','root','www']);
 
+// Social/platform links the Connect profile accepts.
+const LINK_KEYS = ['x', 'instagram', 'facebook', 'twitch', 'youtube', 'tiktok', 'linkedin', 'github', 'maps', 'website'];
+
+// Live "is my handle free?" check — the profile editor pings this as you type.
+router.get('/handle-check', verifyToken, async (req, res) => {
+  try {
+    const h = String(req.query.handle || '').trim().toLowerCase();
+    if (!/^[a-z0-9._-]{3,30}$/.test(h)) return res.json({ available: false, reason: 'invalid' });
+    if (RESERVED_HANDLES.has(h)) return res.json({ available: false, reason: 'reserved' });
+    const taken = await User.findOne({ handle: h, _id: { $ne: req.userId } }).select('_id').lean();
+    res.json({ available: !taken, reason: taken ? 'taken' : null });
+  } catch (e) { res.status(500).json({ error: 'Check failed' }); }
+});
+
 router.put('/profile', verifyToken, async (req, res) => {
-  const { firstName, lastName, marketingOptIn, about, handle } = req.body;
+  const { firstName, lastName, marketingOptIn, about, handle, specialties, links } = req.body;
 
   try {
     const user = await User.findById(req.userId);
@@ -67,6 +81,33 @@ router.put('/profile', verifyToken, async (req, res) => {
     }
     if (about !== undefined) {
       user.about = String(about || '').trim().slice(0, 500);
+    }
+
+    // Specialties — up to 8 short tags; accepts an array or a comma string.
+    if (specialties !== undefined) {
+      const arr = (Array.isArray(specialties) ? specialties : String(specialties || '').split(','))
+        .map(s => String(s).trim().slice(0, 40)).filter(Boolean);
+      user.specialties = Array.from(new Set(arr)).slice(0, 8);
+    }
+
+    // Links — known platforms only, https-normalized, nothing script-y.
+    // An empty string clears that platform; omitted keys are left alone.
+    if (links !== undefined && links && typeof links === 'object') {
+      const current = user.links && user.links.toObject ? user.links.toObject() : (user.links || {});
+      const merged = { ...current };
+      for (const k of LINK_KEYS) {
+        if (links[k] === undefined) continue;
+        let v = String(links[k] || '').trim().slice(0, 200);
+        if (!v) { delete merged[k]; continue; }
+        if (!/^https?:\/\//i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
+        try {
+          const parsed = new URL(v);
+          if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') continue;
+        } catch (e) { continue; }
+        merged[k] = v;
+      }
+      user.links = merged;
+      user.markModified('links');
     }
 
     await user.save();
