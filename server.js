@@ -917,6 +917,13 @@ try {
       studioNs.to(String(payload.socketId)).emit('force-muted', { by: socket.studioName || 'The host' });
     });
 
+    // Host turns a member's camera off (they can turn it back on) — host-only,
+    // same contract as force-mute.
+    socket.on('force-cam-off', (payload) => {
+      if (!joined || !socket.isHost || !payload || !payload.socketId) return;
+      studioNs.to(String(payload.socketId)).emit('force-cam-off', { by: socket.studioName || 'The host' });
+    });
+
     // Host announces a role change — every client updates, and the affected
     // member's live share rights flip without a rejoin.
     socket.on('role-set', (payload) => {
