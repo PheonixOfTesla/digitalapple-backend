@@ -33,6 +33,23 @@ const RESERVED_HANDLES = new Set(['admin','api','atlas','about','apply','archite
 // Social/platform links the Connect profile accepts.
 const LINK_KEYS = ['x', 'instagram', 'facebook', 'twitch', 'youtube', 'tiktok', 'linkedin', 'github', 'maps', 'website'];
 
+// Handles are welcome: "itssjoshl" or "@itssjoshl" become the platform URL.
+const LINK_HOME = { x: 'x.com/', instagram: 'instagram.com/', facebook: 'facebook.com/', twitch: 'twitch.tv/', youtube: 'youtube.com/@', tiktok: 'tiktok.com/@', linkedin: 'linkedin.com/in/', github: 'github.com/' };
+function normalizeLink(key, raw) {
+  let v = String(raw || '').trim().slice(0, 200);
+  if (!v) return '';
+  v = v.replace(/^https?:\/\//i, '').replace(/^\/+/, '');
+  if (v.startsWith('@')) v = v.slice(1);
+  if (!v.includes('.') && LINK_HOME[key]) v = LINK_HOME[key] + v;
+  v = 'https://' + v;
+  try {
+    const p = new URL(v);
+    if (p.protocol !== 'https:') return '';
+    if (!p.hostname.includes('.')) return '';
+  } catch (e) { return ''; }
+  return v;
+}
+
 // Live "is my handle free?" check — the profile editor pings this as you type.
 router.get('/handle-check', verifyToken, async (req, res) => {
   try {
@@ -97,14 +114,10 @@ router.put('/profile', verifyToken, async (req, res) => {
       const merged = { ...current };
       for (const k of LINK_KEYS) {
         if (links[k] === undefined) continue;
-        let v = String(links[k] || '').trim().slice(0, 200);
-        if (!v) { delete merged[k]; continue; }
-        if (!/^https?:\/\//i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
-        try {
-          const parsed = new URL(v);
-          if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') continue;
-        } catch (e) { continue; }
-        merged[k] = v;
+        const raw = String(links[k] || '').trim();
+        if (!raw) { delete merged[k]; continue; }
+        const v = normalizeLink(k, raw);
+        if (v) merged[k] = v;
       }
       user.links = merged;
       user.markModified('links');
