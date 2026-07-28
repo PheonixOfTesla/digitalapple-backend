@@ -24,8 +24,17 @@ function normalizeLink(key, raw) {
     const p = new URL(v);
     if (p.protocol !== 'https:') return '';
     if (!p.hostname.includes('.')) return '';
+    // YouTube/TikTok profile paths need the @: youtube.com/josh → youtube.com/@josh.
+    // Leave real routes (watch, channel, video links…) and anything with a query alone.
+    const bare = p.hostname.replace(/^www\./, '');
+    const seg = p.pathname.replace(/\//g, '');
+    const routes = new Set(['watch', 'channel', 'c', 'user', 'shorts', 'embed', 'playlist', 'results', 'feed', 'live', 'video', 'discover', 'foryou']);
+    if ((bare === 'youtube.com' || bare === 'tiktok.com') && !p.search &&
+        /^\/[^@/]+\/?$/.test(p.pathname) && !routes.has(seg.toLowerCase())) {
+      p.pathname = '/@' + seg;
+    }
+    return p.href; // hostname comes back lowercased
   } catch (e) { return ''; }
-  return v;
 }
 
 // Repair a whole links object on the way out of the API.
