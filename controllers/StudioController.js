@@ -368,6 +368,18 @@ router.post('/:id/role', async (req, res) => {
     if (role) convo.memberRoles.push({ userId: b.userId, role });
     convo.updatedAt = new Date();
     await convo.save();
+    // A granted role rings the member's bell — hosting gets its own words.
+    if (role) {
+      try {
+        const me = await User.findById(req.userId).select('firstName lastName email').lean();
+        const link = 'studio.html?id=' + String(convo._id);
+        const text = /host/i.test(role)
+          ? nameOf(me) + ' granted you hosting in "' + (convo.name || 'a Studio') + '" — you can run the stage'
+          : nameOf(me) + ' made you ' + role + ' in "' + (convo.name || 'a Studio') + '"';
+        await Notification.push({ userId: b.userId, channel: 'personal', type: 'studio_role', actorId: req.userId, actorName: nameOf(me), text, link });
+        realtime.userEmit(b.userId, 'notify', { type: 'studio_role', text, link });
+      } catch (e) { /* non-fatal */ }
+    }
     res.json({ success: true, role });
   } catch (e) { console.error('studio role:', e.message); res.status(500).json({ error: 'Could not assign role' }); }
 });
