@@ -17,6 +17,7 @@ const SharedMap = require('../models/SharedMap');
 const Connection = require('../models/Connection');
 const Notification = require('../models/Notification');
 const { verifyToken, optionalAuth } = require('../middleware/auth');
+const { normalizeLinks } = require('../utils/links');
 
 const router = express.Router();
 
@@ -231,7 +232,7 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         visibility: r.visibility || 'private'
       }))
     });
-  } catch (e) { console.error('profile:', e.stack || e.message); res.status(500).json({ error: 'Failed to load profile', detail: String(e.message || e).slice(0, 200) }); }
+  } catch (e) { console.error('profile:', e.stack || e.message); res.status(500).json({ error: 'Failed to load profile' }); }
 });
 
 // ── Connections graph ("add you") ─────────────────────────────────────────────
