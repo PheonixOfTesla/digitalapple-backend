@@ -770,6 +770,23 @@ try {
       joined = String(studioId);
       socket.studioName = String(name).slice(0, 80);
       socket.join(joined);
+      // Screen share is permission-based, checked HERE not in the client:
+      // the host always; members only with a share-granting role. Rights are
+      // read once on join; role-set events update them live.
+      socket.isHost = false; socket.canShare = false;
+      if (!socket.isGuest && socket.userId) {
+        const Conversation = require('./models/Conversation');
+        Conversation.findOne({ _id: joined, closedAt: null }).select('ownerId memberRoles').lean().then((c) => {
+          if (!c) return;
+          const host = c.ownerId && String(c.ownerId) === String(socket.userId);
+          let role = '';
+          (c.memberRoles || []).forEach((r) => { if (String(r.userId) === String(socket.userId)) role = r.role || ''; });
+          socket.isHost = !!host;
+          socket.canShare = !!host || /host|speaker|presenter/i.test(role);
+          // Rights may have resolved after the first presence — ask for a fresh one.
+          socket.emit('presence-sync');
+        }).catch(() => {});
+      }
       // Tell the newcomer who's already here.
       const peers = [];
       const room = studioNs.adapter.rooms.get(joined);
@@ -814,14 +831,35 @@ try {
     // and screen video to the stage.
     socket.on('presence', (payload) => {
       if (!joined || !payload) return;
+      // Screen claims from sockets without share rights are stripped server-side.
+      const screenOk = !!payload.screen && !!socket.canShare;
       socket.to(joined).emit('presence', {
         socketId: socket.id, userId: socket.userId,
-        mic: !!payload.mic, screen: !!payload.screen, cam: !!payload.cam,
+        mic: !!payload.mic, screen: screenOk, cam: !!payload.cam,
         camId: payload.camId ? String(payload.camId).slice(0, 80) : null,
-        screenId: payload.screenId ? String(payload.screenId).slice(0, 80) : null,
+        screenId: screenOk && payload.screenId ? String(payload.screenId).slice(0, 80) : null,
         // Which stage slot the share targets — the stage has two screens.
         screenSlot: payload.screenSlot === 2 ? 2 : 1
       });
+    });
+
+    // A member without share rights asks the host for the floor.
+    socket.on('share-req', () => {
+      if (!joined || socket.isGuest) return;
+      studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName });
+    });
+
+    // Host announces a role change — every client updates, and the affected
+    // member's live share rights flip without a rejoin.
+    socket.on('role-set', (payload) => {
+      if (!joined || !socket.isHost || !payload || !payload.userId) return;
+      const uid = String(payload.userId).slice(0, 40), role = String(payload.role || '').slice(0, 24);
+      const room = studioNs.adapter.rooms.get(joined);
+      if (room) room.forEach((sid) => {
+        const s = studioNs.sockets.get(sid);
+        if (s && String(s.userId) === uid) s.canShare = s.isHost || /host|speaker|presenter/i.test(role);
+      });
+      studioNs.to(joined).emit('role-set', { userId: uid, role });
     });
 
     // Who's looking at whose node — relays "I expanded X's node" so every node

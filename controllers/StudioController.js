@@ -246,7 +246,8 @@ router.post('/:id/role', async (req, res) => {
     const b = req.body || {};
     if (!mongoose.isValidObjectId(b.userId)) return res.status(400).json({ error: 'Bad member id' });
     const role = clampStr(b.role, 24); // empty string clears the role
-    const convo = await Conversation.findOne({ _id: req.params.id, isStudio: true, closedAt: null });
+    // Connect rooms are Studios too — roles (and share rights) work in both.
+    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }], closedAt: null });
     if (!convo) return res.status(404).json({ error: 'Studio not found' });
     const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
     if (!isOwner && !(await isAdminUser(req.userId))) {
