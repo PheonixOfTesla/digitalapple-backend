@@ -110,7 +110,8 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const convo = await Conversation.findOne({ _id: req.params.id, isStudio: true });
+    // Every room has a Studio inside — Connect rooms (isRoom) open here too.
+    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }] });
     if (!convo) return res.status(404).json({ error: 'Studio not found' });
     const isMember = (convo.participants || []).some(id => String(id) === String(req.userId));
     if (!isMember && convo.visibility !== 'public') {
@@ -151,7 +152,8 @@ router.get('/:id', async (req, res) => {
 router.post('/:id/join', async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const convo = await Conversation.findOne({ _id: req.params.id, isStudio: true, closedAt: null });
+    // Connect rooms (isRoom) are joinable Studios too — same public/knock rules.
+    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }], closedAt: null });
     if (!convo) return res.status(404).json({ error: 'Studio not found' });
     if ((convo.participants || []).some(id => String(id) === String(req.userId))) {
       return res.json({ success: true, id: convo._id, name: convo.name, member: true });
