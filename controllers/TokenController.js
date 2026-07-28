@@ -180,6 +180,43 @@ router.post('/webhook', async (req, res) => {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
 
+    // Paid-then-accepted: payment lands → a PAID join request files, and the
+    // host seats them (or declines, which refunds via the stored intent).
+    if (session.metadata && session.metadata.type === 'room_request') {
+      try {
+        const Conversation = require('../models/Conversation');
+        const convo = await Conversation.findOne({ _id: session.metadata.roomId, closedAt: null });
+        if (convo) {
+          const uid = session.metadata.userId;
+          const isMember = (convo.participants || []).some(id => String(id) === String(uid));
+          if (!isMember) {
+            const entry = (convo.joinRequests || []).find(r => String(r.userId) === String(uid));
+            if (entry) { entry.paid = true; entry.paymentIntent = String(session.payment_intent || ''); }
+            else convo.joinRequests.push({ userId: uid, at: new Date(), paid: true, paymentIntent: String(session.payment_intent || '') });
+            convo.updatedAt = new Date();
+            await convo.save();
+            try {
+              const User = require('../models/User');
+              const Notification = require('../models/Notification');
+              const realtime = require('../services/realtime');
+              const u = await User.findById(uid).select('firstName lastName email').lean();
+              const nm = u ? ([u.firstName, u.lastName].filter(Boolean).join(' ').trim() || (u.email || 'Member').split('@')[0]) : 'Someone';
+              const amt = '$' + ((session.amount_total || 0) / 100).toFixed(0);
+              const link = 'studio.html?id=' + String(convo._id);
+              await Notification.push({ userId: convo.ownerId, channel: 'personal', type: 'join_request', actorId: uid, actorName: nm, text: nm + ' paid ' + amt + ' — requesting to join "' + (convo.name || 'your room') + '"', link });
+              realtime.userEmit(convo.ownerId, 'notify', { type: 'join_request', text: nm + ' paid ' + amt + ' to join', link });
+              await Notification.push({ userId: uid, channel: 'personal', type: 'join_pending', text: 'Payment received — waiting on the host of "' + (convo.name || 'the room') + '"', link });
+              realtime.userEmit(uid, 'notify', { type: 'join_pending', link });
+            } catch (e) { /* non-fatal */ }
+          }
+        }
+        return res.json({ received: true, room: true });
+      } catch (err) {
+        console.error('[room] request error:', err.message);
+        return res.status(500).json({ error: 'Room request failed' });
+      }
+    }
+
     // Paid room entry shares this verified webhook: payment lands → membership.
     if (session.metadata && session.metadata.type === 'room_entry') {
       try {

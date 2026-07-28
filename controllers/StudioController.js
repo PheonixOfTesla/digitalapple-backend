@@ -48,9 +48,23 @@ router.post('/:id/guest', async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
     const name = clampStr((req.body || {}).name, 60);
     if (!name) return res.status(400).json({ error: 'Tell us your name first.' });
-    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('visibility isStudio isRoom name hours').lean();
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null });
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
-    if (c.visibility !== 'public') return res.status(403).json({ error: 'This room is private — sign in and knock.' });
+    if (c.visibility !== 'public') {
+      // Private: an anonymous guest can still KNOCK — the host decides.
+      const crypto = require('crypto');
+      const key = crypto.randomBytes(24).toString('hex');
+      c.guestKnocks = (c.guestKnocks || []).filter(k => k.status !== 'declined').slice(-49);
+      c.guestKnocks.push({ key, name, at: new Date(), status: 'pending' });
+      await c.save();
+      try {
+        const link = 'studio.html?id=' + String(c._id);
+        const text = name + ' (guest) is knocking on "' + (c.name || 'your room') + '"';
+        await Notification.push({ userId: c.ownerId, channel: 'personal', type: 'join_request', actorName: name, text, link });
+        realtime.userEmit(c.ownerId, 'notify', { type: 'join_request', text, link });
+      } catch (e) { /* non-fatal */ }
+      return res.json({ success: true, pending: true, key });
+    }
     if (noticeOf(c) > 0) return res.status(403).json({ error: 'This room takes visits by advance request — sign in and ask about ' + noticeOf(c) + ' hours ahead.', hours: hoursPublic(c) });
     if ((c.price || 0) > 0) return res.status(403).json({ error: 'This room has paid entry — sign in to buy your spot.', price: c.price });
     if (!roomOpenNow(c)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(c) });
@@ -58,6 +72,25 @@ router.post('/:id/guest', async (req, res) => {
     const token = jwt.sign({ guest: true, studioId: String(c._id), name }, process.env.JWT_SECRET, { expiresIn: '12h' });
     res.json({ success: true, token, name, studio: { id: c._id, name: c.name || 'Studio' } });
   } catch (e) { console.error('guest pass:', e.message); res.status(500).json({ error: 'Could not create guest pass' }); }
+});
+
+// A knocking guest polls this with their key; acceptance turns it into a pass.
+router.get('/:id/guest-status', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const key = String(req.query.key || '').slice(0, 64);
+    if (!key) return res.status(400).json({ error: 'No key' });
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('guestKnocks name').lean();
+    if (!c) return res.status(404).json({ error: 'Studio not found' });
+    const k = (c.guestKnocks || []).find(g => g.key === key);
+    if (!k) return res.status(404).json({ error: 'No knock' });
+    if (k.status === 'accepted') {
+      const jwt = require('jsonwebtoken');
+      const token = jwt.sign({ guest: true, studioId: String(c._id), name: k.name }, process.env.JWT_SECRET, { expiresIn: '12h' });
+      return res.json({ success: true, status: 'accepted', token, name: k.name });
+    }
+    res.json({ success: true, status: k.status });
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
 router.use(verifyToken);
@@ -136,7 +169,16 @@ router.get('/:id', async (req, res) => {
     if ((isHost || await isAdminUser(req.userId)) && (convo.joinRequests || []).length) {
       const ids = convo.joinRequests.map(r => r.userId);
       const users = await User.find({ _id: { $in: ids } }).select('firstName lastName email profilePhotoThumb profilePhoto').lean();
-      requests = users.map(u => ({ id: u._id, name: nameOf(u), avatar: u.profilePhotoThumb || u.profilePhoto || null }));
+      requests = users.map(u => {
+        const e = (convo.joinRequests || []).find(r => String(r.userId) === String(u._id));
+        return { id: u._id, name: nameOf(u), avatar: u.profilePhotoThumb || u.profilePhoto || null, paid: !!(e && e.paid) };
+      });
+    }
+    // Anonymous guest knocks ride the same accept UI, keyed instead of id'd.
+    if (isHost || await isAdminUser(req.userId)) {
+      (convo.guestKnocks || []).filter(k => k.status === 'pending').forEach(k => {
+        requests.push({ id: 'guest:' + k.key, name: (k.name || 'Guest') + ' (guest)', avatar: null, guest: true, key: k.key });
+      });
     }
     res.json({
       success: true,
@@ -185,6 +227,20 @@ router.post('/:id/join', async (req, res) => {
     }
     // Private — queue the knock (once) and tell the host.
     const alreadyAsked = (convo.joinRequests || []).some(r => String(r.userId) === String(req.userId));
+    // Paid-then-accepted: on a paid room the request only files once payment
+    // lands (webhook type room_request). A declined paid request refunds.
+    if (!alreadyAsked && (convo.price || 0) > 0) {
+      const Stripe = require('stripe');
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+      const session = await stripe.checkout.sessions.create({
+        mode: 'payment',
+        success_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}&requested=1`,
+        cancel_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}`,
+        line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Entry request — ' + (convo.name || 'Studio') }, unit_amount: convo.price }, quantity: 1 }],
+        metadata: { type: 'room_request', roomId: String(convo._id), userId: String(req.userId) }
+      });
+      return res.json({ success: true, payRequired: true, url: session.url, amount: convo.price, request: true });
+    }
     if (!alreadyAsked) {
       convo.joinRequests.push({ userId: req.userId, at: new Date() });
       await convo.save();
@@ -228,6 +284,24 @@ router.post('/:id/invite', async (req, res) => {
   } catch (e) { console.error('studio invite:', e.message); res.status(500).json({ error: 'Could not invite' }); }
 });
 
+// Host (or admin) answers an anonymous guest knock — accept turns the guest's
+// key into a pass (their poll picks it up); decline ends it.
+router.post('/:id/guest-requests/:key/:action', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    if (req.params.action !== 'accept' && req.params.action !== 'decline') return res.status(400).json({ error: 'Bad action' });
+    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }], closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Studio not found' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) return res.status(403).json({ error: 'Only the host can manage requests' });
+    const k = (convo.guestKnocks || []).find(g => g.key === String(req.params.key || ''));
+    if (!k) return res.status(404).json({ error: 'No knock' });
+    k.status = req.params.action === 'accept' ? 'accepted' : 'declined';
+    await convo.save();
+    res.json({ success: true, status: k.status });
+  } catch (e) { console.error('guest request:', e.message); res.status(500).json({ error: 'Could not update request' }); }
+});
+
 // ── Host (or admin) accepts / declines a pending join request ────────────────
 router.post('/:id/requests/:userId/:action', async (req, res) => {
   try {
@@ -237,14 +311,16 @@ router.post('/:id/requests/:userId/:action', async (req, res) => {
     if (req.params.action !== 'accept' && req.params.action !== 'decline') {
       return res.status(400).json({ error: 'Bad action' });
     }
-    const convo = await Conversation.findOne({ _id: req.params.id, isStudio: true, closedAt: null });
+    // Requests live on rooms and Studios alike.
+    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }], closedAt: null });
     if (!convo) return res.status(404).json({ error: 'Studio not found' });
     const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
     if (!isOwner && !(await isAdminUser(req.userId))) {
       return res.status(403).json({ error: 'Only the host can manage requests' });
     }
     const uid = req.params.userId;
-    const had = (convo.joinRequests || []).some(r => String(r.userId) === String(uid));
+    const entry = (convo.joinRequests || []).find(r => String(r.userId) === String(uid));
+    const had = !!entry;
     convo.joinRequests = (convo.joinRequests || []).filter(r => String(r.userId) !== String(uid));
     if (req.params.action === 'accept' && had) {
       if (!(convo.participants || []).some(id => String(id) === String(uid))) convo.participants.push(uid);
@@ -261,6 +337,22 @@ router.post('/:id/requests/:userId/:action', async (req, res) => {
       return res.json({ success: true, accepted: true });
     }
     await convo.save();
+    // Declining a PAID request refunds the payment in full — automatically.
+    if (had && entry && entry.paid && entry.paymentIntent) {
+      try {
+        const Stripe = require('stripe');
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+        await stripe.refunds.create({ payment_intent: entry.paymentIntent });
+        try {
+          await Notification.push({
+            userId: uid, channel: 'personal', type: 'join_declined', actorId: req.userId,
+            text: '"' + (convo.name || 'Studio') + '" declined your request — your payment was refunded',
+            link: 'connect.html'
+          });
+          realtime.userEmit(uid, 'notify', { type: 'join_declined', link: 'connect.html' });
+        } catch (e) { /* non-fatal */ }
+      } catch (e) { console.error('refund on decline:', e.message); }
+    }
     res.json({ success: true, declined: true });
   } catch (e) { console.error('studio request:', e.message); res.status(500).json({ error: 'Could not update request' }); }
 });

@@ -50,9 +50,21 @@ const conversationSchema = new mongoose.Schema({
   }],
   // Knock-to-enter: private rooms/Studios queue join requests here until the
   // host accepts (they get a notification) — public ones are free to join.
+  // Paid rooms are paid-then-accepted: the request files only after payment,
+  // and a declined paid request refunds via its paymentIntent.
   joinRequests: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    at: { type: Date, default: Date.now }
+    at: { type: Date, default: Date.now },
+    paid: { type: Boolean, default: false },
+    paymentIntent: { type: String, trim: true, maxlength: 80 }
+  }],
+  // Anonymous guest knocks on private rooms: name-only, keyed by a random
+  // token the guest holds; when the host accepts, the key becomes a pass.
+  guestKnocks: [{
+    key: { type: String, trim: true, maxlength: 64 },
+    name: { type: String, trim: true, maxlength: 60 },
+    at: { type: Date, default: Date.now },
+    status: { type: String, enum: ['pending', 'accepted', 'declined'], default: 'pending' }
   }],
   // Archive/delete: archivedBy hides the thread for those users only; closedAt
   // set by the owner shuts the room/Studio itself down for everyone.
