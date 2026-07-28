@@ -846,10 +846,23 @@ try {
       });
     });
 
-    // A member without share rights asks the host for the floor.
+    // Anyone without share rights — members AND guests — asks the host for
+    // the floor. Guests are flagged so the host grants per-socket, not per-role.
     socket.on('share-req', () => {
-      if (!joined || socket.isGuest) return;
-      studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName });
+      if (!joined) return;
+      studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName, guest: !!socket.isGuest });
+    });
+
+    // Host grants (or revokes) share rights for one SOCKET — the only way a
+    // guest gets the floor, and it dies with their connection.
+    socket.on('grant-share', (payload) => {
+      if (!joined || !socket.isHost || !payload || !payload.socketId) return;
+      const s = studioNs.sockets.get(String(payload.socketId));
+      if (!s) return;
+      const room = studioNs.adapter.rooms.get(joined);
+      if (!room || !room.has(s.id)) return;   // only people in THIS room
+      s.canShare = payload.allow === true ? true : (s.isHost || false);
+      studioNs.to(s.id).emit('share-granted', { allow: !!s.canShare, by: socket.studioName || 'The host' });
     });
 
     // An image placed on a stage screen — share-rights gated like screen
