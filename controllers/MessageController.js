@@ -32,7 +32,7 @@ function clampStr(v, max) { return String(v == null ? '' : v).trim().slice(0, ma
 function cleanAttachment(a) {
   if (!a || typeof a !== 'object') return null;
   const url = clampStr(a.url, 500);
-  const type = ['image', 'gif', 'pdf'].includes(a.type) ? a.type : null;
+  const type = ['image', 'gif', 'pdf', 'doc'].includes(a.type) ? a.type : null;
   if (!type || !/^https:\/\/res\.cloudinary\.com\//.test(url)) return null;
   return { url, type, name: clampStr(a.name, 160) };
 }
@@ -363,7 +363,10 @@ router.post('/uploads', chatUpload.single('file'), async (req, res) => {
   try {
     if (!req.file || !req.file.path) return res.status(400).json({ error: 'No file uploaded' });
     const mt = req.file.mimetype || '';
-    const type = mt === 'application/pdf' ? 'pdf' : mt === 'image/gif' ? 'gif' : 'image';
+    const type = mt === 'application/pdf' ? 'pdf'
+      : mt === 'image/gif' ? 'gif'
+      : /msword|wordprocessingml/.test(mt) ? 'doc'
+      : 'image';
     res.json({ success: true, url: req.file.path, type, name: clampStr(req.file.originalname, 160) });
   } catch (e) { console.error('chat upload error:', e.message); res.status(500).json({ error: 'Upload failed' }); }
 });

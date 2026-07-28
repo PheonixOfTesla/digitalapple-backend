@@ -64,7 +64,7 @@ if (isCloudinaryConfigured) {
     params: {
       folder: 'digitalapple/chat',
       resource_type: 'auto',
-      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf']
+      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf', 'doc', 'docx']
     }
   });
 } else {
@@ -79,9 +79,9 @@ const chatUpload = multer({
       cb(new Error('Uploads not configured. Contact administrator.'), false);
       return;
     }
-    const ok = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
+    const ok = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
     if (ok.includes(file.mimetype)) cb(null, true);
-    else cb(new Error('Only images, GIFs, and PDFs are allowed.'), false);
+    else cb(new Error('Images, GIFs, PDFs, and Word documents are allowed.'), false);
   }
 });
 

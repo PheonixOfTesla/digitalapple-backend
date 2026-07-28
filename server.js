@@ -815,7 +815,7 @@ try {
       // send path is what persists it; this is just the live relay.
       let att = null;
       const a = payload.attachment;
-      if (a && typeof a === 'object' && /^https:\/\/res\.cloudinary\.com\//.test(String(a.url || '')) && ['image', 'gif', 'pdf'].includes(a.type)) {
+      if (a && typeof a === 'object' && /^https:\/\/res\.cloudinary\.com\//.test(String(a.url || '')) && ['image', 'gif', 'pdf', 'doc'].includes(a.type)) {
         att = { url: String(a.url).slice(0, 500), type: a.type, name: String(a.name || '').slice(0, 160) };
       }
       if (!chatBody && !att) return;
@@ -847,6 +847,19 @@ try {
     socket.on('share-req', () => {
       if (!joined || socket.isGuest) return;
       studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName });
+    });
+
+    // A document (PDF / image / Word) placed on a stage screen — share-rights
+    // gated like screen share. doc:null clears the slot.
+    socket.on('doc-slot', (payload) => {
+      if (!joined || !payload || !socket.canShare) return;
+      const slot = payload.slot === 2 ? 2 : 1;
+      let doc = null;
+      const d = payload.doc;
+      if (d && typeof d === 'object' && /^https:\/\/res\.cloudinary\.com\//.test(String(d.url || '')) && ['image', 'gif', 'pdf', 'doc'].includes(d.type)) {
+        doc = { url: String(d.url).slice(0, 500), type: d.type, name: String(d.name || '').slice(0, 160) };
+      }
+      studioNs.to(joined).emit('doc-slot', { slot, doc, by: socket.studioName || 'Someone', from: socket.id });
     });
 
     // Host mutes a member (Zoom-style: they can unmute themselves). Host-only,
