@@ -838,8 +838,11 @@ try {
         mic: !!payload.mic, screen: screenOk, cam: !!payload.cam,
         camId: payload.camId ? String(payload.camId).slice(0, 80) : null,
         screenId: screenOk && payload.screenId ? String(payload.screenId).slice(0, 80) : null,
-        // Which stage slot the share targets — the stage has two screens.
-        screenSlot: payload.screenSlot === 2 ? 2 : 1
+        // Which stage slot the share targets — the stage has two screens, and
+        // one person may drive both (screen on one, a browser tab on the other).
+        screenSlot: payload.screenSlot === 2 ? 2 : 1,
+        screen2Id: screenOk && payload.screen2Id ? String(payload.screen2Id).slice(0, 80) : null,
+        screen2Slot: payload.screen2Slot === 2 ? 2 : 1
       });
     });
 
@@ -849,14 +852,15 @@ try {
       studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName });
     });
 
-    // A document (PDF / image / Word) placed on a stage screen — share-rights
-    // gated like screen share. doc:null clears the slot.
+    // An image placed on a stage screen — share-rights gated like screen
+    // share. Images only for now (PDF/Word live in chat + Resources until a
+    // proper page renderer exists). doc:null clears the slot.
     socket.on('doc-slot', (payload) => {
       if (!joined || !payload || !socket.canShare) return;
       const slot = payload.slot === 2 ? 2 : 1;
       let doc = null;
       const d = payload.doc;
-      if (d && typeof d === 'object' && /^https:\/\/res\.cloudinary\.com\//.test(String(d.url || '')) && ['image', 'gif', 'pdf', 'doc'].includes(d.type)) {
+      if (d && typeof d === 'object' && /^https:\/\/res\.cloudinary\.com\//.test(String(d.url || '')) && ['image', 'gif'].includes(d.type)) {
         doc = { url: String(d.url).slice(0, 500), type: d.type, name: String(d.name || '').slice(0, 160) };
       }
       studioNs.to(joined).emit('doc-slot', { slot, doc, by: socket.studioName || 'Someone', from: socket.id });
