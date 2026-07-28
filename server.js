@@ -739,6 +739,9 @@ try {
   // "blueprint attached" event between peers in the same studio room. Media never
   // touches the server (peer-to-peer, DTLS-SRTP encrypted).
   const studioNs = io.of('/studio');
+  // Per-room sharing policy: 'host' (default — host + granted people only) or
+  // 'open' (everyone, guests included). Lives with the live room, host-set.
+  const sharePolicy = new Map();
   studioNs.use((socket, next) => {
     try {
       const token = socket.handshake.auth?.token ||
@@ -796,6 +799,8 @@ try {
         if (s) peers.push({ socketId: sid, userId: s.userId, name: s.studioName || s.userName });
       });
       socket.emit('peers', { peers });
+      // Newcomers learn the room's sharing policy right away.
+      socket.emit('share-policy', { open: sharePolicy.get(joined) === 'open' });
       // Announce this peer to everyone else.
       socket.to(joined).emit('peer-joined', { socketId: socket.id, userId: socket.userId, name: socket.studioName });
     });
@@ -832,7 +837,7 @@ try {
     socket.on('presence', (payload) => {
       if (!joined || !payload) return;
       // Screen claims from sockets without share rights are stripped server-side.
-      const screenOk = !!payload.screen && !!socket.canShare;
+      const screenOk = !!payload.screen && (!!socket.canShare || sharePolicy.get(joined) === 'open');
       socket.to(joined).emit('presence', {
         socketId: socket.id, userId: socket.userId,
         mic: !!payload.mic, screen: screenOk, cam: !!payload.cam,
@@ -853,6 +858,14 @@ try {
       studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName, guest: !!socket.isGuest });
     });
 
+    // Host flips the room's sharing policy: host-managed or open to everyone.
+    socket.on('share-policy', (payload) => {
+      if (!joined || !socket.isHost || !payload) return;
+      const open = payload.open === true;
+      sharePolicy.set(joined, open ? 'open' : 'host');
+      studioNs.to(joined).emit('share-policy', { open, by: socket.studioName || 'The host' });
+    });
+
     // Host grants (or revokes) share rights for one SOCKET — the only way a
     // guest gets the floor, and it dies with their connection.
     socket.on('grant-share', (payload) => {
@@ -869,7 +882,7 @@ try {
     // share. Images only for now (PDF/Word live in chat + Resources until a
     // proper page renderer exists). doc:null clears the slot.
     socket.on('doc-slot', (payload) => {
-      if (!joined || !payload || !socket.canShare) return;
+      if (!joined || !payload || !(socket.canShare || sharePolicy.get(joined) === 'open')) return;
       const slot = payload.slot === 2 ? 2 : 1;
       let doc = null;
       const d = payload.doc;
@@ -926,7 +939,11 @@ try {
     });
 
     socket.on('disconnect', () => {
-      if (joined) socket.to(joined).emit('peer-left', { socketId: socket.id, userId: socket.userId });
+      if (joined) {
+        socket.to(joined).emit('peer-left', { socketId: socket.id, userId: socket.userId });
+        // Last one out: the room's live policy goes with them.
+        if (!studioNs.adapter.rooms.get(joined)) sharePolicy.delete(joined);
+      }
     });
   });
 
