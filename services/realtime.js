@@ -53,4 +53,19 @@ function userEmit(userId, event, payload) {
   }
 }
 
-module.exports = { setIO, adminEmit, emitAnalytics, emitNebula, userEmit };
+// Which studios are LIVE right now — sockets connected in the /studio
+// namespace, keyed by studio id. Powers the LIVE pills on Hub/lobby cards.
+function liveStudioCounts(ids) {
+  const out = {};
+  if (!io) return out;
+  try {
+    const rooms = io.of('/studio').adapter.rooms;
+    (ids || []).forEach((id) => {
+      const r = rooms.get(String(id));
+      if (r && r.size > 0) out[String(id)] = r.size;
+    });
+  } catch (e) { /* fire-and-forget */ }
+  return out;
+}
+
+module.exports = { setIO, adminEmit, emitAnalytics, emitNebula, userEmit, liveStudioCounts };

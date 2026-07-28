@@ -263,8 +263,12 @@ router.get('/google/status', (req, res) => res.json({ configured: GOOGLE.configu
 // Step 1 — bounce the user to Google's consent screen.
 router.get('/google', (req, res) => {
   if (!GOOGLE.configured()) return res.status(503).json({ error: 'Google sign-in not configured' });
+  // Optional return path: land the user back where they started (a Studio
+  // link, a lobby) instead of the generic Hub. Same-site paths only.
+  let ret = String(req.query.return || '');
+  if (!/^\/[^/\\]/.test(ret) || ret.length > 300) ret = '';
   // Signed, short-lived state guards against CSRF on the callback.
-  const state = jwt.sign({ t: 'goauth' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  const state = jwt.sign({ t: 'goauth', r: ret || undefined }, process.env.JWT_SECRET, { expiresIn: '10m' });
   const params = new URLSearchParams({
     client_id: GOOGLE.clientId(),
     redirect_uri: GOOGLE.redirectUri(),
@@ -285,7 +289,11 @@ router.get('/google/callback', async (req, res) => {
     if (!GOOGLE.configured()) return fail('not_configured');
     const { code, state } = req.query;
     if (!code) return fail('no_code');
-    try { jwt.verify(state, process.env.JWT_SECRET); } catch (e) { return fail('bad_state'); }
+    let ret = '';
+    try {
+      const st = jwt.verify(state, process.env.JWT_SECRET);
+      if (st && typeof st.r === 'string' && /^\/[^/\\]/.test(st.r) && st.r.length <= 300) ret = st.r;
+    } catch (e) { return fail('bad_state'); }
 
     // Exchange the authorization code for tokens.
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -329,8 +337,9 @@ router.get('/google/callback', async (req, res) => {
     }
 
     const token = generateToken(user);
-    // Hand the JWT to the frontend via the URL fragment (never logged by servers).
-    res.redirect(GOOGLE.frontend() + '/host-portal.html#gtoken=' + token);
+    // Hand the JWT to the frontend via the URL fragment (never logged by
+    // servers). Land back where they started — a Studio link stays a Studio.
+    res.redirect(GOOGLE.frontend() + (ret || '/host-portal.html') + '#gtoken=' + token);
   } catch (e) {
     console.error('[google callback]', e.message);
     fail('server_error');

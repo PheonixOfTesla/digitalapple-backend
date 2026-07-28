@@ -21,6 +21,41 @@ const realtime = require('../services/realtime');
 const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
+
+// ── Public routes (no sign-in) — mounted BEFORE the auth wall ────────────────
+
+// Who's live right now — socket headcount per studio, for LIVE pills.
+router.get('/live', (req, res) => {
+  const ids = String(req.query.ids || '').split(',').filter(id => mongoose.isValidObjectId(id)).slice(0, 40);
+  res.json({ success: true, live: realtime.liveStudioCounts(ids) });
+});
+
+// Just enough about a studio to render the door: name + public/private.
+router.get('/:id/public', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('name visibility isStudio isRoom photo').lean();
+    if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
+    res.json({ success: true, studio: { id: c._id, name: c.name || 'Studio', visibility: c.visibility || 'private', photo: c.photo || null } });
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// Guest pass: a name is enough to walk into a PUBLIC studio. The pass is a
+// short-lived token scoped to this one room — no account, no other access.
+router.post('/:id/guest', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const name = clampStr((req.body || {}).name, 60);
+    if (!name) return res.status(400).json({ error: 'Tell us your name first.' });
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('visibility isStudio isRoom name').lean();
+    if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
+    if (c.visibility !== 'public') return res.status(403).json({ error: 'This room is private — sign in and knock.' });
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign({ guest: true, studioId: String(c._id), name }, process.env.JWT_SECRET, { expiresIn: '12h' });
+    res.json({ success: true, token, name, studio: { id: c._id, name: c.name || 'Studio' } });
+  } catch (e) { console.error('guest pass:', e.message); res.status(500).json({ error: 'Could not create guest pass' }); }
+});
+
 router.use(verifyToken);
 
 function nameOf(u) {

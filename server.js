@@ -745,8 +745,17 @@ try {
                     (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
       if (!token) return next(new Error('unauthorized'));
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      socket.userId = decoded.userId || decoded.id || decoded._id;
-      socket.userName = decoded.name || decoded.email || 'Member';
+      if (decoded.guest === true) {
+        // Guest pass: name-only entry, valid for ONE public studio.
+        socket.isGuest = true;
+        socket.guestStudioId = String(decoded.studioId || '');
+        socket.userId = null;
+        socket.userName = (String(decoded.name || 'Guest').slice(0, 60)) + ' (guest)';
+        if (!socket.guestStudioId) return next(new Error('unauthorized'));
+      } else {
+        socket.userId = decoded.userId || decoded.id || decoded._id;
+        socket.userName = decoded.name || decoded.email || 'Member';
+      }
       next();
     } catch (e) { next(new Error('unauthorized')); }
   });
@@ -757,6 +766,7 @@ try {
       const studioId = payload && payload.studioId;
       const name = (payload && payload.name) || socket.userName;
       if (!studioId) return;
+      if (socket.isGuest && String(studioId) !== socket.guestStudioId) return; // pass is scoped
       joined = String(studioId);
       socket.studioName = String(name).slice(0, 80);
       socket.join(joined);
