@@ -231,7 +231,7 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         visibility: r.visibility || 'private'
       }))
     });
-  } catch (e) { console.error('profile:', e.message); res.status(500).json({ error: 'Failed to load profile' }); }
+  } catch (e) { console.error('profile:', e.stack || e.message); res.status(500).json({ error: 'Failed to load profile', detail: String(e.message || e).slice(0, 200) }); }
 });
 
 // ── Connections graph ("add you") ─────────────────────────────────────────────
