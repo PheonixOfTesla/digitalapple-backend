@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizeLinks } = require('../utils/links');
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -139,7 +140,7 @@ userSchema.methods.toPublicProfile = function() {
     profilePhotoThumb: this.profilePhotoThumb,
     handle: this.handle || null,
     specialties: this.specialties || [],
-    links: this.links || {}
+    links: normalizeLinks(this.links)
   };
 };
 
@@ -153,7 +154,7 @@ userSchema.methods.toPrivateProfile = function() {
     handle: this.handle || null,
     about: this.about,
     specialties: this.specialties || [],
-    links: this.links || {},
+    links: normalizeLinks(this.links),
     profilePhoto: this.profilePhoto,
     profilePhotoThumb: this.profilePhotoThumb,
     marketingOptIn: this.marketingOptIn,

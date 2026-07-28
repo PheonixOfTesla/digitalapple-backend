@@ -220,7 +220,7 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         verified: !!u.verified, joined: u.createdAt, isMe,
         about: u.about || '',
         specialties: u.specialties || [],
-        links: u.links || {},
+        links: normalizeLinks(u.links),
         connectionState, connectionCount
       },
       maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount })),
