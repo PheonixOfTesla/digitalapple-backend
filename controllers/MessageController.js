@@ -192,6 +192,25 @@ router.post('/conversations/:id/rename', async (req, res) => {
   } catch (e) { console.error('rename convo:', e.message); res.status(500).json({ error: 'Could not rename' }); }
 });
 
+// Visibility — host (or admin) flips a room/Studio between public and private.
+router.post('/conversations/:id/visibility', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const v = (req.body || {}).visibility === 'public' ? 'public' : 'private';
+    const convo = await Conversation.findOne({ _id: req.params.id, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    if (!convo.isRoom && !convo.isStudio) return res.status(400).json({ error: 'Only rooms and Studios have visibility.' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can change visibility.' });
+    }
+    convo.visibility = v;
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, visibility: v });
+  } catch (e) { console.error('room visibility:', e.message); res.status(500).json({ error: 'Could not change visibility' }); }
+});
+
 // Room photo — host (or admin) uploads an image that fronts the room
 // everywhere its orb shows. Images only; hosted on Cloudinary like all uploads.
 router.post('/conversations/:id/photo', chatUpload.single('file'), async (req, res) => {

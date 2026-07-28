@@ -207,11 +207,15 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     const Conversation = require('../models/Conversation');
     // Lobby shows PUBLIC rooms only — private rooms stay invisible here.
     // (Signed-in visitors can join public ones; private entry is by direct
-    // invite link, where the knock flow takes over.)
-    const rooms = await Conversation.find({
-      ownerId: u._id, closedAt: null, visibility: 'public',
+    // invite link, where the knock flow takes over.) The OWNER sees all of
+    // their rooms, private included — the lobby doubles as their console.
+    const roomQuery = {
+      ownerId: u._id, closedAt: null,
       $or: [{ isStudio: true }, { isRoom: true }]
-    }).select('name isStudio category participants visibility updatedAt').sort({ updatedAt: -1 }).limit(8).lean();
+    };
+    if (!isMe) roomQuery.visibility = 'public';
+    const rooms = await Conversation.find(roomQuery)
+      .select('name isStudio category participants visibility updatedAt').sort({ updatedAt: -1 }).limit(12).lean();
 
     res.json({
       success: true,
