@@ -849,6 +849,13 @@ try {
       studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName });
     });
 
+    // Host mutes a member (Zoom-style: they can unmute themselves). Host-only,
+    // checked against the rights resolved at join — not a client claim.
+    socket.on('force-mute', (payload) => {
+      if (!joined || !socket.isHost || !payload || !payload.socketId) return;
+      studioNs.to(String(payload.socketId)).emit('force-muted', { by: socket.studioName || 'The host' });
+    });
+
     // Host announces a role change — every client updates, and the affected
     // member's live share rights flip without a rejoin.
     socket.on('role-set', (payload) => {
