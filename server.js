@@ -742,6 +742,15 @@ try {
   // Per-room sharing policy: 'host' (default — host + granted people only) or
   // 'open' (everyone, guests included). Lives with the live room, host-set.
   const sharePolicy = new Map();
+  // Policy is PER STAGE SCREEN: {1:'host'|'open', 2:'host'|'open'}. A plain
+  // string (pre-slot deploys) reads as both screens set the same way.
+  const policyOf = (room) => {
+    const p = sharePolicy.get(room);
+    if (!p) return { 1: 'host', 2: 'host' };
+    if (typeof p === 'string') return { 1: p, 2: p };
+    return { 1: p[1] === 'open' ? 'open' : 'host', 2: p[2] === 'open' ? 'open' : 'host' };
+  };
+  const slotOpen = (room, slot) => policyOf(room)[slot === 2 ? 2 : 1] === 'open';
   studioNs.use((socket, next) => {
     try {
       const token = socket.handshake.auth?.token ||
@@ -800,7 +809,8 @@ try {
       });
       socket.emit('peers', { peers });
       // Newcomers learn the room's sharing policy right away.
-      socket.emit('share-policy', { open: sharePolicy.get(joined) === 'open' });
+      const np = policyOf(joined);
+      socket.emit('share-policy', { policy: np, open: np[1] === 'open' || np[2] === 'open' });
       // Announce this peer to everyone else.
       socket.to(joined).emit('peer-joined', { socketId: socket.id, userId: socket.userId, name: socket.studioName });
     });
@@ -836,17 +846,20 @@ try {
     // and screen video to the stage.
     socket.on('presence', (payload) => {
       if (!joined || !payload) return;
-      // Screen claims from sockets without share rights are stripped server-side.
-      const screenOk = !!payload.screen && (!!socket.canShare || sharePolicy.get(joined) === 'open');
+      // Screen claims from sockets without share rights are stripped server-side
+      // — PER SLOT: the host can open Screen 1, Screen 2, both, or neither.
+      const ok1 = !!socket.canShare || slotOpen(joined, payload.screenSlot === 2 ? 2 : 1);
+      const ok2 = !!socket.canShare || slotOpen(joined, payload.screen2Slot === 2 ? 2 : 1);
+      const screenOk = !!payload.screen && (ok1 || ok2);
       socket.to(joined).emit('presence', {
         socketId: socket.id, userId: socket.userId,
         mic: !!payload.mic, screen: screenOk, cam: !!payload.cam,
         camId: payload.camId ? String(payload.camId).slice(0, 80) : null,
-        screenId: screenOk && payload.screenId ? String(payload.screenId).slice(0, 80) : null,
+        screenId: ok1 && payload.screenId ? String(payload.screenId).slice(0, 80) : null,
         // Which stage slot the share targets — the stage has two screens, and
         // one person may drive both (screen on one, a browser tab on the other).
         screenSlot: payload.screenSlot === 2 ? 2 : 1,
-        screen2Id: screenOk && payload.screen2Id ? String(payload.screen2Id).slice(0, 80) : null,
+        screen2Id: ok2 && payload.screen2Id ? String(payload.screen2Id).slice(0, 80) : null,
         screen2Slot: payload.screen2Slot === 2 ? 2 : 1
       });
     });
@@ -858,12 +871,16 @@ try {
       studioNs.to(joined).emit('share-req', { socketId: socket.id, userId: socket.userId, name: socket.studioName || socket.userName, guest: !!socket.isGuest });
     });
 
-    // Host flips the room's sharing policy: host-managed or open to everyone.
+    // Host flips a STAGE SCREEN's sharing policy: host-managed or open to
+    // everyone. No slot in the payload = both screens (older clients).
     socket.on('share-policy', (payload) => {
       if (!joined || !socket.isHost || !payload) return;
-      const open = payload.open === true;
-      sharePolicy.set(joined, open ? 'open' : 'host');
-      studioNs.to(joined).emit('share-policy', { open, by: socket.studioName || 'The host' });
+      const mode = (payload.open === true || payload.mode === 'open') ? 'open' : 'host';
+      const cur = policyOf(joined);
+      const slot = payload.slot === 2 ? 2 : payload.slot === 1 ? 1 : null;
+      if (slot) cur[slot] = mode; else { cur[1] = mode; cur[2] = mode; }
+      sharePolicy.set(joined, cur);
+      studioNs.to(joined).emit('share-policy', { policy: cur, open: cur[1] === 'open' || cur[2] === 'open', by: socket.studioName || 'The host' });
     });
 
     // Host grants (or revokes) share rights for one SOCKET — the only way a
@@ -882,8 +899,9 @@ try {
     // share. Images only for now (PDF/Word live in chat + Resources until a
     // proper page renderer exists). doc:null clears the slot.
     socket.on('doc-slot', (payload) => {
-      if (!joined || !payload || !(socket.canShare || sharePolicy.get(joined) === 'open')) return;
+      if (!joined || !payload) return;
       const slot = payload.slot === 2 ? 2 : 1;
+      if (!(socket.canShare || slotOpen(joined, slot))) return;
       let doc = null;
       const d = payload.doc;
       if (d && typeof d === 'object' && /^https:\/\/res\.cloudinary\.com\//.test(String(d.url || '')) && ['image', 'gif'].includes(d.type)) {
