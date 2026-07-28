@@ -21,6 +21,7 @@ const { verifyToken } = require('../middleware/auth');
 const { encryptText, decryptText } = require('../services/crypto');
 const realtime = require('../services/realtime');
 const { chatUpload } = require('../config/cloudinary');
+const { roomOpenNow, hoursPublic, minutes } = require('../utils/roomHours');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -84,6 +85,7 @@ router.get('/conversations', async (req, res) => {
         isRoom: !!c.isRoom, isStudio: !!c.isStudio,
         photo: c.photo || null,
         visibility: c.visibility || 'private',
+        hours: hoursPublic(c), openNow: roomOpenNow(c),
         // Rename/delete rights: the host always, admins even when they're not.
         canManage: (c.isRoom || c.isStudio) &&
           (admin || (c.ownerId && String(c.ownerId) === String(req.userId)))
@@ -191,6 +193,34 @@ router.post('/conversations/:id/rename', async (req, res) => {
     await convo.save();
     res.json({ success: true, name });
   } catch (e) { console.error('rename convo:', e.message); res.status(500).json({ error: 'Could not rename' }); }
+});
+
+// Business hours — host (or admin) schedules when the room is open to walk-ins.
+router.post('/conversations/:id/hours', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const b = req.body || {};
+    const convo = await Conversation.findOne({ _id: req.params.id, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    if (!convo.isRoom && !convo.isStudio) return res.status(400).json({ error: 'Only rooms and Studios have hours.' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can set business hours.' });
+    }
+    const enabled = b.enabled === true;
+    if (enabled) {
+      if (minutes(b.open) == null || minutes(b.close) == null) return res.status(400).json({ error: 'Times are HH:MM.' });
+      const days = Array.from(new Set((Array.isArray(b.days) ? b.days : []).map(Number).filter(d => d >= 0 && d <= 6)));
+      if (!days.length) return res.status(400).json({ error: 'Pick at least one open day.' });
+      const tz = Math.max(-840, Math.min(840, parseInt(b.tzOffset) || 0));
+      convo.hours = { enabled: true, open: b.open, close: b.close, days, tzOffset: tz };
+    } else {
+      convo.hours = { enabled: false };
+    }
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, hours: hoursPublic(convo), openNow: roomOpenNow(convo) });
+  } catch (e) { console.error('room hours:', e.message); res.status(500).json({ error: 'Could not save hours' }); }
 });
 
 // Visibility — host (or admin) flips a room/Studio between public and private.

@@ -18,6 +18,7 @@ const Connection = require('../models/Connection');
 const Notification = require('../models/Notification');
 const { verifyToken, optionalAuth } = require('../middleware/auth');
 const { normalizeLinks } = require('../utils/links');
+const { roomOpenNow, hoursPublic } = require('../utils/roomHours');
 
 const router = express.Router();
 
@@ -215,7 +216,7 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     };
     if (!isMe) roomQuery.visibility = 'public';
     const rooms = await Conversation.find(roomQuery)
-      .select('name isStudio category participants visibility updatedAt').sort({ updatedAt: -1 }).limit(12).lean();
+      .select('name isStudio category participants visibility hours updatedAt').sort({ updatedAt: -1 }).limit(12).lean();
 
     res.json({
       success: true,
@@ -233,7 +234,8 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         id: r._id, name: r.name || (r.isStudio ? 'Studio' : 'Room'),
         isStudio: !!r.isStudio, category: r.category || 'other',
         members: (r.participants || []).length,
-        visibility: r.visibility || 'private'
+        visibility: r.visibility || 'private',
+        hours: hoursPublic(r), openNow: roomOpenNow(r)
       }))
     });
   } catch (e) { console.error('profile:', e.stack || e.message); res.status(500).json({ error: 'Failed to load profile' }); }

@@ -19,6 +19,7 @@ const Project = require('../models/Project');
 const Notification = require('../models/Notification');
 const realtime = require('../services/realtime');
 const { verifyToken } = require('../middleware/auth');
+const { roomOpenNow, hoursPublic } = require('../utils/roomHours');
 
 const router = express.Router();
 
@@ -34,9 +35,9 @@ router.get('/live', (req, res) => {
 router.get('/:id/public', async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('name visibility isStudio isRoom photo').lean();
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('name visibility isStudio isRoom photo hours').lean();
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
-    res.json({ success: true, studio: { id: c._id, name: c.name || 'Studio', visibility: c.visibility || 'private', photo: c.photo || null } });
+    res.json({ success: true, studio: { id: c._id, name: c.name || 'Studio', visibility: c.visibility || 'private', photo: c.photo || null, openNow: roomOpenNow(c), hours: hoursPublic(c) } });
   } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
@@ -47,9 +48,10 @@ router.post('/:id/guest', async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
     const name = clampStr((req.body || {}).name, 60);
     if (!name) return res.status(400).json({ error: 'Tell us your name first.' });
-    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('visibility isStudio isRoom name').lean();
+    const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('visibility isStudio isRoom name hours').lean();
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
     if (c.visibility !== 'public') return res.status(403).json({ error: 'This room is private — sign in and knock.' });
+    if (!roomOpenNow(c)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(c) });
     const jwt = require('jsonwebtoken');
     const token = jwt.sign({ guest: true, studioId: String(c._id), name }, process.env.JWT_SECRET, { expiresIn: '12h' });
     res.json({ success: true, token, name, studio: { id: c._id, name: c.name || 'Studio' } });
@@ -159,6 +161,7 @@ router.post('/:id/join', async (req, res) => {
       return res.json({ success: true, id: convo._id, name: convo.name, member: true });
     }
     if (convo.visibility === 'public') {
+      if (!roomOpenNow(convo)) return res.status(403).json({ error: 'Outside business hours — come back when the room opens.', hours: hoursPublic(convo) });
       convo.participants.push(req.userId); convo.updatedAt = new Date(); await convo.save();
       return res.json({ success: true, id: convo._id, name: convo.name, member: true });
     }

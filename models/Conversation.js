@@ -13,6 +13,15 @@ const conversationSchema = new mongoose.Schema({
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   // Social rooms of all types: public (anyone can join) or private (invite).
   visibility: { type: String, enum: ['private', 'public'], default: 'private' },
+  // Business hours: when enabled, non-members can only walk in while open.
+  // Times are host-local HH:MM; tzOffset is the host's getTimezoneOffset().
+  hours: {
+    enabled: { type: Boolean, default: false },
+    open: { type: String, default: '09:00' },
+    close: { type: String, default: '17:00' },
+    days: { type: [Number], default: [0, 1, 2, 3, 4, 5, 6] }, // 0=Sun … 6=Sat
+    tzOffset: { type: Number, default: 0 }
+  },
   category: { type: String, enum: ['ideas', 'network', 'social', 'business', 'other'], default: 'other' },
   description: { type: String, trim: true, maxlength: 300 },
   // A room can be "about" something on the platform — an Atlas map, a Directory
