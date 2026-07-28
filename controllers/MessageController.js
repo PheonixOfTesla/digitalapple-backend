@@ -83,6 +83,7 @@ router.get('/conversations', async (req, res) => {
         unread, updatedAt: c.updatedAt,
         isRoom: !!c.isRoom, isStudio: !!c.isStudio,
         photo: c.photo || null,
+        visibility: c.visibility || 'private',
         // Rename/delete rights: the host always, admins even when they're not.
         canManage: (c.isRoom || c.isStudio) &&
           (admin || (c.ownerId && String(c.ownerId) === String(req.userId)))
