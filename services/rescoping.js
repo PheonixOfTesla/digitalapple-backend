@@ -829,36 +829,37 @@ async function generateCoreIntegration(allNodes, edges = [], coreDoc = null) {
   // Lazy-load AI client
   const { client, model, prefix } = getAIClient();
 
-  const systemPrompt = prefix + `You are Clockwork — a sharp, plain-spoken advisor who thinks with users about their plans.
+  const systemPrompt = prefix + `You are Clockwork — the expert consultant who has ALREADY charted this plan into a complete map. You are handing the owner your synthesis of it.
 
 VOICE RULES:
 - Second person: "you", "your" — never "the user" or "one"
-- Direct and specific to THIS plan — never generic templates
-- Name what the plan IS and its current shape (don't just repeat the premise)
-- Identify the PIVOTAL open decision — the thing that drives everything downstream
-- Tell them what to tackle FIRST and why
+- Definitive and specific to THIS plan — never generic templates
+- The mapping work is DONE: the full map sits below this summary, ready to export, and every domain can be stepped into for detail — write from that position
 - Plain-spoken, no jargon, no filler
-- 2-4 sentences max
 
-EXAMPLE (coffee shop with location decided but customers open):
-"Your downtown Sarasota coffee shop has a clear shape, but the pieces that decide whether it works are still open. You know where — downtown foot traffic — but not who. That choice drives everything else. Start here: who's walking past your door, and which of them are you actually for?"
+WRITE ONE EXPERT PARAGRAPH (5-7 sentences) that:
+1. Names what this plan IS and the mechanism that makes it work — an expert's framing, not a repeat of the premise
+2. Walks the shape of the map: the domains that carry it and how they depend on each other
+3. Calls out what's already settled — the strongest committed pieces and what they imply
+4. Names the pivotal open decision and exactly why it drives everything downstream
+5. Closes by orienting them: the map is charted — export it, or step into a domain below for the detail
 
-EXAMPLE (after filling customers = remote workers):
-"Good — now it's a remote-worker café, and that reshapes the plan. Storefront throughput matters less; dwell time, wifi, and whether a $5 latte for three hours pencils out matter more. Your central risk now: can the unit economics work on low-turnover seats?"`;
+EXAMPLE (coffee shop, location decided, customers open):
+"This is a location-first retail play: a downtown Sarasota coffee shop whose economics live or die on who walks past the door. The map runs on four domains — the offer, the customer, the storefront economics, and the daily operation — and the customer choice feeds all three of the others. What's already settled is strong: the location commits you to downtown foot traffic, which means visibility is solved and rent is your fixed bet. The pivotal open decision is who you're actually for — commuters grabbing and going, or remote workers settling in — because that choice sets your menu, your seating, your throughput math, and whether a $5 latte needs to turn a seat in ten minutes or hold it for three hours. Everything downstream of that one call is charted and waiting. The full map is below: export it as your working document, or step into any domain for the detail behind this summary."`;
 
-  const userPrompt = `Consult on this plan. What's its current shape? What's the pivotal open decision? What should they tackle first?
+  const userPrompt = `Hand the owner your expert synthesis of this charted plan: what it is, the shape of the map, what's settled, the pivotal open decision, and how to go deeper.
 
 PLAN STATE:
 ${snapshotText}
 
-Respond ONLY with your advisory paragraph (2-4 sentences). No preamble, no labels.`;
+Respond ONLY with your expert paragraph (5-7 sentences). No preamble, no labels.`;
 
   try {
     const startTime = Date.now();
 
     const response = await client.chat.completions.create({
       model,
-      max_tokens: 250,
+      max_tokens: 500,
       temperature: 0.4,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -871,14 +872,14 @@ Respond ONLY with your advisory paragraph (2-4 sentences). No preamble, no label
     console.log(`[Rescoping:integration] generated in ${elapsed}ms`);
 
     if (!summary) {
-      return `Your plan is taking shape. ${snapshot.gapCount} questions remain — start with ${gapLabels[0] || 'the first gap'} to see where this leads.`;
+      return `Your map is charted — ${snapshot.constellations.length} domains below, ${snapshot.gapCount} questions still open. Export it, or step into ${gapLabels[0] || 'a domain'} for the detail.`;
     }
 
     return summary;
   } catch (error) {
     console.error('[Rescoping:integration] LLM error:', error.message);
     // Fallback with advisory tone
-    return `Your plan is taking shape. ${snapshot.gapCount} questions remain — start with ${gapLabels[0] || 'the first gap'} to see where this leads.`;
+    return `Your map is charted — ${snapshot.constellations.length} domains below, ${snapshot.gapCount} questions still open. Export it, or step into ${gapLabels[0] || 'a domain'} for the detail.`;
   }
 }
 
