@@ -39,4 +39,24 @@ function hoursPublic(convo) {
   return { enabled: !!h.enabled, open: h.open, close: h.close, days: h.days || [], tzOffset: h.tzOffset || 0, noticeHours: notice };
 }
 
-module.exports = { roomOpenNow, hoursPublic, noticeOf, minutes };
+// "Opening soon": closed right now, but the doors open within `mins` minutes
+// (default 30) — profiles show it as an almost-here badge next to the room.
+function opensWithinMinutes(convo, mins = 30) {
+  if (roomOpenNow(convo)) return false;
+  const h = convo && convo.hours;
+  if (!h || !h.enabled) return false;
+  const o = minutes(h.open), c = minutes(h.close);
+  if (o == null || c == null || o === c) return false;
+  const local = new Date(Date.now() - (h.tzOffset || 0) * 60000);
+  const day = local.getUTCDay(), t = local.getUTCHours() * 60 + local.getUTCMinutes();
+  const days = (h.days && h.days.length) ? h.days.map(Number) : [0, 1, 2, 3, 4, 5, 6];
+  for (let k = 0; k <= 1; k++) { // opens later today, or just past midnight
+    const d = (day + k) % 7;
+    if (!days.includes(d)) continue;
+    const delta = (o + k * 1440) - t;
+    if (delta > 0 && delta <= mins) return true;
+  }
+  return false;
+}
+
+module.exports = { roomOpenNow, hoursPublic, noticeOf, minutes, opensWithinMinutes };

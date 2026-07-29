@@ -18,7 +18,8 @@ const Connection = require('../models/Connection');
 const Notification = require('../models/Notification');
 const { verifyToken, optionalAuth } = require('../middleware/auth');
 const { normalizeLinks } = require('../utils/links');
-const { roomOpenNow, hoursPublic } = require('../utils/roomHours');
+const { roomOpenNow, hoursPublic, opensWithinMinutes } = require('../utils/roomHours');
+const realtime = require('../services/realtime');
 
 const router = express.Router();
 
@@ -228,6 +229,12 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     const rooms = await Conversation.find(roomQuery)
       .select('name isStudio category participants visibility hours price updatedAt').sort({ updatedAt: -1 }).limit(12).lean();
 
+    // Stream layer: the @handle IS the channel. If any of this person's
+    // PUBLIC rooms has people live inside right now, the profile broadcasts
+    // it — a Twitch-style LIVE state on the address itself.
+    const liveMap = realtime.liveStudioCounts(rooms.map(r => String(r._id))) || {};
+    const liveRoom = rooms.find(r => (r.visibility === 'public') && (liveMap[String(r._id)] || 0) > 0);
+
     res.json({
       success: true,
       profile: {
@@ -239,6 +246,8 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         specialties: u.specialties || [],
         links: normalizeLinks(u.links),
         featuredLinks: u.featuredLinks || [],
+        liveNow: !!liveRoom, liveRoomId: liveRoom ? liveRoom._id : null,
+        liveViewers: liveRoom ? (liveMap[String(liveRoom._id)] || 0) : 0,
         connectionState, connectionCount
       },
       maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount })),
@@ -247,7 +256,10 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         isStudio: !!r.isStudio, category: r.category || 'other',
         members: (r.participants || []).length,
         visibility: r.visibility || 'private',
-        hours: hoursPublic(r), openNow: roomOpenNow(r), price: r.price || 0
+        hours: hoursPublic(r), openNow: roomOpenNow(r),
+        opensSoon: opensWithinMinutes(r, 30),
+        live: liveMap[String(r._id)] || 0,
+        price: r.price || 0
       }))
     });
   } catch (e) { console.error('profile:', e.stack || e.message); res.status(500).json({ error: 'Failed to load profile' }); }
