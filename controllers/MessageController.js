@@ -44,6 +44,19 @@ async function isAdminUser(userId) {
     return !!(u && u.role === 'admin');
   } catch (e) { return false; }
 }
+// Compact reaction summary for one message: [{emoji, count, mine}] or null
+function reactionSummary(reactions, me) {
+  if (!reactions || !reactions.length) return null;
+  const by = {};
+  for (const r of reactions) {
+    if (!r || !r.emoji) continue;
+    if (!by[r.emoji]) by[r.emoji] = { emoji: r.emoji, count: 0, mine: false };
+    by[r.emoji].count++;
+    if (String(r.userId) === String(me)) by[r.emoji].mine = true;
+  }
+  return Object.values(by);
+}
+
 function nameOf(u) {
   if (!u) return 'Member';
   const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim();
@@ -381,13 +394,19 @@ router.get('/conversations/:id/messages', async (req, res) => {
     const msgs = await Message.find(q).sort({ createdAt: -1 }).limit(40).lean();
     res.json({
       success: true,
-      messages: msgs.reverse().map(m => ({
-        id: m._id, body: decryptText(m.body) || '', mine: String(m.senderId) === String(req.userId),
-        senderName: m.senderName || 'Member', createdAt: m.createdAt,
-        sharedMapId: m.sharedMapId || null,
-        sharedMap: m.sharedMap && m.sharedMap.title ? m.sharedMap : null,
-        attachment: m.attachment && m.attachment.url ? m.attachment : null
-      }))
+      messages: msgs.reverse().map(m => {
+        const mine = String(m.senderId) === String(req.userId);
+        return {
+          id: m._id, body: decryptText(m.body) || '', mine,
+          senderName: m.senderName || 'Member', createdAt: m.createdAt,
+          sharedMapId: m.sharedMapId || null,
+          sharedMap: m.sharedMap && m.sharedMap.title ? m.sharedMap : null,
+          attachment: m.attachment && m.attachment.url ? m.attachment : null,
+          // Seen = anyone besides me has read it (only meaningful on my own)
+          seen: mine ? (m.readBy || []).some(id => String(id) !== String(req.userId)) : undefined,
+          reactions: reactionSummary(m.reactions, req.userId)
+        };
+      })
     });
   } catch (e) { console.error('messages error:', e.message); res.status(500).json({ error: 'Failed to load messages' }); }
 });
@@ -438,9 +457,16 @@ router.post('/conversations/:id/messages', async (req, res) => {
           else { await Notification.push({ userId: uid, channel: 'personal', type: 'message', actorName: nameOf(me), text: label, link }); }
         }
         // Live-push over the /hub socket so open messengers update instantly.
+        // Carries the full message so an open thread appends without a refetch.
         realtime.userEmit(uid, 'message:new', {
           conversationId: String(convo._id), from: nameOf(me),
-          body: body.slice(0, 120), hasMap: !!msg.sharedMapId, at: msg.createdAt
+          body: body.slice(0, 120), hasMap: !!msg.sharedMapId, at: msg.createdAt,
+          message: {
+            id: String(msg._id), body, senderName: msg.senderName,
+            createdAt: msg.createdAt, sharedMapId: msg.sharedMapId || null,
+            sharedMap: msg.sharedMap && msg.sharedMap.title ? msg.sharedMap : null,
+            attachment: att || null
+          }
         });
       }
     } catch (e) { /* non-fatal */ }
@@ -453,17 +479,53 @@ router.post('/conversations/:id/messages', async (req, res) => {
   } catch (e) { console.error('send error:', e.message); res.status(500).json({ error: 'Failed to send' }); }
 });
 
-// Mark thread read
+// Mark thread read — and tell the senders their words were seen (live ticks)
 router.post('/conversations/:id/read', async (req, res) => {
   try {
     const convo = await Conversation.findOne({ _id: req.params.id, participants: req.userId });
     if (!convo) return res.status(404).json({ error: 'Thread not found' });
-    await Message.updateMany(
+    const r = await Message.updateMany(
       { conversationId: convo._id, senderId: { $ne: req.userId }, readBy: { $ne: req.userId } },
       { $addToSet: { readBy: req.userId } }
     );
+    if (r.modifiedCount) {
+      const others = (convo.participants || []).filter(id => String(id) !== String(req.userId));
+      for (const uid of others) {
+        realtime.userEmit(uid, 'thread-seen', { conversationId: String(convo._id), by: String(req.userId) });
+      }
+    }
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: 'Failed to mark read' }); }
+});
+
+// React to a message — one reaction per person; tapping the same one clears it
+const REACTION_SET = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
+router.post('/conversations/:id/messages/:mid/react', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(req.params.mid)) {
+      return res.status(400).json({ error: 'Bad id' });
+    }
+    const emoji = String((req.body || {}).emoji || '');
+    if (!REACTION_SET.includes(emoji)) return res.status(400).json({ error: 'Unknown reaction' });
+    const convo = await Conversation.findOne({ _id: req.params.id, participants: req.userId });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    const msg = await Message.findOne({ _id: req.params.mid, conversationId: convo._id });
+    if (!msg) return res.status(404).json({ error: 'Message not found' });
+
+    const existing = (msg.reactions || []).find(x => String(x.userId) === String(req.userId));
+    msg.reactions = (msg.reactions || []).filter(x => String(x.userId) !== String(req.userId));
+    if (!existing || existing.emoji !== emoji) msg.reactions.push({ userId: req.userId, emoji });
+    await msg.save();
+
+    const others = (convo.participants || []).filter(id => String(id) !== String(req.userId));
+    for (const uid of others) {
+      realtime.userEmit(uid, 'message:react', {
+        conversationId: String(convo._id), messageId: String(msg._id),
+        reactions: reactionSummary(msg.reactions, uid)
+      });
+    }
+    res.json({ success: true, reactions: reactionSummary(msg.reactions, req.userId) });
+  } catch (e) { console.error('react error:', e.message); res.status(500).json({ error: 'Failed to react' }); }
 });
 
 // Unread badge count across all threads

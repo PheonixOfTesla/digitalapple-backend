@@ -27,6 +27,13 @@ const messageSchema = new mongoose.Schema({
   },
 
   readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
+  // Reactions — one per member per message (tap the same one again to clear)
+  reactions: [{
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    emoji: { type: String, maxlength: 8 }
+  }],
+
   createdAt: { type: Date, default: Date.now }
 });
 

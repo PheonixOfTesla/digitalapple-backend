@@ -380,6 +380,37 @@ try {
   hubNs.on('connection', (socket) => {
     socket.join('user:' + String(socket.userId));
     socket.emit('ready', { ok: true });
+
+    // Typing relay for message threads. Membership is checked once per thread
+    // per socket (cached 60s) so a keystroke stream costs one DB read, not many.
+    socket.on('thread-typing', async (p) => {
+      try {
+        const cid = String((p && p.conversationId) || '');
+        if (!/^[a-f0-9]{24}$/i.test(cid)) return;
+        socket._typeOk = socket._typeOk || {};
+        let entry = socket._typeOk[cid];
+        if (!entry || entry.exp < Date.now()) {
+          const Conversation = require('./models/Conversation');
+          const c = await Conversation.findOne({ _id: cid, participants: socket.userId })
+            .select('participants').lean();
+          if (!c) return;
+          entry = {
+            others: (c.participants || []).map(String).filter(id => id !== String(socket.userId)),
+            exp: Date.now() + 60000
+          };
+          socket._typeOk[cid] = entry;
+        }
+        if (!socket._typeName) {
+          const User = require('./models/User');
+          const u = await User.findById(socket.userId).select('firstName lastName email').lean();
+          const nm = u ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() : '';
+          socket._typeName = (nm || (u && u.email ? u.email.split('@')[0] : 'Someone')).slice(0, 80);
+        }
+        for (const uid of entry.others) {
+          hubNs.to('user:' + uid).emit('typing', { conversationId: cid, name: socket._typeName });
+        }
+      } catch (e) { /* relay is best-effort */ }
+    });
   });
 
   // Studios channel — live connect rooms. Any authenticated member can connect;
