@@ -36,11 +36,12 @@ router.get('/live', (req, res) => {
 router.get('/discover', async (req, res) => {
   try {
     const rooms = await Conversation.find({ isRoom: true, visibility: 'public', closedAt: null })
-      .sort({ updatedAt: -1 }).limit(24).select('name photo price hours participants').lean();
+      .sort({ updatedAt: -1 }).limit(24).select('name photo price hours participants category').lean();
     const live = realtime.liveStudioCounts(rooms.map(r => String(r._id)));
     res.json({ success: true, rooms: rooms.map(r => ({
       id: r._id, name: r.name || 'Room', photo: r.photo || null,
       price: r.price || 0, openNow: roomOpenNow(r), notice: noticeOf(r),
+      category: r.category || 'other',
       members: (r.participants || []).length, live: (live && live[String(r._id)]) || 0
     })) });
   } catch (e) { console.error('discover:', e.message); res.status(500).json({ error: 'Failed' }); }
@@ -196,6 +197,11 @@ router.post('/:id/join', async (req, res) => {
     if (!convo) return res.status(404).json({ error: 'Studio not found' });
     if ((convo.participants || []).some(id => String(id) === String(req.userId))) {
       return res.json({ success: true, id: convo._id, name: convo.name, member: true });
+    }
+    // Invite-only is a true wall: no walk-ins, no knocking. The only way in
+    // is the host's invite (POST /:id/invite adds membership directly).
+    if (convo.visibility === 'invite') {
+      return res.status(403).json({ error: 'Invite only — the host sends the invites here.', inviteOnly: true });
     }
     // Advance-notice rooms take no walk-ins even when public: the ask below
     // queues as a join request the host answers on their own schedule.

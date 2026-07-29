@@ -12,7 +12,7 @@ const conversationSchema = new mongoose.Schema({
   photo: { type: String, trim: true, maxlength: 500 }, // room photo (Cloudinary URL)
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   // Social rooms of all types: public (anyone can join) or private (invite).
-  visibility: { type: String, enum: ['private', 'public'], default: 'private' },
+  visibility: { type: String, enum: ['private', 'public', 'invite'], default: 'private' },
   // Business hours: when enabled, non-members can only walk in while open.
   // Times are host-local HH:MM; tzOffset is the host's getTimezoneOffset().
   hours: {
@@ -26,7 +26,7 @@ const conversationSchema = new mongoose.Schema({
   },
   // Entry price in cents (0 = free). Paid rooms collect via Stripe at the door.
   price: { type: Number, default: 0, min: 0, max: 50000 },
-  category: { type: String, enum: ['ideas', 'network', 'social', 'business', 'other'], default: 'other' },
+  category: { type: String, enum: ['ideas', 'network', 'social', 'business', 'party', 'other'], default: 'other' },
   description: { type: String, trim: true, maxlength: 300 },
   // A room can be "about" something on the platform — an Atlas map, a Directory
   // company, or a News/Signal item. That's the Connect ↔ content integration.

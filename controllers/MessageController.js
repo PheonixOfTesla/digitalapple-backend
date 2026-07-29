@@ -134,7 +134,7 @@ router.post('/conversations', async (req, res) => {
   }
 });
 
-const ROOM_CATS = ['ideas', 'network', 'social', 'business', 'other'];
+const ROOM_CATS = ['ideas', 'network', 'social', 'business', 'party', 'other'];
 
 // Create a room — public (anyone can join) or private (invite selected members).
 router.post('/rooms', async (req, res) => {
@@ -257,11 +257,12 @@ router.post('/conversations/:id/price', async (req, res) => {
   } catch (e) { console.error('room price:', e.message); res.status(500).json({ error: 'Could not set price' }); }
 });
 
-// Visibility — host (or admin) flips a room/Studio between public and private.
+// Visibility — host (or admin) sets the door: public, private (knock), or
+// invite (a true wall — no knocking; entry is by host invite alone).
 router.post('/conversations/:id/visibility', async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
-    const v = (req.body || {}).visibility === 'public' ? 'public' : 'private';
+    const v = ['public', 'private', 'invite'].includes((req.body || {}).visibility) ? req.body.visibility : 'private';
     const convo = await Conversation.findOne({ _id: req.params.id, closedAt: null });
     if (!convo) return res.status(404).json({ error: 'Thread not found' });
     if (!convo.isRoom && !convo.isStudio) return res.status(400).json({ error: 'Only rooms and Studios have visibility.' });
