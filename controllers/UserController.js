@@ -203,9 +203,10 @@ router.post('/profile/photo', verifyToken, upload.single('photo'), async (req, r
       }
     }
 
-    // Generate thumbnail URL (Cloudinary transformation)
+    // Generate thumbnail URL (Cloudinary transformation). 320px because the
+    // thumb IS the avatar on most surfaces — 88-120 CSS px at 2-3x device pixels.
     const photoUrl = req.file.path;
-    const thumbUrl = photoUrl.replace('/upload/', '/upload/w_100,h_100,c_fill,g_face/');
+    const thumbUrl = photoUrl.replace('/upload/', '/upload/w_320,h_320,c_fill,g_face,q_auto/');
 
     user.profilePhoto = photoUrl;
     user.profilePhotoThumb = thumbUrl;

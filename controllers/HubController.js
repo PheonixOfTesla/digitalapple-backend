@@ -223,7 +223,8 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
       success: true,
       profile: {
         id: u._id, name, handle: u.handle || null,
-        avatar: u.profilePhotoThumb || u.profilePhoto || null,
+        // Full master, not the thumb — this is the big ring avatar on the lobby.
+        avatar: u.profilePhoto || u.profilePhotoThumb || null,
         verified: !!u.verified, joined: u.createdAt, isMe,
         about: u.about || '',
         specialties: u.specialties || [],

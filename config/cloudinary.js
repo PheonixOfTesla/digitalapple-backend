@@ -24,8 +24,10 @@ if (isCloudinaryConfigured) {
     params: {
       folder: 'digitalapple/profiles',
       allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+      // 800px master: 120px avatars on 3x phone screens need ~360 physical px,
+      // and the original is discarded at upload — store enough to stay sharp.
       transformation: [
-        { width: 400, height: 400, crop: 'fill', gravity: 'face' }
+        { width: 800, height: 800, crop: 'fill', gravity: 'face', quality: 'auto:good' }
       ]
     }
   });
