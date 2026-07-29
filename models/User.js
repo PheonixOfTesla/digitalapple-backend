@@ -70,6 +70,12 @@ const userSchema = new mongoose.Schema({
     maps: String,
     website: String
   },
+  // Featured links — up to 6 custom label+URL pairs the person curates,
+  // shown under "Featured links" on the public profile.
+  featuredLinks: {
+    type: [{ _id: false, label: String, url: String }],
+    default: undefined
+  },
   profilePhoto: {
     type: String // Cloudinary URL
   },
@@ -146,7 +152,8 @@ userSchema.methods.toPublicProfile = function() {
     profilePhotoThumb: this.profilePhotoThumb,
     handle: this.handle || null,
     specialties: this.specialties || [],
-    links: normalizeLinks(this.links)
+    links: normalizeLinks(this.links),
+    featuredLinks: this.featuredLinks || []
   };
 };
 
@@ -161,6 +168,7 @@ userSchema.methods.toPrivateProfile = function() {
     about: this.about,
     specialties: this.specialties || [],
     links: normalizeLinks(this.links),
+    featuredLinks: this.featuredLinks || [],
     profilePhoto: this.profilePhoto,
     profilePhotoThumb: this.profilePhotoThumb,
     marketingOptIn: this.marketingOptIn,

@@ -85,4 +85,32 @@ const chatUpload = multer({
   }
 });
 
-module.exports = { cloudinary, upload, chatUpload, isCloudinaryConfigured };
+// Ticker media — photos AND video for Hub status posts (Instagram-style).
+// resource_type auto lets Cloudinary route video to its video pipeline.
+let tickerStorage;
+if (isCloudinaryConfigured) {
+  const { CloudinaryStorage } = require('multer-storage-cloudinary');
+  tickerStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: { folder: 'digitalapple/ticker', resource_type: 'auto' }
+  });
+} else {
+  tickerStorage = multer.memoryStorage();
+}
+
+const tickerUpload = multer({
+  storage: tickerStorage,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB — room for short video
+  fileFilter: (req, file, cb) => {
+    if (!isCloudinaryConfigured) {
+      cb(new Error('Uploads not configured. Contact administrator.'), false);
+      return;
+    }
+    const ok = ['image/jpeg', 'image/png', 'image/webp', 'image/gif',
+      'video/mp4', 'video/quicktime', 'video/webm'];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Photos (JPEG, PNG, WebP, GIF) and video (MP4, MOV, WebM) are allowed.'), false);
+  }
+});
+
+module.exports = { cloudinary, upload, chatUpload, tickerUpload, isCloudinaryConfigured };

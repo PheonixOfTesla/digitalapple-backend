@@ -47,7 +47,7 @@ router.get('/handle-check', verifyToken, async (req, res) => {
 });
 
 router.put('/profile', verifyToken, async (req, res) => {
-  const { firstName, lastName, marketingOptIn, about, handle, specialties, links } = req.body;
+  const { firstName, lastName, marketingOptIn, about, handle, specialties, links, featuredLinks } = req.body;
 
   try {
     const user = await User.findById(req.userId);
@@ -106,6 +106,24 @@ router.put('/profile', verifyToken, async (req, res) => {
       }
       user.links = merged;
       user.markModified('links');
+    }
+
+    // Featured links — custom label+URL pairs (max 6), https-only. Sending an
+    // empty array clears them; malformed entries are dropped, not rejected.
+    if (featuredLinks !== undefined) {
+      const cleaned = (Array.isArray(featuredLinks) ? featuredLinks : []).slice(0, 6).map(f => {
+        const label = String((f && f.label) || '').trim().slice(0, 40);
+        let url = String((f && f.url) || '').trim().slice(0, 300);
+        if (!label || !url) return null;
+        if (!/^https?:\/\//i.test(url)) url = 'https://' + url.replace(/^\/+/, '');
+        try {
+          const p = new URL(url);
+          if (p.protocol !== 'https:' || !p.hostname.includes('.')) return null;
+          return { label, url: p.href };
+        } catch (e) { return null; }
+      }).filter(Boolean);
+      user.featuredLinks = cleaned.length ? cleaned : undefined;
+      user.markModified('featuredLinks');
     }
 
     await user.save();

@@ -47,6 +47,7 @@ function publicPost(p, userId) {
     authorHandle: p.authorHandle || '',
     authorAvatar: p.authorAvatar || null,
     body: p.body || '',
+    media: p.media && p.media.url ? { url: p.media.url, type: p.media.type } : null,
     sharedMapId: p.sharedMapId || null,
     sharedMap: p.sharedMap && p.sharedMap.title ? p.sharedMap : null,
     likeCount: p.likeCount || 0,
@@ -180,9 +181,9 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     // Accepts a user id OR a vanity handle (theclockworkhub.com/<handle>).
     const key = String(req.params.id || '').toLowerCase();
     const u = mongoose.isValidObjectId(req.params.id)
-      ? await User.findById(req.params.id).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about specialties links').lean()
+      ? await User.findById(req.params.id).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about specialties links featuredLinks').lean()
       : (/^[a-z0-9._-]{3,30}$/.test(key)
-          ? await User.findOne({ handle: key }).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about specialties links').lean()
+          ? await User.findOne({ handle: key }).select('firstName lastName handle profilePhoto profilePhotoThumb verified createdAt role about specialties links featuredLinks').lean()
           : null);
     if (!u || u.role === 'system') return res.status(404).json({ error: 'Profile not found' });
     const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || 'Member';
@@ -227,6 +228,7 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         about: u.about || '',
         specialties: u.specialties || [],
         links: normalizeLinks(u.links),
+        featuredLinks: u.featuredLinks || [],
         connectionState, connectionCount
       },
       maps: maps.map(m => ({ id: m._id, title: m.title, previewSvg: m.previewSvg, coverage: m.coverage, nodeCount: m.nodeCount })),
@@ -385,6 +387,19 @@ router.post('/notifications/read', verifyToken, async (req, res) => {
 });
 
 // ── Create a post ("Add to Clockwork Hub") ────────────────────────────────────
+// ── Ticker media upload — a photo or video for a status post ─────────────────
+// Two-step flow: upload here (Cloudinary), then POST /posts with the returned
+// {url, type}. Keeps post-create JSON and lets the client show a preview.
+router.post('/upload', verifyToken, (req, res) => {
+  const { tickerUpload } = require('../config/cloudinary');
+  tickerUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+    if (!req.file || !req.file.path) return res.status(400).json({ error: 'No file received' });
+    const type = /^video\//.test(req.file.mimetype) ? 'video' : 'image';
+    res.json({ success: true, url: req.file.path, type });
+  });
+});
+
 router.post('/posts', verifyToken, async (req, res) => {
   try {
     const b = req.body || {};
@@ -406,7 +421,13 @@ router.post('/posts', verifyToken, async (req, res) => {
       }
     }
 
-    if (!post.body && !post.sharedMapId) return res.status(400).json({ error: 'Say something or share a map.' });
+    // Optional media — must be a Cloudinary URL from our own upload endpoint.
+    if (b.media && b.media.url && /^https:\/\/res\.cloudinary\.com\//.test(String(b.media.url)) &&
+        ['image', 'video'].includes(b.media.type)) {
+      post.media = { url: String(b.media.url).slice(0, 500), type: b.media.type };
+    }
+
+    if (!post.body && !post.sharedMapId && !post.media?.url) return res.status(400).json({ error: 'Say something, add a photo or video, or share a map.' });
     await post.save();
     res.json({ success: true, post: publicPost(post.toObject(), req.userId) });
   } catch (e) {

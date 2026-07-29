@@ -13,6 +13,12 @@ const postSchema = new mongoose.Schema({
 
   body: { type: String, trim: true, maxlength: 2000 },
 
+  // Optional media — a photo or video riding the post (Cloudinary URL).
+  media: {
+    url: { type: String },
+    type: { type: String, enum: ['image', 'video'] }
+  },
+
   // Optional shared map (the "share an Atlas map to the Hub" case)
   sharedMapId: { type: mongoose.Schema.Types.ObjectId, ref: 'SharedMap' },
   sharedMap: {                                     // denormalized preview snapshot
