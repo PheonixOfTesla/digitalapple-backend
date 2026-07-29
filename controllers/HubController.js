@@ -156,20 +156,29 @@ router.get('/discover', optionalAuth, async (req, res) => {
 });
 
 // ── Search the user base (to message / add / build a room) ────────────────────
-router.get('/people', verifyToken, async (req, res) => {
+// Public: /@handle is a public identity, so anyone can find a person by handle
+// or name — signed in or not. Only public-safe fields go out (never email).
+router.get('/people', optionalAuth, async (req, res) => {
   try {
     const q = clampStr(req.query.q, 60);
     if (q.length < 1) return res.json({ success: true, people: [] });
     const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const rx = new RegExp(esc, 'i');
-    const users = await User.find({
-      _id: { $ne: req.userId },
+    // Handle matches on a normalized (lowercase, @-stripped) form so "Itssjoshl",
+    // "itssjoshl" and "@itssjoshl" all find the same person.
+    const handleRx = new RegExp('^' + q.replace(/^@/, '').toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const filter = {
       role: { $ne: 'system' },
-      $or: [{ firstName: rx }, { lastName: rx }, { email: rx }]
-    }).select('firstName lastName email profilePhotoThumb profilePhoto verified').limit(12).lean();
+      $or: [{ handle: handleRx }, { firstName: rx }, { lastName: rx }]
+    };
+    // Email match only for the signed-in searcher (never leak email-based lookup publicly).
+    if (req.userId) { filter.$or.push({ email: rx }); filter._id = { $ne: req.userId }; }
+    const users = await User.find(filter)
+      .select('firstName lastName handle profilePhotoThumb profilePhoto verified')
+      .limit(12).lean();
     const people = users.map(u => {
-      const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || (u.email ? u.email.split('@')[0] : 'Member');
-      return { id: u._id, name: nm.slice(0, 80), avatar: u.profilePhotoThumb || u.profilePhoto || null, verified: !!u.verified };
+      const nm = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || (u.handle ? '@' + u.handle : 'Member');
+      return { id: u._id, name: nm.slice(0, 80), handle: u.handle || null, avatar: u.profilePhotoThumb || u.profilePhoto || null, verified: !!u.verified };
     });
     res.json({ success: true, people });
   } catch (e) { console.error('people search:', e.message); res.status(500).json({ error: 'Search failed' }); }
