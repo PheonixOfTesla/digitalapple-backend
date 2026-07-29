@@ -36,10 +36,13 @@ router.get('/live', (req, res) => {
 router.get('/discover', async (req, res) => {
   try {
     const rooms = await Conversation.find({ isRoom: true, visibility: 'public', closedAt: null })
-      .sort({ updatedAt: -1 }).limit(24).select('name photo price hours participants category').lean();
+      .sort({ updatedAt: -1 }).limit(24).select('name photo price hours participants category description').lean();
     const live = realtime.liveStudioCounts(rooms.map(r => String(r._id)));
     res.json({ success: true, rooms: rooms.map(r => ({
       id: r._id, name: r.name || 'Room', photo: r.photo || null,
+      // The purpose — what the room is for — so the floor reads like a directory,
+      // not a list of names. Front end shows it under the title.
+      purpose: (r.description || '').trim(),
       price: r.price || 0, openNow: roomOpenNow(r), notice: noticeOf(r),
       category: r.category || 'other',
       members: (r.participants || []).length, live: (live && live[String(r._id)]) || 0
