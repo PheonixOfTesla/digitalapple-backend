@@ -395,6 +395,7 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
       const parsedLimit = parseInt(limit);
       const parsedOffset = parseInt(offset);
       const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const STOP_WORDS = new Set(['how','to','a','an','the','of','in','on','for','and','or','with','my','your','into','from','at','by','as','is','are','be','do','does','i','you','it','that','this','become','becoming','becomes','get','getting','make','making','build','building','learn','learning','guide','map','out']);
       const tokens = searchTerm.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
 
       // Recall nets:
@@ -438,13 +439,21 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
         else if (title.includes(q)) s += 200;
         if (owner === q) s += 500;
         else if (owner.includes(q)) s += 120;
-        let inTitle = 0;
+        let inTitle = 0, distinctiveHit = false;
         for (const t of tokens) {
-          if (new RegExp('(^|[^a-z0-9])' + escRx(t)).test(title)) { s += 60; inTitle++; }
-          else if (title.includes(t)) { s += 25; inTitle++; }
-          else if (descr.includes(t)) s += 8;
-          if (owner.includes(t)) s += 15;
+          // Common words ("how to become an…") shouldn't decide relevance — the
+          // distinctive term ("astronaut") should. Stopwords score a fraction.
+          const stop = STOP_WORDS.has(t);
+          const w = stop ? 0.12 : 1;
+          if (new RegExp('(^|[^a-z0-9])' + escRx(t)).test(title)) { s += 60 * w; inTitle++; if (!stop) distinctiveHit = true; }
+          else if (title.includes(t)) { s += 25 * w; inTitle++; if (!stop) distinctiveHit = true; }
+          else if (descr.includes(t)) { s += 8 * w; if (!stop) distinctiveHit = true; }
+          if (owner.includes(t)) s += 15 * w;
         }
+        // A result that only matched common words (no distinctive token) is noise
+        // unless the whole phrase is in the title — sink it hard.
+        const hasDistinctive = tokens.some(t => !STOP_WORDS.has(t));
+        if (hasDistinctive && !distinctiveHit && !title.includes(q)) s -= 120;
         if (tokens.length > 1 && inTitle === tokens.length) s += 80;
         s += Math.min(60, Math.log1p((m.starCount || 0) * 2 + (m.forkCount || 0) * 3 + (m.repostCount || 0)) * 12);
         const days = (now - new Date(m.publishedAt || m.createdAt || 0).getTime()) / 86400000;
