@@ -389,17 +389,20 @@ router.post('/uploads', chatUpload.single('file'), async (req, res) => {
   } catch (e) { console.error('chat upload error:', e.message); res.status(500).json({ error: 'Upload failed' }); }
 });
 
-// GIF search — a thin proxy over Giphy so the API key stays server-side.
-// Empty q returns trending. Without GIPHY_API_KEY the picker reports itself
-// unconfigured and the client falls back to plain GIF uploads.
+// GIF library — a thin proxy over Giphy so the API key stays server-side.
+// Empty q returns trending; a q searches (category chips just pass a term).
+// `offset` pages the grid for infinite scroll. Without GIPHY_API_KEY the
+// picker reports itself unconfigured and the client falls back to GIF uploads.
 router.get('/gifs', async (req, res) => {
   try {
     const key = process.env.GIPHY_API_KEY;
-    if (!key) return res.json({ success: true, configured: false, gifs: [] });
+    if (!key) return res.json({ success: true, configured: false, gifs: [], nextOffset: null });
     const q = clampStr(req.query.q, 80);
+    const LIMIT = 27;
+    const offset = Math.max(0, Math.min(parseInt(req.query.offset, 10) || 0, 4000));
     const url = q
-      ? `https://api.giphy.com/v1/gifs/search?api_key=${key}&q=${encodeURIComponent(q)}&limit=24&rating=pg-13`
-      : `https://api.giphy.com/v1/gifs/trending?api_key=${key}&limit=24&rating=pg-13`;
+      ? `https://api.giphy.com/v1/gifs/search?api_key=${key}&q=${encodeURIComponent(q)}&limit=${LIMIT}&offset=${offset}&rating=pg-13&bundle=messaging_non_clips`
+      : `https://api.giphy.com/v1/gifs/trending?api_key=${key}&limit=${LIMIT}&offset=${offset}&rating=pg-13&bundle=messaging_non_clips`;
     const r = await fetch(url);
     const d = await r.json();
     const gifs = (d.data || []).map(g => {
@@ -408,8 +411,12 @@ router.get('/gifs', async (req, res) => {
       const prev = img.fixed_width_small || img.preview_gif || full;
       return { id: g.id, url: full.url, preview: prev.url, title: clampStr(g.title, 100) };
     }).filter(g => g.url && /^https:\/\/media[0-9]?\.giphy\.com\//.test(g.url));
-    res.json({ success: true, configured: true, gifs });
-  } catch (e) { console.error('gif search error:', e.message); res.status(500).json({ error: 'GIF search failed' }); }
+    // Giphy pagination reports total_count; hand back the next offset if more remain.
+    const pg = (d.pagination || {});
+    const seen = offset + (pg.count || gifs.length);
+    const nextOffset = (typeof pg.total_count === 'number' && seen < pg.total_count) ? seen : null;
+    res.json({ success: true, configured: true, gifs, nextOffset });
+  } catch (e) { console.error('gif library error:', e.message); res.status(500).json({ error: 'GIF search failed' }); }
 });
 
 router.get('/conversations/:id/messages', async (req, res) => {
