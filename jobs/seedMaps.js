@@ -601,13 +601,56 @@ const ASPECT_TREE = {
   ]
 };
 
+// What each domain really means, in an advisor's words — used to write a core
+// summary that reads like an expert who's already walked the map and is
+// pointing you at the parts worth opening.
+const DOMAIN_GLOSS = {
+  offer: "what you're actually putting on the table",
+  demand: "who it's for and whether they truly want it",
+  delivery: "how it gets from promise to delivered",
+  economy: "whether the unit math and the cash hold up",
+  risk: "the quiet ways this dies if you look away",
+  orchestration: "who owns what, and the rhythm that keeps it honest"
+};
+
+// The core summary: an expert read of the premise that names the load-bearing
+// domains and nudges you toward the two most interesting nodes to open.
+function coreDetail(premise, cons) {
+  const named = cons.map(c => DOMAIN_GLOSS[c] || c);
+  const domainLine = named.length > 2
+    ? named.slice(0, -1).join(', ') + ', and ' + named[named.length - 1]
+    : named.join(' and ');
+  // Pull two intriguing aspect nodes from different domains to point at.
+  const picks = cons.slice(0, 2).map(c => {
+    const asp = (ASPECT_TREE[c] || [])[0];
+    return asp ? { label: asp.l, why: (asp.s || '').toLowerCase() } : null;
+  }).filter(Boolean);
+
+  let out = `Here's the honest shape of "${premise}": it turns on ${cons.length} things — ${domainLine}. `;
+  out += `Each is a domain you can open, down through the specifics to moves you could start this week. `;
+  if (picks.length >= 2) {
+    out += `If you only tap two nodes, make it "${picks[0].label}" — ${picks[0].why}, and it's where most people underestimate the work — and "${picks[1].label}", the one that quietly decides the rest. `;
+  } else if (picks.length === 1) {
+    out += `Start with "${picks[0].label}" — ${picks[0].why}. That's where the real choices live. `;
+  }
+  out += `Resolve the open questions and the read sharpens, but the interesting tension is already visible the moment you tap in.`;
+  return out;
+}
+
 function generateDeepGraph(premise, category) {
   const nodes = [], edges = [];
   const CX = 600, CY = 400;
   const coreId = new mongoose.Types.ObjectId();
+  const cons0 = ({
+    business: ['offer', 'demand', 'delivery', 'economy', 'risk'],
+    career: ['offer', 'demand', 'orchestration', 'economy'],
+    product: ['offer', 'delivery', 'orchestration', 'risk'],
+    creative: ['offer', 'demand', 'delivery', 'orchestration'],
+    other: ['offer', 'demand', 'delivery', 'economy']
+  })[category] || ['offer', 'demand', 'delivery', 'economy'];
   nodes.push({
     _id: coreId, label: 'CORE', statement: premise,
-    detail: `"${premise}" — mapped to the floor. Five layers: the domains that decide it, the aspects inside each, the specifics inside those, and at the bottom, concrete actions you could start this week.`,
+    detail: coreDetail(premise, cons0),
     depth: 0, x: CX, y: CY
   });
   const constellations = {
@@ -628,7 +671,7 @@ function generateDeepGraph(premise, category) {
     nodes.push({
       _id: conId, parentNodeId: coreId,
       label: con.charAt(0).toUpperCase() + con.slice(1),
-      statement: `${con.charAt(0).toUpperCase() + con.slice(1)} — what this dimension must answer`,
+      statement: `${con.charAt(0).toUpperCase() + con.slice(1)} — ${DOMAIN_GLOSS[con] || 'what this part must answer'}`,
       detail: tpl.root(premise), constellation: con,
       stage: (ci % 3) + 1, status: 'kept', depth: 1,
       x: Math.round(CX + R1 * Math.cos(conAngle)), y: Math.round(CY + R1 * Math.sin(conAngle)),
@@ -1375,7 +1418,7 @@ async function purgePersonSeeds({ dryRun = false } = {}) {
   return { matched: matches.length, unpublished, sample: matches.slice(0, 10).map(m => m.title) };
 }
 
-module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo, getCurrentAtlasCount, purgePersonSeeds, REAL_PERSON_NAMES, generateDeepGraph, generatePreviewSvg, calculateCoverage };
+module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo, getCurrentAtlasCount, purgePersonSeeds, REAL_PERSON_NAMES, generateDeepGraph, generatePreviewSvg, calculateCoverage, coreDetail };
 
 // Allow running directly: node jobs/seedMaps.js
 if (require.main === module) {
