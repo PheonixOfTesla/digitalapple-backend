@@ -113,4 +113,35 @@ const tickerUpload = multer({
   }
 });
 
-module.exports = { cloudinary, upload, chatUpload, tickerUpload, isCloudinaryConfigured };
+// Drive files — the personal file home. Documents of every working kind:
+// photos, video, PDFs, Word, PowerPoint.
+let driveStorage;
+if (isCloudinaryConfigured) {
+  const { CloudinaryStorage } = require('multer-storage-cloudinary');
+  driveStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: { folder: 'digitalapple/drive', resource_type: 'auto' }
+  });
+} else {
+  driveStorage = multer.memoryStorage();
+}
+
+const driveUpload = multer({
+  storage: driveStorage,
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!isCloudinaryConfigured) {
+      cb(new Error('Uploads not configured. Contact administrator.'), false);
+      return;
+    }
+    const ok = ['image/jpeg', 'image/png', 'image/webp', 'image/gif',
+      'video/mp4', 'video/quicktime', 'video/webm',
+      'application/pdf',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Photos, video, PDF, Word, and PowerPoint files are allowed.'), false);
+  }
+});
+
+module.exports = { cloudinary, upload, chatUpload, tickerUpload, driveUpload, isCloudinaryConfigured };

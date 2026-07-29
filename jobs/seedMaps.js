@@ -388,6 +388,23 @@ function buildTopicPool() {
   // Extra non-person angles to keep the pool deep (real-person "rise of / what made
   // {person} successful" angles removed — same fabrication risk as above).
   [...MONEY_SUBJECTS, ...MONEY2].forEach(s => add(`How to think about ${s} as a beginner investor`, 'other'));
+  // Depth pack — pushes the pool past 3000 unique premises so a full
+  // search-corpus backfill never runs dry. Same vetted components, new angles.
+  [...VENTURES, ...VENTURES2].forEach(v => {
+    add(`The first 90 days of running ${v}`, 'business');
+    add(`A realistic startup budget for ${v}`, 'business');
+    add(`The biggest mistakes people make running ${v}`, 'business');
+  });
+  [...CAREER_FIELDS, ...CAREER_FIELDS2].forEach(f => {
+    add(`A 12-month roadmap into ${f}`, 'career');
+    add(`Switching careers into ${f}`, 'career');
+  });
+  [...MONEY_SUBJECTS, ...MONEY2].forEach(s => {
+    add(`Common myths about ${s}`, 'other');
+    add(`A beginner's playbook for ${s}`, 'other');
+  });
+  PRODUCTS.forEach(p => add(`How to launch and monetize ${p}`, 'product'));
+  CREATIVE.forEach(c => add(`How to sell ${c}`, 'creative'));
   return out;
 }
 
@@ -842,7 +859,7 @@ function generatePreviewSvg(snapshot) {
 }
 
 // Create a seed map - try LLM, fallback to static
-async function createSeedMap(user, topic) {
+async function createSeedMap(user, topic, opts = {}) {
   const { category, premise } = topic;
 
   // Create project
@@ -855,6 +872,11 @@ async function createSeedMap(user, topic) {
 
   let nodes, edges, framedMap = null;
 
+  // Fast corpus mode: static generation only — no LLM calls. Used by the boot
+  // backfill to reach search-corpus scale in minutes instead of days.
+  if (opts.fast) {
+    ({ nodes, edges } = generateBasicGraphWithDetail(premise, category));
+  } else
   // Primary: frame-aware engine (classify -> frame -> nebula) so seeds carry
   // the right determination (actionable vs overview), frame, and terminals.
   try {
@@ -1064,7 +1086,9 @@ async function createSeedMap(user, topic) {
     snapshot,
     previewSvg,
     excludedBranchRoots: [],
-    publishedAt: new Date(),
+    // Fast corpus seeds spread over the past 6 months so the homepage "today"
+    // counter and Newest sort stay honest instead of spiking by thousands.
+    publishedAt: opts.fast ? new Date(Date.now() - Math.floor(Math.random() * 180 * 86400000)) : new Date(),
     ownerName: 'Clockwork',
     ownerHandle: 'clockwork',
     ownerAvatar: null,
@@ -1138,7 +1162,7 @@ async function getCurrentAtlasCount() {
   return SharedMap.countDocuments({ unpublishedAt: null });
 }
 
-async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {}) {
+async function backfillTo(target, { concurrency = 3, onProgress = () => {}, fast = false } = {}) {
   const user = await getClockworkUser();
   const currentTotal = await SharedMap.countDocuments({ unpublishedAt: null });
   const need = Math.max(0, target - currentTotal);
@@ -1162,7 +1186,7 @@ async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {
       const topic = candidates[idx++];
       try {
         await Promise.race([
-          createSeedMap(user, topic),
+          createSeedMap(user, topic, { fast }),
           new Promise((_, rej) => setTimeout(() => rej(new Error('map timeout (>180s)')), MAP_TIMEOUT_MS))
         ]);
         created++;
@@ -1171,7 +1195,8 @@ async function backfillTo(target, { concurrency = 3, onProgress = () => {} } = {
       onProgress({ created, failed, need: candidates.length, total: currentTotal + created, lastError });
     }
   }
-  const conc = Math.max(1, Math.min(3, concurrency));
+  // Fast mode is DB-bound, not LLM-bound — safe to run wider.
+  const conc = Math.max(1, Math.min(fast ? 6 : 3, concurrency));
   await Promise.all(Array.from({ length: conc }, () => worker()));
   return { created, failed, total: currentTotal + created, lastError };
 }

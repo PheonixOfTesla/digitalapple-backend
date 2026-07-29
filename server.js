@@ -162,6 +162,7 @@ app.use('/api/v1/share', ShareController);
 app.use('/api/v1/tokens', TokenController);
 app.use('/api/v1/reels', ReelController);
 app.use('/api/v1/shop', require('./controllers/ShopController'));
+app.use('/api/v1/drive', require('./controllers/DriveController'));
 app.use('/api/v1/directory', require('./controllers/DirectoryController'));
 app.use('/api/v1/hub', require('./controllers/HubController'));
 app.use('/api/v1/messages', require('./controllers/MessageController'));
@@ -1045,6 +1046,32 @@ server.listen(PORT, () => {
   console.log('');
   console.log('CORS Origins:', allowedOrigins);
   console.log('');
+
+  // Atlas search corpus: top the public Atlas up to ATLAS_SEED_TARGET maps
+  // (default 3000) in fast no-LLM mode so Maps search behaves like a real
+  // engine. Idempotent — backfillTo counts the Atlas first and no-ops once
+  // it's at target, so restarts and redeploys just top it up.
+  const atlasTarget = Math.min(5000, parseInt(process.env.ATLAS_SEED_TARGET || '3000', 10) || 0);
+  if (atlasTarget > 0) {
+    setTimeout(() => {
+      const { backfillTo } = require('./jobs/seedMaps');
+      backfillTo(atlasTarget, {
+        fast: true, concurrency: 4,
+        onProgress: (p) => { if ((p.created + p.failed) % 250 === 0) console.log(`[atlas-seed] ${p.created}/${p.need} (${p.failed} failed)`); }
+      })
+        .then(r => { if (r.created || r.failed) console.log('[atlas-seed] done:', JSON.stringify(r)); })
+        .catch(e => console.error('[atlas-seed]', e.message));
+    }, 20000);
+  }
+
+  // Editorial takes for the best-known directory companies — idempotent,
+  // only fills empty editorials. See jobs/editorialTakes.js for the rules
+  // (attributed house voice, never counted as a review).
+  setTimeout(() => {
+    require('./jobs/editorialTakes').applyEditorialTakes()
+      .then(r => { if (r.applied) console.log('[editorial] applied', r.applied, 'takes'); })
+      .catch(e => console.error('[editorial]', e.message));
+  }, 30000);
 
   // Schedule RSS aggregation - every hour at minute 0
   cron.schedule('0 * * * *', async () => {

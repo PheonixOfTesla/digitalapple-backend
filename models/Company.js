@@ -83,6 +83,16 @@ const companySchema = new mongoose.Schema({
 
   featured: { type: Boolean, default: false },   // admin spotlight pin
 
+  // Clockwork editorial — an openly-attributed house assessment (NOT a user
+  // review; never counted in ratings). Rendered with its byline and date so
+  // readers know exactly whose voice it is. Real user reviews + linked
+  // external sources (Trustpilot by domain) carry the credibility.
+  editorial: {
+    take: { type: String, trim: true, maxlength: 900 },
+    byline: { type: String, trim: true, maxlength: 80, default: 'Clockwork editorial' },
+    updatedAt: { type: Date }
+  },
+
   // Moderation — user-generated, admin-approved
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
   submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

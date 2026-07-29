@@ -328,6 +328,39 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// GET /feed/maps/suggest — instant suggestions for the search dropdown
+// (Google-style). Title-prefix first, then title-substring, then creators.
+// Fast and forgiving: never errors the client, just returns fewer rows.
+router.get('/maps/suggest', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().slice(0, 80);
+    if (q.length < 2) return res.json({ success: true, suggestions: [] });
+    const escq = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const base = { visibility: 'public', publishedAt: { $ne: null }, unpublishedAt: null };
+    const pick = 'title ownerName ownerHandle category starCount';
+    const [starts, contains, owners] = await Promise.all([
+      SharedMap.find({ ...base, title: { $regex: '(^|[^a-zA-Z0-9])' + escq, $options: 'i' } })
+        .sort({ starCount: -1, publishedAt: -1 }).limit(6).select(pick).lean(),
+      SharedMap.find({ ...base, title: { $regex: escq, $options: 'i' } })
+        .sort({ starCount: -1, publishedAt: -1 }).limit(8).select(pick).lean(),
+      SharedMap.find({ ...base, ownerName: { $regex: '^' + escq, $options: 'i' } })
+        .sort({ starCount: -1 }).limit(3).select(pick).lean()
+    ]);
+    const seen = new Set();
+    const out = [];
+    for (const m of [...starts, ...contains, ...owners]) {
+      const id = m._id.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, title: m.title, ownerName: m.ownerName || 'Clockwork', category: m.category || 'other' });
+      if (out.length >= 8) break;
+    }
+    res.json({ success: true, suggestions: out });
+  } catch (e) {
+    res.json({ success: true, suggestions: [] });
+  }
+});
+
 router.get('/maps/public', optionalAuth, async (req, res) => {
   try {
     const {
@@ -351,55 +384,77 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
     }
 
     let maps;
+    let searchTotal = 0;
 
     if (search && search.trim()) {
-      const searchTerm = search.trim();
+      // Search-engine style: wide recall (three nets), then a single relevance
+      // ranking — exact > phrase > word-start > substring, title > creator >
+      // description, with engagement and freshness as quality signals and real
+      // user maps outranking seeds on ties.
+      const searchTerm = search.trim().slice(0, 120);
       const parsedLimit = parseInt(limit);
       const parsedOffset = parseInt(offset);
+      const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const tokens = searchTerm.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
 
-      // Three queries, merged and deduplicated:
-      // 1. Text index (title/description) — stemmed relevance for FULL words
-      // 2. Substring regex (title/description) — partial words as people type
-      //    ("schoo" must find "school"; $text alone tokenizes whole words only)
-      // 3. OwnerName regex (creator name)
-
-      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const rx = { $regex: escaped, $options: 'i' };
+      // Recall nets:
+      //  1. ALL tokens present somewhere (title/desc/owner) — substring match
+      //     so half-typed words still hit ("schoo" → school)
+      //  2. Text index — stemmed whole-word relevance ("running" → run)
+      //  3. ANY token — so one typo'd word can't zero the results; ranking
+      //     naturally sinks the weaker partial matches
+      const tokNets = tokens.map(t => {
+        const rx = { $regex: escRx(t), $options: 'i' };
+        return { $or: [{ title: rx }, { description: rx }, { ownerName: rx }] };
+      });
+      const andQuery = { ...baseConditions, $and: tokNets };
+      const anyQuery = { ...baseConditions, $or: tokNets };
       const textQuery = { ...baseConditions, $text: { $search: searchTerm } };
-      const partialQuery = { ...baseConditions, $or: [{ title: rx }, { description: rx }] };
-      const ownerQuery = { ...baseConditions, ownerName: rx };
 
-      const [textResults, partialResults, ownerResults] = await Promise.all([
-        SharedMap.find(textQuery)
-          .sort({ score: { $meta: 'textScore' }, publishedAt: -1 })
-          .limit(parsedLimit + parsedOffset) // Fetch extra for dedup
-          .select('-snapshot')
-          .lean(),
-        SharedMap.find(partialQuery)
-          .sort({ publishedAt: -1 })
-          .limit(parsedLimit + parsedOffset)
-          .select('-snapshot')
-          .lean(),
-        SharedMap.find(ownerQuery)
-          .sort({ publishedAt: -1 })
-          .limit(parsedLimit + parsedOffset)
-          .select('-snapshot')
-          .lean()
+      const [andR, textR, anyR] = await Promise.all([
+        SharedMap.find(andQuery).sort({ starCount: -1, publishedAt: -1 }).limit(500).select('-snapshot').lean(),
+        SharedMap.find(textQuery).sort({ score: { $meta: 'textScore' } }).limit(200).select('-snapshot').lean(),
+        tokens.length > 1
+          ? SharedMap.find(anyQuery).sort({ starCount: -1, publishedAt: -1 }).limit(200).select('-snapshot').lean()
+          : Promise.resolve([])
       ]);
 
-      // Merge and deduplicate (text results first for relevance)
       const seen = new Set();
-      const merged = [];
-      for (const map of [...textResults, ...partialResults, ...ownerResults]) {
-        const id = map._id.toString();
-        if (!seen.has(id)) {
-          seen.add(id);
-          merged.push(map);
-        }
+      const cands = [];
+      for (const m of [...andR, ...textR, ...anyR]) {
+        const id = m._id.toString();
+        if (!seen.has(id)) { seen.add(id); cands.push(m); }
       }
 
-      // Apply offset and limit
-      maps = merged.slice(parsedOffset, parsedOffset + parsedLimit);
+      const q = searchTerm.toLowerCase();
+      const now = Date.now();
+      const scored = cands.map(m => {
+        const title = (m.title || '').toLowerCase();
+        const descr = (m.description || '').toLowerCase();
+        const owner = (m.ownerName || '').toLowerCase();
+        let s = 0;
+        if (title === q) s += 1000;
+        else if (title.startsWith(q)) s += 400;
+        else if (title.includes(q)) s += 200;
+        if (owner === q) s += 500;
+        else if (owner.includes(q)) s += 120;
+        let inTitle = 0;
+        for (const t of tokens) {
+          if (new RegExp('(^|[^a-z0-9])' + escRx(t)).test(title)) { s += 60; inTitle++; }
+          else if (title.includes(t)) { s += 25; inTitle++; }
+          else if (descr.includes(t)) s += 8;
+          if (owner.includes(t)) s += 15;
+        }
+        if (tokens.length > 1 && inTitle === tokens.length) s += 80;
+        s += Math.min(60, Math.log1p((m.starCount || 0) * 2 + (m.forkCount || 0) * 3 + (m.repostCount || 0)) * 12);
+        const days = (now - new Date(m.publishedAt || m.createdAt || 0).getTime()) / 86400000;
+        s += Math.max(0, 15 - days / 30);
+        if (m.isSeed) s -= 25;
+        return { m, s };
+      }).filter(x => x.s > 0).sort((a, b) => b.s - a.s);
+
+      searchTotal = scored.length;
+      maps = scored.slice(parsedOffset, parsedOffset + parsedLimit).map(x => x.m);
     } else {
       // No search - use standard query
       const query = baseConditions;
@@ -445,20 +500,11 @@ router.get('/maps/public', optionalAuth, async (req, res) => {
       isFollowing: userFollows.has(map.ownerId?.toString())
     }));
 
-    // Get total count - for search, use the merged count; otherwise query base conditions
+    // Total: search already ranked the full candidate set — its length IS the
+    // result count (no re-query, no approximation).
     let total;
     if (search && search.trim()) {
-      // For search, we already have all unique results in merged array
-      // Use the pre-dedup merged array length or just count both queries
-      const searchTerm = search.trim();
-      const textQuery = { ...baseConditions, $text: { $search: searchTerm } };
-      const ownerQuery = { ...baseConditions, ownerName: { $regex: searchTerm, $options: 'i' } };
-      const [textCount, ownerCount] = await Promise.all([
-        SharedMap.countDocuments(textQuery),
-        SharedMap.countDocuments(ownerQuery)
-      ]);
-      // Approximate - may have some overlap but close enough for pagination
-      total = Math.max(textCount, ownerCount);
+      total = searchTotal;
     } else {
       total = await SharedMap.countDocuments(baseConditions);
     }
