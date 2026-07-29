@@ -1064,6 +1064,17 @@ server.listen(PORT, () => {
     }, 20000);
   }
 
+  // Deepen shallow seeds: upgrade 2-layer fast seeds to complete five-layer
+  // atlases (action terminals, coverage ~100). Idempotent — deepened maps
+  // stop matching. Runs after the backfill window.
+  setTimeout(() => {
+    require('./jobs/deepenSeeds').deepenSeeds({
+      onProgress: (p) => console.log(`[deepen] ${p.done} deepened, ${p.failed} failed`)
+    })
+      .then(r => { if (r.done || r.failed) console.log('[deepen] done:', JSON.stringify(r)); })
+      .catch(e => console.error('[deepen]', e.message));
+  }, 90000);
+
   // Editorial takes for the best-known directory companies — idempotent,
   // only fills empty editorials. See jobs/editorialTakes.js for the rules
   // (attributed house voice, never counted as a review).

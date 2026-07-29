@@ -534,6 +534,150 @@ const DETAIL_TEMPLATES = {
 };
 
 // Generate a graph with substantive detail
+// ── DEEP static generator — a COMPLETE atlas, five layers to action ──────────
+// depth 0 core → 1 constellations → 2 aspects → 3 sub-aspects → 4 ACTION
+// terminals (action verb + concrete step). Every node lands status 'kept'
+// so the map reads finished and coverage sits at 100. No LLM calls.
+const ASPECT_TREE = {
+  offer: [
+    { l: 'The thing itself', s: 'What exactly is delivered, in one breath', subs: [
+      { l: 'Core package', s: 'The three things every buyer gets, no more', acts: ['Write the one-sentence offer and read it to five strangers', 'List the three deliverables every buyer gets — cut the rest'] },
+      { l: 'Differentiation', s: 'The one thing rivals cannot copy', acts: ['Name the one thing competitors can\'t copy and write down why', 'Collect three competitor offers and mark every gap yours fills'] }
+    ] },
+    { l: 'Proof it works', s: 'Evidence beats adjectives', subs: [
+      { l: 'First evidence', s: 'One real result, written up honestly', acts: ['Deliver one free pilot this month and write up the result', 'Ask two early users for one quoted sentence each'] },
+      { l: 'Packaging the proof', s: 'Put the strongest number where people look first', acts: ['Publish one before/after case note', 'Move the strongest number into the headline'] }
+    ] }
+  ],
+  demand: [
+    { l: 'Who buys', s: 'Named people, not personas', subs: [
+      { l: 'The first hundred', s: 'Real names who feel this problem weekly', acts: ['List 20 named people who hit this problem every week', 'Message ten of them today and log every reply'] },
+      { l: 'Where they gather', s: 'Go where the conversation already is', acts: ['Join the three places these people already talk', 'Post one genuinely useful answer a day for a week'] }
+    ] },
+    { l: 'Why they buy', s: 'Triggers and objections, verbatim', subs: [
+      { l: 'Trigger moments', s: 'The day someone decides to pay', acts: ['Interview five buyers about the day they decided', 'Write the three trigger events in their exact words'] },
+      { l: 'Objections', s: 'Every no has a reason — collect them', acts: ['List the five reasons people say no', 'Write a one-line answer for each and test it live'] }
+    ] }
+  ],
+  delivery: [
+    { l: 'The pipeline', s: 'From yes to delivered, mapped', subs: [
+      { l: 'First mile', s: 'Every step on one page', acts: ['Map every step from “yes” to “delivered” on one page', 'Time one real delivery end to end and write the number down'] },
+      { l: 'Quality gate', s: 'Define done before volume arrives', acts: ['Write “done” as a one-page checklist', 'Run the checklist on the next three deliveries'] }
+    ] },
+    { l: 'When it breaks', s: 'It will — decide the response now', subs: [
+      { l: 'Failure points', s: 'The three most likely breaks', acts: ['List the three most likely failures and one fix for each', 'Draft the apology-and-fix message before you need it'] },
+      { l: 'Capacity', s: 'Know the ceiling before you hit it', acts: ['Compute the maximum weekly volume at the current setup', 'Name the first hire or tool that doubles capacity'] }
+    ] }
+  ],
+  economy: [
+    { l: 'Unit math', s: 'One unit, fully costed, honestly priced', subs: [
+      { l: 'Cost per unit', s: 'Every cost of one delivered unit', acts: ['Total every cost of one delivered unit on paper', 'Cut or renegotiate the single biggest line item'] },
+      { l: 'Price', s: 'Price is a test, not a guess', acts: ['Set three price points and sell at the middle one', 'Raise the price 10% for the next five sales and log the wins'] }
+    ] },
+    { l: 'Cash', s: 'Runway and the first real dollar', subs: [
+      { l: 'Runway', s: 'Months left at current burn', acts: ['Compute months of runway at the current burn rate', 'Write the monthly break-even number where you\'ll see it daily'] },
+      { l: 'First revenue', s: 'Nothing is real until someone pays', acts: ['Invoice the first paying customer this week', 'Set up the payment rail and test it with one dollar'] }
+    ] }
+  ],
+  risk: [
+    { l: 'What kills it', s: 'Name the failure modes out loud', subs: [
+      { l: 'Top risks', s: 'The three ways this dies in year one', acts: ['Rank the three ways this dies in year one', 'Write one mitigation per risk and diarize a monthly review'] },
+      { l: 'Rules & rights', s: 'Licenses, terms, permissions', acts: ['List every license or permission needed and obtain the first one', 'Read the governing terms and note every hard limit'] }
+    ] },
+    { l: 'Resilience', s: 'Single points of failure, backed up', subs: [
+      { l: 'Dependencies', s: 'What you cannot operate without', acts: ['Name each single point of failure in the operation', 'Line up one backup for the most critical dependency'] },
+      { l: 'Worst case', s: 'Decide the insurance question in writing', acts: ['Price the insurance that covers the worst case', 'Decide self-insure versus policy — in writing'] }
+    ] }
+  ],
+  orchestration: [
+    { l: 'Who does what', s: 'Every task has a name on it', subs: [
+      { l: 'Roles', s: 'Owners, not volunteers', acts: ['Write every weekly task with an owner\'s name beside it', 'Drop or delegate the two lowest-value tasks'] },
+      { l: 'Cadence', s: 'The rhythm that keeps it honest', acts: ['Set the weekly review slot and keep it twice in a row', 'Choose the one metric read out at every review'] }
+    ] },
+    { l: 'Tools & systems', s: 'The stack that runs it while you sleep', subs: [
+      { l: 'The stack', s: 'What actually runs the operation', acts: ['List every tool the operation runs on today', 'Kill one redundant tool and document what remains'] },
+      { l: 'Automation', s: 'Template the repeated, automate the rest', acts: ['Automate the single most repeated manual step', 'Turn the three most-sent messages into templates'] }
+    ] }
+  ]
+};
+
+function generateDeepGraph(premise, category) {
+  const nodes = [], edges = [];
+  const CX = 600, CY = 400;
+  const coreId = new mongoose.Types.ObjectId();
+  nodes.push({
+    _id: coreId, label: 'CORE', statement: premise,
+    detail: `"${premise}" — mapped to the floor. Five layers: the domains that decide it, the aspects inside each, the specifics inside those, and at the bottom, concrete actions you could start this week.`,
+    depth: 0, x: CX, y: CY
+  });
+  const constellations = {
+    business: ['offer', 'demand', 'delivery', 'economy', 'risk'],
+    career: ['offer', 'demand', 'orchestration', 'economy'],
+    product: ['offer', 'delivery', 'orchestration', 'risk'],
+    creative: ['offer', 'demand', 'delivery', 'orchestration'],
+    other: ['offer', 'demand', 'delivery', 'economy']
+  };
+  const cons = constellations[category] || constellations.other;
+  const R1 = 190, R2 = 345, R3 = 505, R4 = 665;
+  const conSpan = (2 * Math.PI) / cons.length;
+
+  cons.forEach((con, ci) => {
+    const conAngle = conSpan * ci - Math.PI / 2;
+    const conId = new mongoose.Types.ObjectId();
+    const tpl = DETAIL_TEMPLATES[con] || DETAIL_TEMPLATES.offer;
+    nodes.push({
+      _id: conId, parentNodeId: coreId,
+      label: con.charAt(0).toUpperCase() + con.slice(1),
+      statement: `${con.charAt(0).toUpperCase() + con.slice(1)} — what this dimension must answer`,
+      detail: tpl.root(premise), constellation: con,
+      stage: (ci % 3) + 1, status: 'kept', depth: 1,
+      x: Math.round(CX + R1 * Math.cos(conAngle)), y: Math.round(CY + R1 * Math.sin(conAngle)),
+      scores: { economy: { value: 5 + (ci % 4) }, orchestration: { value: 4 + (ci % 4) }, demand: { value: 5 + ((ci + 1) % 4) } }
+    });
+    edges.push({ _id: new mongoose.Types.ObjectId(), sourceId: coreId, targetId: conId });
+
+    const aspects = ASPECT_TREE[con] || ASPECT_TREE.offer;
+    aspects.forEach((asp, ai) => {
+      const aAngle = conAngle + (ai - (aspects.length - 1) / 2) * (conSpan / 2.6);
+      const aspId = new mongoose.Types.ObjectId();
+      nodes.push({
+        _id: aspId, parentNodeId: conId, label: asp.l, statement: asp.s,
+        detail: `${asp.s}. For "${premise.substring(0, 60)}" this is where ${con} stops being abstract — the sub-points below carry it down to actions.`,
+        constellation: con, stage: (ai % 3) + 1, status: 'kept', depth: 2,
+        x: Math.round(CX + R2 * Math.cos(aAngle)), y: Math.round(CY + R2 * Math.sin(aAngle))
+      });
+      edges.push({ _id: new mongoose.Types.ObjectId(), sourceId: conId, targetId: aspId });
+
+      asp.subs.forEach((sub, si) => {
+        const sAngle = aAngle + (si - (asp.subs.length - 1) / 2) * (conSpan / 5.2);
+        const subId = new mongoose.Types.ObjectId();
+        nodes.push({
+          _id: subId, parentNodeId: aspId, label: sub.l, statement: sub.s,
+          detail: `${sub.s}. Two concrete moves sit under this — each one is startable this week without permission from anyone.`,
+          constellation: con, stage: (si % 3) + 1, status: 'kept', depth: 3,
+          x: Math.round(CX + R3 * Math.cos(sAngle)), y: Math.round(CY + R3 * Math.sin(sAngle))
+        });
+        edges.push({ _id: new mongoose.Types.ObjectId(), sourceId: aspId, targetId: subId });
+
+        sub.acts.forEach((act, xi) => {
+          const xAngle = sAngle + (xi - (sub.acts.length - 1) / 2) * (conSpan / 9);
+          const actId = new mongoose.Types.ObjectId();
+          nodes.push({
+            _id: actId, parentNodeId: subId, label: act.split(' ').slice(0, 4).join(' '),
+            statement: act,
+            detail: `Do it, then mark it done: ${act.toLowerCase()}. Terminal step — nothing below this but the doing.`,
+            constellation: con, stage: 3, status: 'kept', depth: 4,
+            terminal: true, determination: 'actionable', action: act,
+            x: Math.round(CX + R4 * Math.cos(xAngle)), y: Math.round(CY + R4 * Math.sin(xAngle))
+          });
+          edges.push({ _id: new mongoose.Types.ObjectId(), sourceId: subId, targetId: actId });
+        });
+      });
+    });
+  });
+  return { nodes, edges };
+}
+
 function generateBasicGraphWithDetail(premise, category) {
   const nodes = [];
   const edges = [];
@@ -874,8 +1018,9 @@ async function createSeedMap(user, topic, opts = {}) {
 
   // Fast corpus mode: static generation only — no LLM calls. Used by the boot
   // backfill to reach search-corpus scale in minutes instead of days.
+  // Deep by default: five layers down to action terminals, complete statuses.
   if (opts.fast) {
-    ({ nodes, edges } = generateBasicGraphWithDetail(premise, category));
+    ({ nodes, edges } = generateDeepGraph(premise, category));
   } else
   // Primary: frame-aware engine (classify -> frame -> nebula) so seeds carry
   // the right determination (actionable vs overview), frame, and terminals.
@@ -1230,7 +1375,7 @@ async function purgePersonSeeds({ dryRun = false } = {}) {
   return { matched: matches.length, unpublished, sample: matches.slice(0, 10).map(m => m.title) };
 }
 
-module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo, getCurrentAtlasCount, purgePersonSeeds, REAL_PERSON_NAMES };
+module.exports = { generateSeedMaps, getClockworkUser, hashPremise, createSeedMap, buildTopicPool, FLAT_POOL, backfillTo, getCurrentAtlasCount, purgePersonSeeds, REAL_PERSON_NAMES, generateDeepGraph, generatePreviewSvg, calculateCoverage };
 
 // Allow running directly: node jobs/seedMaps.js
 if (require.main === module) {
