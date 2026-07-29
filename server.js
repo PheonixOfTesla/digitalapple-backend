@@ -773,6 +773,37 @@ server.listen(PORT, () => {
   });
   console.log('RSS Aggregation: Scheduled (hourly)');
 
+  // Self-heal the Signal feed on boot. node-cron only fires while the process is
+  // alive, so a Railway restart at (say) 14:20 leaves the feed frozen until the
+  // NEXT top-of-hour — and if a fetch round errors, it can sit stale for days.
+  // On startup (and again every 30 min as a backstop) we check the newest item
+  // and refresh whatever has gone stale, so the feed is never more than a couple
+  // hours behind regardless of when the container last came up.
+  const NewsItem = require('./models/NewsItem');
+  const RSS_STALE_MS = 90 * 60 * 1000;   // headlines: refresh if >90 min old
+  const SIGNAL_STALE_MS = 14 * 60 * 60 * 1000; // Wikipedia signals: >14h old
+  async function ensureFreshNews(reason) {
+    try {
+      const newest = await NewsItem.findOne().sort({ fetchedAt: -1 }).select('fetchedAt').lean();
+      const age = newest ? Date.now() - new Date(newest.fetchedAt).getTime() : Infinity;
+      if (age > RSS_STALE_MS) {
+        console.log(`[NEWS] Feed stale (${Math.round(age / 60000)} min) — ${reason}; aggregating…`);
+        aggregateNews().catch(e => console.error('[NEWS] RSS refresh failed:', e.message));
+      }
+      // Wikipedia signals move slower; top them up when a whole cycle has lapsed.
+      const newestSig = await NewsItem.findOne({ source: /^Wikipedia/ }).sort({ fetchedAt: -1 }).select('fetchedAt').lean();
+      const sigAge = newestSig ? Date.now() - new Date(newestSig.fetchedAt).getTime() : Infinity;
+      if (sigAge > SIGNAL_STALE_MS) {
+        console.log(`[NEWS] Signals stale (${Math.round(sigAge / 3600000)}h) — ${reason}; generating…`);
+        require('./jobs/signalGenerator').generateSignals({ limit: 24 })
+          .catch(e => console.error('[NEWS] Signal refresh failed:', e.message));
+      }
+    } catch (e) { console.error('[NEWS] Freshness check failed:', e.message); }
+  }
+  setTimeout(() => ensureFreshNews('boot'), 12000);
+  cron.schedule('*/30 * * * *', () => ensureFreshNews('backstop'));
+  console.log('News Freshness: Boot check + 30-min backstop');
+
   // Schedule Wikipedia-sourced signal generation - 2x daily (spans genres reliably)
   cron.schedule('0 9,21 * * *', async () => {
     console.log('[CRON] Generating Wikipedia signals...');
