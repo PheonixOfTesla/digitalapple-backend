@@ -928,6 +928,19 @@ try {
       studioNs.to(String(payload.socketId)).emit('force-cam-off', { by: socket.studioName || 'The host' });
     });
 
+    // Host kicks someone — they're told, then thrown out server-side (a client
+    // that ignores the message is out of the room regardless).
+    socket.on('kick', (payload) => {
+      if (!joined || !socket.isHost || !payload || !payload.socketId) return;
+      const s = studioNs.sockets.get(String(payload.socketId));
+      if (!s || s.id === socket.id) return;
+      const room = studioNs.adapter.rooms.get(joined);
+      if (!room || !room.has(s.id)) return;
+      studioNs.to(s.id).emit('kicked', { by: socket.studioName || 'The host' });
+      try { s.leave(joined); } catch (e) {}
+      socket.to(joined).emit('peer-left', { socketId: s.id, userId: s.userId });
+    });
+
     // Host announces a role change — every client updates, and the affected
     // member's live share rights flip without a rejoin.
     socket.on('role-set', (payload) => {

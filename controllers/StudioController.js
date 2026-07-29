@@ -384,6 +384,25 @@ router.post('/:id/role', async (req, res) => {
   } catch (e) { console.error('studio role:', e.message); res.status(500).json({ error: 'Could not assign role' }); }
 });
 
+// Host (or admin) removes a member — out of the room's membership entirely.
+// A private room then takes a fresh knock to get back in.
+router.delete('/:id/members/:userId', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(req.params.userId)) return res.status(400).json({ error: 'Bad id' });
+    const convo = await Conversation.findOne({ _id: req.params.id, $or: [{ isStudio: true }, { isRoom: true }], closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Studio not found' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) return res.status(403).json({ error: 'Only the host can remove members' });
+    if (String(convo.ownerId) === String(req.params.userId)) return res.status(400).json({ error: 'The host stays' });
+    convo.participants = (convo.participants || []).filter(id => String(id) !== String(req.params.userId));
+    convo.memberRoles = (convo.memberRoles || []).filter(r => String(r.userId) !== String(req.params.userId));
+    convo.joinRequests = (convo.joinRequests || []).filter(r => String(r.userId) !== String(req.params.userId));
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true });
+  } catch (e) { console.error('studio kick:', e.message); res.status(500).json({ error: 'Could not remove member' }); }
+});
+
 // ── Host creates + attaches a blueprint to the Studio ─────────────────────────
 router.post('/:id/blueprint', async (req, res) => {
   try {
