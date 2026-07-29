@@ -28,12 +28,16 @@ router.use(verifyToken);
 
 function clampStr(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
 
-// Validate a client-supplied attachment: must be our Cloudinary asset, known type.
+// Validate a client-supplied attachment: our Cloudinary assets for every type,
+// plus Giphy's CDN for GIFs picked from the search picker.
 function cleanAttachment(a) {
   if (!a || typeof a !== 'object') return null;
   const url = clampStr(a.url, 500);
   const type = ['image', 'gif', 'pdf', 'doc'].includes(a.type) ? a.type : null;
-  if (!type || !/^https:\/\/res\.cloudinary\.com\//.test(url)) return null;
+  if (!type) return null;
+  const cloudinary = /^https:\/\/res\.cloudinary\.com\//.test(url);
+  const giphy = type === 'gif' && /^https:\/\/media[0-9]?\.giphy\.com\//.test(url);
+  if (!cloudinary && !giphy) return null;
   return { url, type, name: clampStr(a.name, 160) };
 }
 
@@ -383,6 +387,29 @@ router.post('/uploads', chatUpload.single('file'), async (req, res) => {
       : 'image';
     res.json({ success: true, url: req.file.path, type, name: clampStr(req.file.originalname, 160) });
   } catch (e) { console.error('chat upload error:', e.message); res.status(500).json({ error: 'Upload failed' }); }
+});
+
+// GIF search — a thin proxy over Giphy so the API key stays server-side.
+// Empty q returns trending. Without GIPHY_API_KEY the picker reports itself
+// unconfigured and the client falls back to plain GIF uploads.
+router.get('/gifs', async (req, res) => {
+  try {
+    const key = process.env.GIPHY_API_KEY;
+    if (!key) return res.json({ success: true, configured: false, gifs: [] });
+    const q = clampStr(req.query.q, 80);
+    const url = q
+      ? `https://api.giphy.com/v1/gifs/search?api_key=${key}&q=${encodeURIComponent(q)}&limit=24&rating=pg-13`
+      : `https://api.giphy.com/v1/gifs/trending?api_key=${key}&limit=24&rating=pg-13`;
+    const r = await fetch(url);
+    const d = await r.json();
+    const gifs = (d.data || []).map(g => {
+      const img = (g.images || {});
+      const full = img.downsized || img.original || {};
+      const prev = img.fixed_width_small || img.preview_gif || full;
+      return { id: g.id, url: full.url, preview: prev.url, title: clampStr(g.title, 100) };
+    }).filter(g => g.url && /^https:\/\/media[0-9]?\.giphy\.com\//.test(g.url));
+    res.json({ success: true, configured: true, gifs });
+  } catch (e) { console.error('gif search error:', e.message); res.status(500).json({ error: 'GIF search failed' }); }
 });
 
 router.get('/conversations/:id/messages', async (req, res) => {
