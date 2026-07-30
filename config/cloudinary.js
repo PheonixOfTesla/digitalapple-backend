@@ -57,16 +57,31 @@ const upload = multer({
 });
 
 // Chat attachments — photos, GIFs, and PDFs shared in Studio/thread chat.
-// No face-crop transformation; PDFs ride Cloudinary's image pipeline.
+// No face-crop transformation. Documents route to 'raw' exactly as they do in
+// Drive — the old note here said "PDFs ride Cloudinary's image pipeline", which
+// is precisely the assumption that made PDF uploads fail: as an image a PDF
+// lands under the image size ceiling and behind Cloudinary's PDF-delivery
+// restriction. Same helper as Drive so the two cannot drift apart.
 let chatStorage;
 if (isCloudinaryConfigured) {
   const { CloudinaryStorage } = require('multer-storage-cloudinary');
   chatStorage = new CloudinaryStorage({
     cloudinary: cloudinary,
-    params: {
-      folder: 'digitalapple/chat',
-      resource_type: 'auto',
-      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf', 'doc', 'docx']
+    params: (req, file) => {
+      const mime = (file && file.mimetype) || '';
+      const kind = resourceTypeFor(mime);
+      const base = { folder: 'digitalapple/chat', resource_type: kind };
+      if (kind === 'raw') {
+        // Raw delivery keys off the public_id, so it must carry the real
+        // extension or the download arrives without one and won't open.
+        const orig = String((file && file.originalname) || 'file');
+        const dot = orig.lastIndexOf('.');
+        const ext = dot > 0 ? orig.slice(dot).toLowerCase() : '';
+        const stem = (dot > 0 ? orig.slice(0, dot) : orig)
+          .replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 60) || 'file';
+        base.public_id = stem + '-' + Date.now() + ext;
+      }
+      return base;
     }
   });
 } else {
@@ -117,6 +132,28 @@ const tickerUpload = multer({
 
 // Drive files — the personal file home. Documents of every working kind:
 // photos, video, PDFs, Word, PowerPoint.
+
+/**
+ * Which Cloudinary pipeline an uploaded file belongs in, as a CONCRETE type.
+ *
+ * Exported because two places have to agree and nothing connects them:
+ * multer-storage-cloudinary hands back only { path, size, filename } from its
+ * _handleFile, so `req.file.resource_type` is ALWAYS undefined. Any caller that
+ * later has to destroy() the asset — the over-quota rollback, for one — must
+ * re-derive the type from the mimetype exactly as the upload did. Guessing
+ * 'image' for a document stored as 'raw' makes destroy() a no-op that reports
+ * success, so the file we refused to accept stays on the account forever.
+ *
+ * Concrete rather than 'auto' on purpose: destroy() does not accept 'auto', so
+ * using the same concrete value on both sides is what keeps them in step.
+ */
+function resourceTypeFor(mime) {
+  const m = String(mime || '');
+  if (/^image\//.test(m)) return 'image';
+  if (/^video\//.test(m)) return 'video';
+  return 'raw';
+}
+
 let driveStorage;
 if (isCloudinaryConfigured) {
   const { CloudinaryStorage } = require('multer-storage-cloudinary');
@@ -128,8 +165,9 @@ if (isCloudinaryConfigured) {
     // Documents go up as 'raw' — stored and served byte-for-byte.
     params: (req, file) => {
       const mime = (file && file.mimetype) || '';
-      const isMedia = /^image\//.test(mime) || /^video\//.test(mime);
-      const base = { folder: 'digitalapple/drive', resource_type: isMedia ? 'auto' : 'raw' };
+      const kind = resourceTypeFor(mime);
+      const isMedia = kind !== 'raw';
+      const base = { folder: 'digitalapple/drive', resource_type: kind };
       if (!isMedia) {
         // Raw delivery keys off the public_id, so it has to carry the real
         // extension or the download arrives without one and won't open.
@@ -165,4 +203,4 @@ const driveUpload = multer({
   }
 });
 
-module.exports = { cloudinary, upload, chatUpload, tickerUpload, driveUpload, isCloudinaryConfigured };
+module.exports = { cloudinary, upload, chatUpload, tickerUpload, driveUpload, resourceTypeFor, isCloudinaryConfigured };

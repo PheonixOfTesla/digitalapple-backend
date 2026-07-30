@@ -192,7 +192,7 @@ router.post('/storage/purchase', verifyToken, async (req, res) => {
 });
 
 router.post('/upload', verifyToken, async (req, res) => {
-  const { driveUpload, cloudinary } = require('../config/cloudinary');
+  const { driveUpload, cloudinary, resourceTypeFor } = require('../config/cloudinary');
 
   // Cheap pre-check on the declared body size, BEFORE anything streams to
   // Cloudinary — a user who is already full shouldn't burn the bandwidth (or
@@ -248,10 +248,14 @@ router.post('/upload', verifyToken, async (req, res) => {
         // Never keep a file we refuse to count — drop the Cloudinary copy.
         try {
           if (cloudinary && req.file.filename) {
-            // destroy() has no 'auto' — it needs the concrete type the asset
-            // was stored under, or a raw document silently survives deletion.
+            // Re-derive the type from the mimetype. multer-storage-cloudinary
+            // never reports resource_type back on req.file, so the old
+            // `req.file.resource_type || 'image'` was ALWAYS 'image' — it asked
+            // Cloudinary to delete an image that had been stored as raw. That
+            // call succeeds and deletes nothing, so every PDF or deck rejected
+            // for quota stayed on the account: billed, orphaned, invisible.
             await cloudinary.uploader.destroy(req.file.filename, {
-              resource_type: req.file.resource_type || 'image'
+              resource_type: resourceTypeFor(req.file.mimetype)
             });
           }
         } catch (e2) { console.error('Drive rollback failed:', e2.message); }
