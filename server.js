@@ -762,8 +762,10 @@ server.listen(PORT, () => {
       .catch(e => console.error('[editorial]', e.message));
   }, 30000);
 
-  // Schedule RSS aggregation - every hour at minute 0
-  cron.schedule('0 * * * *', async () => {
+  // RSS aggregation — every 20 min. The feed should rotate visibly through
+  // the day: a headline that arrived at 9:00 shouldn't still be the top card
+  // by lunch.
+  cron.schedule('*/20 * * * *', async () => {
     console.log('[CRON] Running RSS aggregation...');
     try {
       await aggregateNews();
@@ -771,17 +773,16 @@ server.listen(PORT, () => {
       console.error('[CRON] RSS aggregation failed:', error.message);
     }
   });
-  console.log('RSS Aggregation: Scheduled (hourly)');
+  console.log('RSS Aggregation: Scheduled (every 20 min)');
 
-  // Self-heal the Signal feed on boot. node-cron only fires while the process is
-  // alive, so a Railway restart at (say) 14:20 leaves the feed frozen until the
-  // NEXT top-of-hour — and if a fetch round errors, it can sit stale for days.
-  // On startup (and again every 30 min as a backstop) we check the newest item
-  // and refresh whatever has gone stale, so the feed is never more than a couple
-  // hours behind regardless of when the container last came up.
+  // Self-heal on boot + tight backstop. node-cron only fires while the process
+  // is alive, so a Railway restart at (say) 14:12 leaves the feed frozen until
+  // 14:20. On startup (and every 10 min as a backstop) we check the newest
+  // item and refresh whatever has gone stale — the feed is never more than
+  // ~30 min behind regardless of when the container last came up.
   const NewsItem = require('./models/NewsItem');
-  const RSS_STALE_MS = 90 * 60 * 1000;   // headlines: refresh if >90 min old
-  const SIGNAL_STALE_MS = 14 * 60 * 60 * 1000; // Wikipedia signals: >14h old
+  const RSS_STALE_MS = 30 * 60 * 1000;    // headlines: refresh if >30 min old
+  const SIGNAL_STALE_MS = 4 * 60 * 60 * 1000; // Wikipedia signals: >4h old
   async function ensureFreshNews(reason) {
     try {
       const newest = await NewsItem.findOne().sort({ fetchedAt: -1 }).select('fetchedAt').lean();
@@ -790,22 +791,24 @@ server.listen(PORT, () => {
         console.log(`[NEWS] Feed stale (${Math.round(age / 60000)} min) — ${reason}; aggregating…`);
         aggregateNews().catch(e => console.error('[NEWS] RSS refresh failed:', e.message));
       }
-      // Wikipedia signals move slower; top them up when a whole cycle has lapsed.
+      // Wikipedia signals — refresh when the newest is >4h old so the top of
+      // the feed keeps turning over between the scheduled generations.
       const newestSig = await NewsItem.findOne({ source: /^Wikipedia/ }).sort({ fetchedAt: -1 }).select('fetchedAt').lean();
       const sigAge = newestSig ? Date.now() - new Date(newestSig.fetchedAt).getTime() : Infinity;
       if (sigAge > SIGNAL_STALE_MS) {
-        console.log(`[NEWS] Signals stale (${Math.round(sigAge / 3600000)}h) — ${reason}; generating…`);
+        console.log(`[NEWS] Signals stale (${Math.round(sigAge / 60000)} min) — ${reason}; generating…`);
         require('./jobs/signalGenerator').generateSignals({ limit: 24 })
           .catch(e => console.error('[NEWS] Signal refresh failed:', e.message));
       }
     } catch (e) { console.error('[NEWS] Freshness check failed:', e.message); }
   }
   setTimeout(() => ensureFreshNews('boot'), 12000);
-  cron.schedule('*/30 * * * *', () => ensureFreshNews('backstop'));
-  console.log('News Freshness: Boot check + 30-min backstop');
+  cron.schedule('*/10 * * * *', () => ensureFreshNews('backstop'));
+  console.log('News Freshness: Boot check + 10-min backstop');
 
-  // Schedule Wikipedia-sourced signal generation - 2x daily (spans genres reliably)
-  cron.schedule('0 9,21 * * *', async () => {
+  // Wikipedia-sourced signal generation — every 3 hours so the Signals rail
+  // rotates through the day, not just twice.
+  cron.schedule('0 */3 * * *', async () => {
     console.log('[CRON] Generating Wikipedia signals...');
     try {
       const { generateSignals } = require('./jobs/signalGenerator');
@@ -814,7 +817,7 @@ server.listen(PORT, () => {
       console.error('[CRON] Signal generation failed:', error.message);
     }
   });
-  console.log('Signal Generation: Scheduled (9am, 9pm UTC)');
+  console.log('Signal Generation: Scheduled (every 3h)');
 
   // Weekly company aggregation — refresh the directory from Wikidata (Mon 04:00 UTC)
   cron.schedule('0 4 * * 1', async () => {
