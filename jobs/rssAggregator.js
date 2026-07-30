@@ -16,6 +16,8 @@ const parser = new Parser({
 });
 
 // RSS feed sources - headlines only for legal compliance
+const { anyBlocked } = require('../services/contentFilter');
+
 const RSS_FEEDS = [
   // AI/Tech news sources
   { url: 'https://techcrunch.com/category/artificial-intelligence/feed/', source: 'TechCrunch', category: 'ai' },
@@ -37,6 +39,14 @@ const RSS_FEEDS = [
   { url: 'https://www.sciencedaily.com/rss/computers_math/artificial_intelligence.xml', source: 'ScienceDaily AI', category: 'ai' },
   { url: 'https://www.nasa.gov/news-release/feed/', source: 'NASA', category: 'science' },
 
+  // Space — one NASA press feed was the whole of it, and it publishes a few
+  // times a week, so 'space' news went stale between releases. These add daily
+  // volume from the agencies and the beat press.
+  { url: 'https://www.esa.int/rssfeed/Our_Activities/Space_News', source: 'ESA', category: 'space' },
+  { url: 'https://phys.org/rss-feed/space-news/', source: 'Phys.org Space', category: 'space' },
+  { url: 'https://www.space.com/feeds.xml', source: 'Space.com', category: 'space' },
+  { url: 'https://spacenews.com/feed/', source: 'SpaceNews', category: 'space' },
+
   // Startup / tech front page (relevance-filtered below)
   { url: 'https://news.ycombinator.com/rss', source: 'Hacker News', category: 'startup' }
 ];
@@ -44,7 +54,7 @@ const RSS_FEEDS = [
 // Signal = "what's changing in AI & tech". Feeds tagged 'ai'/'tech' are already
 // on-topic and pass as-is; everything else (science, startup, HN) must match a
 // tech/innovation keyword so general/human-interest headlines are dropped.
-const ON_TOPIC = new Set(['ai', 'tech']);
+const ON_TOPIC = new Set(['ai', 'tech', 'space']);
 const TECH_RE = /\b(a\.?i\.?|artificial intelligence|machine learning|\bml\b|llm|gpt|openai|anthropic|claude|gemini|deepmind|mistral|meta|google|microsoft|apple|amazon|neural|model|robot|chip|semiconductor|gpu|nvidia|quantum|algorithm|automat|agent|software|hardware|\bapp\b|platform|startup|fund(ing|ed)|raise|series [a-e]|venture|\bipo\b|acqui|launch|releas|data|privacy|cyber|security|breach|encrypt|crypto|blockchain|space|rocket|satellite|spacex|biotech|genom|\bdna\b|energy|batter|fusion|solar|research|breakthrough|physics|\bmath|comput|cloud|\bapi\b|open source|patent|protein|fossil|telescope|climate)\b/i;
 
 async function fetchFeed(feedConfig) {
@@ -56,6 +66,9 @@ async function fetchFeed(feedConfig) {
 
     for (const item of feed.items.slice(0, 20)) { // Max 20 per feed
       const title = item.title?.trim().substring(0, 500) || 'Untitled';
+      // Brand safety first — sexual-violence / child-abuse headlines never
+      // enter the store, whatever feed they arrive on.
+      if (anyBlocked(title, item.contentSnippet)) continue;
       // Drop off-topic headlines from broad feeds (science/startup/HN): a Signal
       // must be about AI/tech/innovation, not general human-interest news.
       if (!ON_TOPIC.has(category) && !TECH_RE.test(title)) continue;

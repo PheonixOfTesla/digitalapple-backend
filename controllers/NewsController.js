@@ -8,6 +8,8 @@ const express = require('express');
 const NewsItem = require('../models/NewsItem');
 const SignalEntry = require('../models/SignalEntry');
 
+const { titleNotBlocked } = require('../services/contentFilter');
+
 const router = express.Router();
 
 // Low-signal academic sources to keep out of the feed.
@@ -58,9 +60,12 @@ router.get('/', async (req, res) => {
       // Fetch headlines. Exclude low-signal academic sources so previously
       // aggregated arXiv jargon stops surfacing immediately (not just going
       // forward). Also drop the 'research' category and absurdly long titles.
+      // Blocked headlines are filtered at QUERY time as well as at ingest:
+      // items stored before the filter existed are still in the database.
       const headlineQuery = {
         source: { $nin: EXCLUDED_SOURCES },
-        category: { $ne: 'research' }
+        category: { $ne: 'research' },
+        ...titleNotBlocked()
       };
       if (category) headlineQuery.category = category; // explicit filter overrides
       const wantHead = (type === 'headlines') ? (skip + limit) : (Math.floor(limit / 2) + 2);
@@ -140,7 +145,8 @@ router.get('/', async (req, res) => {
         const seen = new Set(heads.map(h => String(h.id)));
         const topupQuery = {
           source: { $nin: EXCLUDED_SOURCES },
-          category: { $ne: 'research' }
+          category: { $ne: 'research' },
+          ...titleNotBlocked()
         };
         if (category) topupQuery.category = category;
         const extras = await NewsItem.find(topupQuery).sort({ publishedAt: -1 }).limit(target + 20).lean();
@@ -166,8 +172,8 @@ router.get('/', async (req, res) => {
       items = merged.slice(0, limit);
 
       const headlineCountQuery = category
-        ? { category }
-        : { source: { $nin: ['arXiv AI', 'arXiv ML'] }, category: { $ne: 'research' } };
+        ? { category, ...titleNotBlocked() }
+        : { source: { $nin: ['arXiv AI', 'arXiv ML'] }, category: { $ne: 'research' }, ...titleNotBlocked() };
       const [headlineCount, signalCount] = await Promise.all([
         NewsItem.countDocuments(headlineCountQuery),
         SignalEntry.countDocuments({ status: 'published' })
