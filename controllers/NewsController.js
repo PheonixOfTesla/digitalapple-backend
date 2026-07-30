@@ -130,8 +130,32 @@ router.get('/', async (req, res) => {
     // Signal (DigitalApple) entries — a plain recency re-sort would collapse the
     // balance and let the highest-volume feed dominate again.
     if (!type) {
-      const heads = items.filter(i => i.origin === 'aggregated');
+      let heads = items.filter(i => i.origin === 'aggregated');
       const sigs = items.filter(i => i.origin === 'signal');
+      // When signals under-deliver, top up with more headlines so the response
+      // actually honors the requested limit — otherwise the rail looks stale
+      // even though the DB has 1000+ fresh headlines.
+      const target = Math.max(0, limit - sigs.length);
+      if (heads.length < target) {
+        const seen = new Set(heads.map(h => String(h.id)));
+        const topupQuery = {
+          source: { $nin: EXCLUDED_SOURCES },
+          category: { $ne: 'research' }
+        };
+        if (category) topupQuery.category = category;
+        const extras = await NewsItem.find(topupQuery).sort({ publishedAt: -1 }).limit(target + 20).lean();
+        for (const e of extras) {
+          if (heads.length >= target) break;
+          const id = String(e._id);
+          if (seen.has(id)) continue;
+          heads.push({
+            id: e._id, origin: 'aggregated', type: 'general',
+            title: e.title, sourceName: e.source, sourceUrl: e.link,
+            category: e.category, publishedAt: e.publishedAt, fetchedAt: e.fetchedAt
+          });
+          seen.add(id);
+        }
+      }
       const merged = [];
       let si = 0;
       for (let hi = 0; hi < heads.length; hi++) {
