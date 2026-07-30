@@ -23,6 +23,9 @@ const Project = require('../models/Project');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const Post = require('../models/Post');
+const User = require('../models/User');
+const TokenLedger = require('../models/TokenLedger');
+const storage = require('../services/storage');
 const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -70,8 +73,29 @@ router.get('/', verifyToken, async (req, res) => {
 
     const drawers = [...new Set(files.map(f => f.drawer).filter(Boolean))].sort();
 
+    // Usage must aggregate over EVERY file, not the 300 listed above — summing
+    // the capped array would under-report storage for heavy accounts and let
+    // them upload past their quota.
+    const [meUser, usedNow] = await Promise.all([
+      User.findById(me).select('storageBonusBytes').lean(),
+      storage.usedBytes(me)
+    ]);
+    const quotaNow = storage.quotaBytes(meUser);
+
     res.json({
       success: true,
+      storage: {
+        usedBytes: usedNow,
+        quotaBytes: quotaNow,
+        remainingBytes: Math.max(0, quotaNow - usedNow),
+        percentUsed: quotaNow > 0 ? Math.min(100, Math.round((usedNow / quotaNow) * 100)) : 0,
+        full: usedNow >= quotaNow,
+        used: storage.fmt(usedNow),
+        quota: storage.fmt(quotaNow),
+        remaining: storage.fmt(Math.max(0, quotaNow - usedNow)),
+        maxFileBytes: storage.MAX_FILE_BYTES,
+        tokensPerGb: storage.TOKENS_PER_GB
+      },
       drawers,
       documents,
       blueprints: projects.map(p => ({
@@ -92,12 +116,117 @@ router.get('/', verifyToken, async (req, res) => {
   }
 });
 
-router.post('/upload', verifyToken, (req, res) => {
-  const { driveUpload } = require('../config/cloudinary');
+/** Current capacity + usage, for the meter and the "buy more" screen. */
+router.get('/storage', verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('storageBonusBytes tokenBalance').lean();
+    if (!user) return res.status(404).json({ error: 'Not found' });
+    const s = await storage.summary({ _id: req.userId, storageBonusBytes: user.storageBonusBytes });
+    res.json({ success: true, storage: s, tokenBalance: user.tokenBalance || 0 });
+  } catch (e) {
+    console.error('Drive storage error:', e.message);
+    res.status(500).json({ error: 'Could not read your storage' });
+  }
+});
+
+/**
+ * Buy extra Drive capacity with tokens. The balance is decremented atomically
+ * with a $gte guard so two parallel requests can't both spend the last token,
+ * and the change writes a TokenLedger row like every other spend.
+ */
+router.post('/storage/purchase', verifyToken, async (req, res) => {
+  try {
+    const gb = Math.floor(Number(req.body && req.body.gb));
+    if (!Number.isFinite(gb) || gb < 1 || gb > 100) {
+      return res.status(400).json({ error: 'Ask for between 1 and 100 GB' });
+    }
+    const cost = gb * storage.TOKENS_PER_GB;
+
+    const updated = await User.findOneAndUpdate(
+      { _id: req.userId, tokenBalance: { $gte: cost } },
+      { $inc: { tokenBalance: -cost, storageBonusBytes: gb * storage.GB } },
+      { new: true }
+    );
+    if (!updated) {
+      const me = await User.findById(req.userId).select('tokenBalance').lean();
+      return res.status(402).json({
+        error: 'Not enough tokens',
+        code: 'INSUFFICIENT_TOKENS',
+        needed: cost,
+        balance: (me && me.tokenBalance) || 0
+      });
+    }
+
+    await TokenLedger.create({
+      userId: req.userId,
+      delta: -cost,
+      reason: 'spend',
+      balanceAfter: updated.tokenBalance,
+      metadata: { action: 'drive_storage', gb, bytes: gb * storage.GB }
+    });
+
+    res.json({
+      success: true,
+      storage: await storage.summary(updated),
+      tokenBalance: updated.tokenBalance,
+      spent: cost
+    });
+  } catch (e) {
+    console.error('Drive storage purchase error:', e.message);
+    res.status(500).json({ error: 'Could not add storage' });
+  }
+});
+
+router.post('/upload', verifyToken, async (req, res) => {
+  const { driveUpload, cloudinary } = require('../config/cloudinary');
+
+  // Cheap pre-check on the declared body size, BEFORE anything streams to
+  // Cloudinary — a user who is already full shouldn't burn the bandwidth (or
+  // our storage bill) on an upload we're going to refuse anyway.
+  let user, used, quota;
+  try {
+    user = await User.findById(req.userId).select('storageBonusBytes').lean();
+    if (!user) return res.status(404).json({ error: 'Not found' });
+    used = await storage.usedBytes(req.userId);
+    quota = storage.quotaBytes(user);
+    const declared = Number(req.headers['content-length'] || 0);
+    if (declared > 0) {
+      const blocked = storage.overQuota(declared, used, quota);
+      if (blocked) return res.status(402).json(blocked);
+    }
+  } catch (e) {
+    console.error('Drive quota precheck error:', e.message);
+    return res.status(500).json({ error: 'Could not check your storage' });
+  }
+
   driveUpload.single('file')(req, res, async (err) => {
-    if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+    if (err) {
+      // multer's own text for the size cap is just "File too large", which
+      // never tells the user what the cap actually is — that's the 400 they hit.
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          error: `That file is over the ${storage.fmt(storage.MAX_FILE_BYTES)} per-file limit.`,
+          code: 'FILE_TOO_LARGE',
+          maxFileBytes: storage.MAX_FILE_BYTES
+        });
+      }
+      return res.status(400).json({ error: err.message || 'Upload failed' });
+    }
     if (!req.file || !req.file.path) return res.status(400).json({ error: 'No file received' });
     try {
+      // Exact re-check: Content-Length includes multipart overhead and is
+      // absent on chunked uploads, so the true size is only known now.
+      const blocked = storage.overQuota(req.file.size || 0, used, quota);
+      if (blocked) {
+        // Never keep a file we refuse to count — drop the Cloudinary copy.
+        try {
+          if (cloudinary && req.file.filename) {
+            await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'auto' });
+          }
+        } catch (e2) { console.error('Drive rollback failed:', e2.message); }
+        return res.status(402).json(blocked);
+      }
+
       const f = new DriveFile({
         ownerId: req.userId,
         name: String(req.file.originalname || 'File').slice(0, 200),
@@ -107,7 +236,11 @@ router.post('/upload', verifyToken, (req, res) => {
         size: req.file.size
       });
       await f.save();
-      res.json({ success: true, file: { id: f._id, name: f.name, url: f.url, type: f.type, drawer: f.drawer || null, source: 'drive', canManage: true, when: f.createdAt } });
+      res.json({
+        success: true,
+        storage: await storage.summary({ _id: req.userId, storageBonusBytes: user.storageBonusBytes }),
+        file: { id: f._id, name: f.name, url: f.url, type: f.type, drawer: f.drawer || null, source: 'drive', canManage: true, when: f.createdAt }
+      });
     } catch (e) {
       console.error('Drive save error:', e.message);
       res.status(500).json({ error: 'Could not save the file' });

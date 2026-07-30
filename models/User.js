@@ -118,6 +118,14 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Drive capacity bought on top of the free allowance, in bytes. Paid for
+  // out of tokenBalance (see services/storage.js) so extra storage rides the
+  // existing Stripe -> tokens rail instead of a second billing system.
+  storageBonusBytes: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   createdAt: {
     type: Date,
     default: Date.now
