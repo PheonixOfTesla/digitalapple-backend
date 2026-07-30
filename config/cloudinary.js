@@ -122,7 +122,26 @@ if (isCloudinaryConfigured) {
   const { CloudinaryStorage } = require('multer-storage-cloudinary');
   driveStorage = new CloudinaryStorage({
     cloudinary: cloudinary,
-    params: { folder: 'digitalapple/drive', resource_type: 'auto' }
+    // resource_type MUST be picked per file. 'auto' classifies a PDF as an
+    // 'image', which is why PDFs failed: it puts them under the image size
+    // ceiling AND behind Cloudinary's "PDF/ZIP delivery" restriction.
+    // Documents go up as 'raw' — stored and served byte-for-byte.
+    params: (req, file) => {
+      const mime = (file && file.mimetype) || '';
+      const isMedia = /^image\//.test(mime) || /^video\//.test(mime);
+      const base = { folder: 'digitalapple/drive', resource_type: isMedia ? 'auto' : 'raw' };
+      if (!isMedia) {
+        // Raw delivery keys off the public_id, so it has to carry the real
+        // extension or the download arrives without one and won't open.
+        const orig = String((file && file.originalname) || 'file');
+        const dot = orig.lastIndexOf('.');
+        const ext = dot > 0 ? orig.slice(dot).toLowerCase() : '';
+        const stem = (dot > 0 ? orig.slice(0, dot) : orig)
+          .replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 60) || 'file';
+        base.public_id = stem + '-' + Date.now() + ext;
+      }
+      return base;
+    }
   });
 } else {
   driveStorage = multer.memoryStorage();

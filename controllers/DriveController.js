@@ -30,6 +30,18 @@ const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
 
+/**
+ * Turn a Cloudinary delivery URL into a download. fl_attachment flips the
+ * response to Content-Disposition: attachment, so the browser saves the file
+ * instead of rendering it — that's the "export" for every document in Drive,
+ * including ones that arrived via chat or the Ticker.
+ */
+function downloadUrl(url) {
+  const u = String(url || '');
+  if (!u || u.indexOf('/upload/') < 0) return u || null;
+  return u.replace('/upload/', '/upload/fl_attachment/');
+}
+
 function typeFromMime(mime) {
   if (/^image\//.test(mime)) return 'image';
   if (/^video\//.test(mime)) return 'video';
@@ -57,16 +69,18 @@ router.get('/', verifyToken, async (req, res) => {
 
     const documents = [
       ...files.map(f => ({
-        id: f._id, name: f.name, url: f.url, type: f.type,
+        id: f._id, name: f.name, url: f.url, downloadUrl: downloadUrl(f.url), type: f.type,
         drawer: f.drawer || null, source: 'drive', canManage: true, when: f.createdAt
       })),
       ...chatMsgs.map(m => ({
         id: m._id, name: (m.attachment.name || 'Chat file'), url: m.attachment.url,
+        downloadUrl: downloadUrl(m.attachment.url),
         type: m.attachment.type === 'gif' ? 'image' : (m.attachment.type || 'other'),
         drawer: null, source: 'chat', canManage: false, when: m.createdAt
       })),
       ...tickPosts.map(p => ({
         id: p._id, name: (p.body || 'Ticker post').slice(0, 60), url: p.media.url,
+        downloadUrl: downloadUrl(p.media.url),
         type: p.media.type || 'image', drawer: null, source: 'ticker', canManage: false, when: p.createdAt
       }))
     ].sort((a, b) => new Date(b.when) - new Date(a.when));
@@ -201,8 +215,7 @@ router.post('/upload', verifyToken, async (req, res) => {
 
   driveUpload.single('file')(req, res, async (err) => {
     if (err) {
-      // multer's own text for the size cap is just "File too large", which
-      // never tells the user what the cap actually is — that's the 400 they hit.
+      // multer's own text for its cap is just "File too large" — no number.
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({
           error: `That file is over the ${storage.fmt(storage.MAX_FILE_BYTES)} per-file limit.`,
@@ -210,7 +223,21 @@ router.post('/upload', verifyToken, async (req, res) => {
           maxFileBytes: storage.MAX_FILE_BYTES
         });
       }
-      return res.status(400).json({ error: err.message || 'Upload failed' });
+      // Cloudinary enforces its OWN per-plan ceiling, which is lower than ours
+      // and is the limit users actually hit ("Got 55528586. Maximum is
+      // 10485760."). Report the real numbers rather than our looser cap.
+      const raw = String(err.message || '');
+      const hit = raw.match(/Got (\d+).*?Maximum is (\d+)/i);
+      if (hit) {
+        const got = parseInt(hit[1], 10), max = parseInt(hit[2], 10);
+        return res.status(413).json({
+          error: `That file is ${storage.fmt(got)} — the limit for this file type is ${storage.fmt(max)}.`,
+          code: 'FILE_TOO_LARGE',
+          fileBytes: got,
+          maxFileBytes: max
+        });
+      }
+      return res.status(400).json({ error: raw || 'Upload failed' });
     }
     if (!req.file || !req.file.path) return res.status(400).json({ error: 'No file received' });
     try {
@@ -221,7 +248,11 @@ router.post('/upload', verifyToken, async (req, res) => {
         // Never keep a file we refuse to count — drop the Cloudinary copy.
         try {
           if (cloudinary && req.file.filename) {
-            await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'auto' });
+            // destroy() has no 'auto' — it needs the concrete type the asset
+            // was stored under, or a raw document silently survives deletion.
+            await cloudinary.uploader.destroy(req.file.filename, {
+              resource_type: req.file.resource_type || 'image'
+            });
           }
         } catch (e2) { console.error('Drive rollback failed:', e2.message); }
         return res.status(402).json(blocked);
@@ -239,7 +270,7 @@ router.post('/upload', verifyToken, async (req, res) => {
       res.json({
         success: true,
         storage: await storage.summary({ _id: req.userId, storageBonusBytes: user.storageBonusBytes }),
-        file: { id: f._id, name: f.name, url: f.url, type: f.type, drawer: f.drawer || null, source: 'drive', canManage: true, when: f.createdAt }
+        file: { id: f._id, name: f.name, url: f.url, downloadUrl: downloadUrl(f.url), type: f.type, drawer: f.drawer || null, source: 'drive', canManage: true, when: f.createdAt }
       });
     } catch (e) {
       console.error('Drive save error:', e.message);
