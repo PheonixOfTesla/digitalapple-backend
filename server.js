@@ -729,7 +729,7 @@ server.listen(PORT, () => {
   // (default 3000) in fast no-LLM mode so Maps search behaves like a real
   // engine. Idempotent — backfillTo counts the Atlas first and no-ops once
   // it's at target, so restarts and redeploys just top it up.
-  const atlasTarget = Math.min(5000, parseInt(process.env.ATLAS_SEED_TARGET || '3000', 10) || 0);
+  const atlasTarget = Math.min(6000, parseInt(process.env.ATLAS_SEED_TARGET || '4000', 10) || 0);
   if (atlasTarget > 0) {
     setTimeout(() => {
       const { backfillTo } = require('./jobs/seedMaps');
