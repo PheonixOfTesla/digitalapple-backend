@@ -762,10 +762,9 @@ server.listen(PORT, () => {
       .catch(e => console.error('[editorial]', e.message));
   }, 30000);
 
-  // RSS aggregation — every 20 min. The feed should rotate visibly through
-  // the day: a headline that arrived at 9:00 shouldn't still be the top card
-  // by lunch.
-  cron.schedule('*/20 * * * *', async () => {
+  // RSS aggregation — every 10 min. The feed rotates visibly all day: a
+  // headline that arrived at 9:00 is off the top of the rail by 9:30.
+  cron.schedule('*/10 * * * *', async () => {
     console.log('[CRON] Running RSS aggregation...');
     try {
       await aggregateNews();
@@ -773,7 +772,7 @@ server.listen(PORT, () => {
       console.error('[CRON] RSS aggregation failed:', error.message);
     }
   });
-  console.log('RSS Aggregation: Scheduled (every 20 min)');
+  console.log('RSS Aggregation: Scheduled (every 10 min)');
 
   // Self-heal on boot + tight backstop. node-cron only fires while the process
   // is alive, so a Railway restart at (say) 14:12 leaves the feed frozen until
@@ -806,9 +805,9 @@ server.listen(PORT, () => {
   cron.schedule('*/10 * * * *', () => ensureFreshNews('backstop'));
   console.log('News Freshness: Boot check + 10-min backstop');
 
-  // Wikipedia-sourced signal generation — every 3 hours so the Signals rail
-  // rotates through the day, not just twice.
-  cron.schedule('0 */3 * * *', async () => {
+  // Wikipedia-sourced signal generation — every 2 hours so the Signals rail
+  // rotates 12x a day, not just twice.
+  cron.schedule('0 */2 * * *', async () => {
     console.log('[CRON] Generating Wikipedia signals...');
     try {
       const { generateSignals } = require('./jobs/signalGenerator');
@@ -817,7 +816,7 @@ server.listen(PORT, () => {
       console.error('[CRON] Signal generation failed:', error.message);
     }
   });
-  console.log('Signal Generation: Scheduled (every 3h)');
+  console.log('Signal Generation: Scheduled (every 2h)');
 
   // Weekly company aggregation — refresh the directory from Wikidata (Mon 04:00 UTC)
   cron.schedule('0 4 * * 1', async () => {
@@ -870,8 +869,9 @@ server.listen(PORT, () => {
     } catch (e) { console.error('[BOOT] Initial company aggregation skipped:', e.message); }
   }, 8000);
 
-  // Schedule seed map generation - 3x daily at 8am, 2pm, 8pm UTC
-  cron.schedule('0 8,14,20 * * *', async () => {
+  // Seed map generation — every 2 hours so the Atlas keeps growing through
+  // the day and the Hub's "Signals / maps" rail rotates through fresh maps.
+  cron.schedule('0 */2 * * *', async () => {
     console.log('[CRON] Running seed map generation...');
     try {
       await generateSeedMaps(5);
@@ -879,7 +879,7 @@ server.listen(PORT, () => {
       console.error('[CRON] Seed map generation failed:', error.message);
     }
   });
-  console.log('Seed Maps: Scheduled (8am, 2pm, 8pm UTC)');
+  console.log('Seed Maps: Scheduled (every 2h)');
 
   // Run initial aggregation after 30 seconds on startup
   setTimeout(async () => {
