@@ -13,6 +13,7 @@
 const { client, model } = require('./aiClient');
 const { BLUEPRINT_SYSTEM_PREFIX, W_WORDS } = require('./blueprintPrompts');
 const { buildFrameLookups } = require('./frameLoader');
+const { summarizeMap } = require('./mapSummary');
 
 // ============== SKELETON GENERATION ==============
 
@@ -747,8 +748,11 @@ function assembleNebula(skeleton, contentResults, frameInput) {
     nebula.roots.push(assembledRoot);
   }
 
-  // Synthesize core detail from assembled roots
-  nebula.core.detail = synthesizeCoreDetail(
+  // Read the assembled map end to end. summarizeMap walks EVERY layer — the
+  // old synthesizeCoreDetail only ever read the first row and pasted four of
+  // its statements together, so the actions the map exists to produce were
+  // never mentioned in the map's own summary.
+  nebula.core.detail = summarizeMap(
     nebula.roots,
     frameInput.premise,
     frameInput.determination === 'overview' ? 'overview' : 'actionable'

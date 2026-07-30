@@ -23,6 +23,7 @@ const Node = require('../models/Node');
 const Edge = require('../models/Edge');
 const Core = require('../models/Core');
 const User = require('../models/User');
+const { summarizeMap } = require('../services/mapSummary');
 const NewsItem = require('../models/NewsItem');
 const identity = require('../services/identity');
 const BlueprintLLM = require('../services/BlueprintLLM');
@@ -718,6 +719,12 @@ function generateDeepGraph(premise, category) {
       });
     });
   });
+  // The core's summary can only be an end-to-end read once the tree it is
+  // summarizing exists — coreDetail() above runs before a single branch is
+  // built, so it can only ever name the domains. Overwrite it here with a read
+  // of the finished graph: all five layers, and the actions it lands on.
+  const coreNode = nodes.find(n => n.depth === 0);
+  if (coreNode) coreNode.detail = summarizeMap(nodes, premise, 'actionable');
   return { nodes, edges };
 }
 

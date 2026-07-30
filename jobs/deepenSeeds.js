@@ -99,10 +99,34 @@ async function deepenOne(m) {
   return true;
 }
 
+/**
+ * A map is shallow when NO node reaches depth 3 — i.e. it stops at
+ * core → constellation → star and never gets to sub-aspects or actions.
+ *
+ * This used to select on `nodeCount < 20`, which is a proxy for depth and the
+ * wrong one: a three-layer map with 5 domains x 5 stars carries 26 nodes and
+ * sailed straight past the filter. Every shallow map in the live Atlas had a
+ * nodeCount of 20-31, so the job that exists to deepen them matched none of
+ * them and the Atlas sat half shallow.
+ *
+ * Scoped to Clockwork-owned maps on purpose. deepenOne() REGENERATES a graph
+ * from its premise, so pointing this at a member's map would delete work they
+ * did by hand.
+ */
+function shallowQuery(ownerId) {
+  return {
+    ownerId,
+    unpublishedAt: null,
+    $nor: [{ 'snapshot.nodes.depth': { $gte: 3 } }]
+  };
+}
+
 async function deepenSeeds({ batchSize = 100, onProgress = () => {} } = {}) {
   let done = 0, failed = 0;
+  const clockwork = await require('./seedMaps').getClockworkUser();
+  const q = shallowQuery(clockwork._id);
   for (;;) {
-    const maps = await SharedMap.find({ isSeed: true, unpublishedAt: null, nodeCount: { $lt: 20 } })
+    const maps = await SharedMap.find(q)
       .select('projectId title description category nodeCount').limit(batchSize).lean();
     if (!maps.length) break;
     let batchDone = 0;
