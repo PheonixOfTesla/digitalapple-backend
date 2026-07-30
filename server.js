@@ -830,6 +830,31 @@ server.listen(PORT, () => {
   });
   console.log('Company Aggregation: Scheduled (Mondays 04:00 UTC)');
 
+  // Ratings enrichment — pull REAL Google Places / Yelp ratings onto companies
+  // that don't yet have them. Runs every 6h; silently skips when no keys are
+  // configured (so we don't spam logs). When a key IS present, the numbers
+  // start showing up in the Companies rank within a cycle.
+  cron.schedule('17 */6 * * *', async () => {
+    if (!process.env.GOOGLE_PLACES_API_KEY && !process.env.YELP_API_KEY) return;
+    try {
+      const { enrichRatings } = require('./jobs/enrichRatings');
+      const r = await enrichRatings({ limit: 80 });
+      console.log(`[CRON] Ratings enrichment — scanned ${r.scanned}, enriched ${r.enriched}, unmatched ${r.unmatched}, errors ${r.errors}`);
+    } catch (e) { console.error('[CRON] Ratings enrichment failed:', e.message); }
+  });
+  console.log('Ratings Enrichment: Scheduled (every 6h; requires GOOGLE_PLACES_API_KEY or YELP_API_KEY)');
+
+  // First-boot ratings pull — 45s after start, so a freshly-set API key on
+  // Railway lights up the Companies rank without waiting for the 6h cadence.
+  setTimeout(async () => {
+    if (!process.env.GOOGLE_PLACES_API_KEY && !process.env.YELP_API_KEY) return;
+    try {
+      const { enrichRatings } = require('./jobs/enrichRatings');
+      const r = await enrichRatings({ limit: 40 });
+      console.log(`[BOOT] Ratings enrichment — scanned ${r.scanned}, enriched ${r.enriched}`);
+    } catch (e) { console.error('[BOOT] Ratings enrichment skipped:', e.message); }
+  }, 45000);
+
   // System health watch — every 5 min. Notify admins only on a transition INTO
   // 'down' (not every cycle), so the admin bell flags real outages without spam.
   const _healthLast = {};
