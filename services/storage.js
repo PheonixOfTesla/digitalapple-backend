@@ -21,9 +21,20 @@ const GB = 1024 * 1024 * 1024;
 // Free allowance per account.
 const FREE_BYTES = 2 * GB;
 
-// Hard ceiling for a single file, mirrored from the multer limit so the API
-// and the uploader can never disagree about what "too large" means.
-const MAX_FILE_BYTES = 100 * 1024 * 1024;
+// Hard ceiling for a single file, mirrored by the multer limit and reported to
+// the client, so the API, the uploader and the UI can never disagree about what
+// "too large" means.
+//
+// This is NOT the only ceiling in play. Cloudinary enforces its own per-plan
+// cap — 10 MB on the free tier — and that one is lower, so it is the limit
+// people actually hit: the app promised 100 MB and then 413'd on an 11 MB PDF,
+// which reads as "PDFs are broken" rather than "the plan is small".
+// Set DRIVE_MAX_FILE_BYTES to the Cloudinary plan's real cap (10485760 for
+// free) and every layer tells the truth up front instead of failing late.
+const MAX_FILE_BYTES = Math.max(
+  1024 * 1024,
+  parseInt(process.env.DRIVE_MAX_FILE_BYTES, 10) || 100 * 1024 * 1024
+);
 
 // Extra capacity, priced in existing tokens.
 const TOKENS_PER_GB = 5;

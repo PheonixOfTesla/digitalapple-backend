@@ -187,7 +187,10 @@ if (isCloudinaryConfigured) {
 
 const driveUpload = multer({
   storage: driveStorage,
-  limits: { fileSize: 100 * 1024 * 1024 },
+  // Single source of truth with services/storage — the API reports this exact
+  // number to the client as maxFileBytes, so a second hardcoded 100MB here
+  // would let the UI promise one limit while multer enforced another.
+  limits: { fileSize: require('../services/storage').MAX_FILE_BYTES },
   fileFilter: (req, file, cb) => {
     if (!isCloudinaryConfigured) {
       cb(new Error('Uploads not configured. Contact administrator.'), false);
