@@ -148,7 +148,13 @@ async function getJson(url, headers, attempt = 0) {
       if (!sc.ok) {
         console.log(`  note  /oauth/scopes → ${sc.status}; could not read this token's scopes.`);
       } else {
-        const scopes = (sc.body.result && sc.body.result.scopes) || [];
+        // /oauth/scopes returns objects — {scope, display_name} — not strings.
+        // Comparing the raw entries to 'orders' silently never matches, which
+        // made this report a token WITHOUT the orders scope as broken while the
+        // response plainly listed it. Normalise both shapes.
+        const scopes = ((sc.body.result && sc.body.result.scopes) || [])
+          .map(x => (typeof x === 'string' ? x : (x && x.scope) || ''))
+          .filter(Boolean);
         console.log(`  note  scopes: ${scopes.join(', ') || '(none reported)'}`);
         if (scopes.length && !scopes.some(x => x === 'orders')) {
           fail('this token lacks the `orders` scope — it can read the catalog but CANNOT submit orders. ' +
