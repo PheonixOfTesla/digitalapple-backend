@@ -15,9 +15,15 @@ router.get('/profile', verifyToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // How many people joined on this person's link. Counted live rather than
+    // kept as a running tally — it is read once, when the invite sheet opens,
+    // and a counter that can drift is worse than no counter at all when the
+    // entire point of the number is measuring whether invites work.
+    const invitedCount = await User.countDocuments({ invitedBy: user._id });
+
     res.json({
       success: true,
-      profile: user.toPrivateProfile()
+      profile: Object.assign(user.toPrivateProfile(), { invitedCount })
     });
 
   } catch (error) {

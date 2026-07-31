@@ -34,6 +34,18 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: 50
   },
+  // Who brought this person in. Set once, at signup, from the referral token
+  // carried by the link they arrived on — and never again, so credit can't be
+  // reassigned later. The handle IS the referral token: no separate code to
+  // mint, expire or leak, and the link people already share is the attributed
+  // one. Null for organic signups and for everyone who joined before this
+  // existed.
+  invitedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true
+  },
   // About me — shown on the public profile so people landing on your Connect
   // know who you are before they knock.
   // Vanity Connect URL: theclockworkhub.com/<handle> → this person's lobby

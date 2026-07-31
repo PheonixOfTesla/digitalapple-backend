@@ -3,12 +3,30 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { verifyToken, generateToken, generateVerificationToken, generatePasswordResetToken, verifyEmailToken } = require('../middleware/auth');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('../utils/email');
+const { resolveReferrer, publicReferrer } = require('../services/referrals');
 
 const router = express.Router();
 
+/**
+ * Who's behind an invite link — public, unauthenticated, used by the landing
+ * page to say "X invited you" before anyone has an account.
+ *
+ * Returns 200 with referrer:null for an unknown token rather than 404: a dead
+ * invite link should quietly become a normal signup page, not an error screen.
+ */
+router.get('/invite/:ref', async (req, res) => {
+  try {
+    const u = await resolveReferrer(req.params.ref);
+    res.json({ success: true, referrer: publicReferrer(u) });
+  } catch (e) {
+    console.error('Invite lookup error:', e.message);
+    res.json({ success: true, referrer: null });
+  }
+});
+
 // Register
 router.post('/register', async (req, res) => {
-  const { email, password, firstName, lastName, marketingOptIn } = req.body;
+  const { email, password, firstName, lastName, marketingOptIn, ref } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password required' });
@@ -26,6 +44,16 @@ router.post('/register', async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
+    // Attribution: resolve the referral token the signup arrived with. Resolved
+    // SERVER-SIDE from a handle or id — the client sends the token it saw in the
+    // URL, never a user id it picked. A token that doesn't resolve is simply
+    // ignored: a stale or mistyped link should still let someone sign up.
+    let invitedBy = null;
+    if (ref) {
+      const referrer = await resolveReferrer(ref);
+      if (referrer) invitedBy = referrer._id;
+    }
+
     // Role is always 'user' - never accept from client
     const user = new User({
       email: email.toLowerCase(),
@@ -33,7 +61,8 @@ router.post('/register', async (req, res) => {
       role: 'user',
       firstName: firstName?.trim(),
       lastName: lastName?.trim(),
-      marketingOptIn: marketingOptIn === true
+      marketingOptIn: marketingOptIn === true,
+      invitedBy
     });
 
     await user.save();
