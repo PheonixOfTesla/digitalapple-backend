@@ -13,22 +13,16 @@ const router = express.Router();
 
 const PF_BASE = 'https://api.printful.com';
 
-// X-PF-Store-Id rides on EVERY Printful call, order submission included, so a
-// wrong value doesn't error — it quietly addresses someone else's store. The
-// literal below is a development leftover kept only so an unconfigured deploy
-// behaves as it did before; it is not a default anyone should rely on. Say so
-// loudly at boot rather than letting a silent fallback decide where orders go.
-// Find the real one with:
+// Find your store id with:
 //   curl -s https://api.printful.com/stores -H "Authorization: Bearer $PRINTFUL_API_KEY"
-const PF_STORE_FALLBACK = '18516464';
-const PF_STORE = process.env.PRINTFUL_STORE_ID || PF_STORE_FALLBACK;
-
+// It is not shown on the Access key page, and it is not derivable from the
+// public catalog — that endpoint is the only place it exists.
 if (!process.env.PRINTFUL_API_KEY) {
   console.warn('[shop] PRINTFUL_API_KEY is not set — paid orders will be stored as drafts and NOT printed.');
 }
 if (!process.env.PRINTFUL_STORE_ID) {
-  console.warn(`[shop] PRINTFUL_STORE_ID is not set — falling back to ${PF_STORE_FALLBACK}. ` +
-    'If that is not your store, orders go somewhere you cannot see them. Set it in Railway.');
+  console.warn('[shop] PRINTFUL_STORE_ID is not set — X-PF-Store-Id will be omitted. ' +
+    'Fine for a store-scoped token; an account-level token will reject orders until it is set.');
 }
 
 // Server-side catalog — prices in cents, Printful sync variants for fulfillment.
@@ -144,7 +138,19 @@ const SHIPPING_CENTS = 499;
 function pfHeaders() {
   const key = process.env.PRINTFUL_API_KEY;
   if (!key) return null;
-  return { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', 'X-PF-Store-Id': PF_STORE };
+  const h = { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' };
+  // Send the store header ONLY when it was configured deliberately.
+  //
+  // It used to fall back to a hardcoded id, which is the worst of the three
+  // options. A token created under a store's own API page is already scoped to
+  // that store, so no header is needed and Printful does the right thing. A
+  // token that spans several stores needs the header — and if it is missing,
+  // Printful says so plainly and the order fails loudly, which is recoverable.
+  // A header naming SOMEONE ELSE'S store fails neither way: it succeeds, and
+  // the order goes somewhere nobody is watching. Silence is the one outcome
+  // there is no recovering from, so it is the one we refuse to risk.
+  if (process.env.PRINTFUL_STORE_ID) h['X-PF-Store-Id'] = String(process.env.PRINTFUL_STORE_ID);
+  return h;
 }
 
 // Mockup images from Printful (generated per sync variant); cached 10 min.
