@@ -12,7 +12,24 @@ const express = require('express');
 const router = express.Router();
 
 const PF_BASE = 'https://api.printful.com';
-const PF_STORE = process.env.PRINTFUL_STORE_ID || '18516464';
+
+// X-PF-Store-Id rides on EVERY Printful call, order submission included, so a
+// wrong value doesn't error — it quietly addresses someone else's store. The
+// literal below is a development leftover kept only so an unconfigured deploy
+// behaves as it did before; it is not a default anyone should rely on. Say so
+// loudly at boot rather than letting a silent fallback decide where orders go.
+// Find the real one with:
+//   curl -s https://api.printful.com/stores -H "Authorization: Bearer $PRINTFUL_API_KEY"
+const PF_STORE_FALLBACK = '18516464';
+const PF_STORE = process.env.PRINTFUL_STORE_ID || PF_STORE_FALLBACK;
+
+if (!process.env.PRINTFUL_API_KEY) {
+  console.warn('[shop] PRINTFUL_API_KEY is not set — paid orders will be stored as drafts and NOT printed.');
+}
+if (!process.env.PRINTFUL_STORE_ID) {
+  console.warn(`[shop] PRINTFUL_STORE_ID is not set — falling back to ${PF_STORE_FALLBACK}. ` +
+    'If that is not your store, orders go somewhere you cannot see them. Set it in Railway.');
+}
 
 // Server-side catalog — prices in cents, Printful sync variants for fulfillment.
 // Keep in lockstep with the products in the Printful store.
@@ -390,6 +407,7 @@ async function fulfill(session, stripeEventId) {
     order.status = 'draft'; order.error = 'PRINTFUL_API_KEY not configured';
     await order.save();
     console.error('[shop] order stored as draft — set PRINTFUL_API_KEY to auto-submit');
+    await alertUnfulfilled(order, 'PRINTFUL_API_KEY is not set — nothing was sent to Printful');
     return;
   }
   try {
@@ -416,8 +434,37 @@ async function fulfill(session, stripeEventId) {
     order.status = 'draft'; order.error = e.message.slice(0, 300);
     await order.save();
     console.error('[shop] Printful submit failed (order kept as draft):', e.message);
+    await alertUnfulfilled(order, e.message);
+  }
+}
+
+/**
+ * A paid order that did NOT reach Printful is the worst state this system can
+ * be in: the customer has been charged and has a receipt, and nothing is being
+ * printed. It used to leave only a console.error, so it surfaced whenever
+ * someone happened to read Railway logs — which is to say, after the customer
+ * emailed. This puts it in the admin notification tray where the money already
+ * lives.
+ *
+ * Never allowed to throw: it runs inside the catch of the fulfillment path, and
+ * a failure to report a failure must not replace the original error.
+ */
+async function alertUnfulfilled(order, reason) {
+  try {
+    await require('../models/Notification').pushAdmins({
+      type: 'admin_order_unfulfilled',
+      text: `PAID BUT NOT SENT — order ${order._id} (${order.email || 'no email'}) never reached Printful: ${String(reason || '').slice(0, 160)}`,
+      link: 'admin.html#orders'
+    });
+  } catch (e) {
+    console.error('[shop] could not raise unfulfilled-order alert:', e.message);
   }
 }
 
 module.exports = router;
 module.exports.fulfill = fulfill;
+// Exported for scripts/checkPrintful.js, which verifies every hardcoded
+// syncVariantId still exists in the Printful store and that each price still
+// covers cost. These IDs are maintained by hand; the preflight is what stops a
+// stale one from being discovered by a paying customer.
+module.exports.CATALOG = CATALOG;
