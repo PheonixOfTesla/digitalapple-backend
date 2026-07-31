@@ -124,10 +124,45 @@ async function getJson(url, headers, attempt = 0) {
       const list = s.body.result || [];
       console.log(`\n  YOUR STORE ID${list.length > 1 ? 'S' : ''}:`);
       for (const st of list) console.log(`     ${st.id}   ${st.name}   (${st.type || 'store'})`);
-      console.log('     → set PRINTFUL_STORE_ID to this in Railway\n');
-      if (!STORE) fail('PRINTFUL_STORE_ID is not set — ShopController falls back to a hardcoded id that is sent on every call, including order submission.');
-      else if (!list.some(st => String(st.id) === String(STORE))) fail(`PRINTFUL_STORE_ID=${STORE} is not a store this key can see. Orders go somewhere you cannot watch.`);
-      else pass(`PRINTFUL_STORE_ID=${STORE} matches "${list.find(st => String(st.id) === String(STORE)).name}"`);
+      console.log('');
+
+      // /stores returns what the token can SEE, which is how you tell the two
+      // token kinds apart: a store-scoped token sees exactly one store and
+      // needs no X-PF-Store-Id; an account-level token sees several and REQUIRES
+      // the header. Guessing wrong is the difference between orders going
+      // through and orders going nowhere.
+      if (list.length === 1 && !STORE) {
+        pass(`store-scoped token — it sees only "${list[0].name}", so X-PF-Store-Id is not needed. Leaving PRINTFUL_STORE_ID unset is correct.`);
+      } else if (!STORE && list.length > 1) {
+        fail(`this token can see ${list.length} stores, so it is account-level and X-PF-Store-Id is REQUIRED. Set PRINTFUL_STORE_ID to the one you sell from.`);
+      } else if (STORE && !list.some(st => String(st.id) === String(STORE))) {
+        fail(`PRINTFUL_STORE_ID=${STORE} is not a store this token can see. Orders would go somewhere you cannot watch.`);
+      } else if (STORE) {
+        pass(`PRINTFUL_STORE_ID=${STORE} matches "${list.find(st => String(st.id) === String(STORE)).name}"`);
+      }
+
+      // Scopes. Fulfillment posts to /orders, so a token without the `orders`
+      // scope authenticates fine and then refuses the one call that matters —
+      // after Stripe has already taken the money.
+      const sc = await getJson(`${PF}/oauth/scopes`, { Authorization: `Bearer ${KEY}` });
+      if (!sc.ok) {
+        console.log(`  note  /oauth/scopes → ${sc.status}; could not read this token's scopes.`);
+      } else {
+        const scopes = (sc.body.result && sc.body.result.scopes) || [];
+        console.log(`  note  scopes: ${scopes.join(', ') || '(none reported)'}`);
+        if (scopes.length && !scopes.some(x => x === 'orders')) {
+          fail('this token lacks the `orders` scope — it can read the catalog but CANNOT submit orders. ' +
+               'Every sale would be charged and then fail at fulfillment. Recreate the token at ' +
+               'developers.printful.com with the `orders` scope.');
+        } else if (scopes.includes('orders')) {
+          pass('`orders` scope present — the token can submit fulfillment');
+        }
+      }
+
+      // Private tokens expire and cannot be refreshed. When one lapses, every
+      // paid order becomes a silent draft, so it is worth saying out loud.
+      console.log('  note  Printful private tokens EXPIRE and cannot be refreshed. Diarise a rotation; ' +
+                  'an expired token turns every paid order into an unfulfilled draft.');
     }
   }
 
