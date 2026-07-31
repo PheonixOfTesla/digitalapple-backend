@@ -25,7 +25,15 @@ const BLOCKED = [
   'molest', 'molested', 'molester', 'molestation',
   'paedophile', 'pedophile', 'paedophilia', 'pedophilia',
   'child abuse', 'child sex', 'child porn', 'csam',
-  'incest', 'revenge porn', 'upskirt', 'sex trafficking'
+  'incest', 'revenge porn', 'upskirt', 'sex trafficking',
+  // The list above names the ACT, which let the offender/registry framing walk
+  // straight through: "Registered sex offender arrested in ..." matched nothing
+  // and would have surfaced on the front page. Same category, different noun.
+  'sex offender', 'sex offenders', 'sexual offender', 'sexual offenders',
+  'sex offender registry', 'sexual predator', 'sexual predators',
+  'child predator', 'child predators', 'child exploitation',
+  'sextortion', 'indecent assault', 'indecent exposure',
+  'statutory rape', 'sexual misconduct', 'sexual harassment'
 ];
 
 const BLOCK_RE = new RegExp('\\b(' + BLOCKED.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b', 'i');
