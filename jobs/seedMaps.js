@@ -136,6 +136,32 @@ const PRODUCTS = [
   'a note-taking app that maps ideas', 'a career-path explorer for undecided majors'
 ];
 
+// Angles a product premise can be asked from. Each one is a genuinely different
+// map — scoping, distribution, cost, pricing and failure modes do not share a
+// shape — so multiplying these across PRODUCTS yields distinct maps rather than
+// reworded duplicates.
+const PRODUCT_ANGLES = [
+  'The first version of {x} — what to cut',
+  'How to find the first 100 users for {x}',
+  'What it really costs to build {x}',
+  'How to price {x}',
+  'Why most attempts at {x} fail',
+  'How to validate {x} before writing code',
+  'Taking {x} from side project to real business'
+];
+
+// Same idea for creative work: making it, funding it, finishing it and finding
+// an audience are four different problems.
+const CREATIVE_ANGLES = [
+  'How to fund {x}',
+  'How to find an audience for {x}',
+  'A realistic timeline for {x}',
+  'The craft decisions behind {x}',
+  'How to finish {x} when the motivation runs out',
+  'How to research {x} properly',
+  'Turning {x} into a body of work'
+];
+
 const CREATIVE = [
   'a documentary about first-gen college students', 'a podcast on how great scientists think', 'a YouTube series explaining big ideas simply',
   'a mystery novel set in a research station', 'a short film about ambition', 'a music album blending genres',
@@ -406,6 +432,17 @@ function buildTopicPool() {
   });
   PRODUCTS.forEach(p => add(`How to launch and monetize ${p}`, 'product'));
   CREATIVE.forEach(c => add(`How to sell ${c}`, 'creative'));
+
+  // Angle packs for product and creative.
+  //
+  // business/career/other each had thousands of premises because they multiply
+  // subjects by many ANGLES; product and creative only ever had two angles
+  // apiece, so they topped out at 60 each and any category-balanced fill would
+  // starve. Adding angles rather than inventing new subjects keeps the quality
+  // bar where it is — every subject in these lists is already vetted — while
+  // taking each category past 200.
+  PRODUCT_ANGLES.forEach(a => PRODUCTS.forEach(p => add(a.replace('{x}', p), 'product')));
+  CREATIVE_ANGLES.forEach(a => CREATIVE.forEach(c => add(a.replace('{x}', c), 'creative')));
   return out;
 }
 
