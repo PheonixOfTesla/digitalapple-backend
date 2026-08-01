@@ -34,7 +34,7 @@ router.get('/profile', verifyToken, async (req, res) => {
 
 // Update own profile (name, marketingOptIn)
 // Handles that can never be claimed — every real path plus obvious traps.
-const RESERVED_HANDLES = new Set(['admin','api','atlas','about','apply','architect','blueprint','brainstorm','build','chart','climate','connect','directory','discover','feed','host-portal','hub','hub-profile','index','lab','login','map','menu','news','privacy','profile','shared','shop','signal','signals','studio','support','terms','welcome','clockwork','digitalapple','root','www']);
+const RESERVED_HANDLES = new Set(['admin','api','atlas','about','apply','architect','blueprint','brainstorm','build','chart','climate','connect','directory','discover','event','events','feed','host-portal','hub','hub-profile','index','lab','login','map','menu','news','privacy','profile','shared','shop','signal','signals','studio','support','terms','ticket','tickets','welcome','clockwork','digitalapple','root','www']);
 
 // Social/platform links the Connect profile accepts.
 const LINK_KEYS = ['x', 'instagram', 'facebook', 'twitch', 'youtube', 'tiktok', 'linkedin', 'github', 'maps', 'website'];

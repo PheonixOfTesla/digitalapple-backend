@@ -27,7 +27,7 @@ const Event = require('../models/Event');
 const Ticket = require('../models/Ticket');
 const User = require('../models/User');
 const Conversation = require('../models/Conversation');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, optionalAuth } = require('../middleware/auth');
 const tickets = require('../services/ticketing');
 
 const router = express.Router();
@@ -269,19 +269,48 @@ router.get('/', async (req, res) => {
 router.get('/mine', verifyToken, async (req, res) => {
   try {
     const evs = await Event.find({ hostId: req.userId }).sort({ startsAt: -1 }).limit(100).lean();
-    res.json({ success: true, events: evs.map(e => publicEvent(e, { host: true })) });
+    // A host console is a to-do list, not an archive: the next door to open
+    // goes first, then the rest of the calendar, then what already happened —
+    // most recent of those first, since that is the one still being settled.
+    const cut = Date.now() - 6 * 3600000;
+    const upcoming = evs.filter(e => new Date(e.startsAt).getTime() >= cut).sort((a, b) => a.startsAt - b.startsAt);
+    const past = evs.filter(e => new Date(e.startsAt).getTime() < cut);   // already newest-first
+    res.json({ success: true, events: upcoming.concat(past).map(e => publicEvent(e, { host: true })) });
   } catch (e) { console.error('events mine:', e.message); res.status(500).json({ error: 'Could not load your events' }); }
 });
 
-router.get('/:slugOrId', async (req, res) => {
+router.get('/:slugOrId', optionalAuth, async (req, res) => {
   try {
     const key = String(req.params.slugOrId || '');
     const ev = mongoose.isValidObjectId(key)
       ? await Event.findById(key).lean()
       : await Event.findOne({ slug: key.toLowerCase() }).lean();
     if (!ev) return res.status(404).json({ error: 'Event not found' });
-    if (ev.status === 'draft') return res.status(404).json({ error: 'Event not found' });
-    res.json({ success: true, event: publicEvent(ev) });
+    // A draft is invisible to everyone but its host. The host does need to see
+    // it: "preview before you publish" is the whole point of a draft, and a
+    // 404 on your own event page reads as data loss.
+    const mine = req.userId && String(ev.hostId) === String(req.userId);
+    if (ev.status === 'draft' && !mine) return res.status(404).json({ error: 'Event not found' });
+
+    // Who is putting this on. A ticket page with no name behind it is how a
+    // stranger decides not to buy — and the handle links back to a profile
+    // they can actually check.
+    let host = null;
+    try {
+      const h = await User.findById(ev.hostId).select('firstName lastName email handle profilePhoto avatar verified').lean();
+      if (h) {
+        const nm = [h.firstName, h.lastName].filter(Boolean).join(' ').trim();
+        host = {
+          id: h._id,
+          name: (nm || (h.email ? h.email.split('@')[0] : 'A Clockwork host')).slice(0, 80),
+          handle: h.handle || null,
+          avatar: h.profilePhoto || h.avatar || null,
+          verified: !!h.verified
+        };
+      }
+    } catch (e) { /* the event still stands without it */ }
+
+    res.json({ success: true, event: publicEvent(ev, { host: !!mine }), host, isHost: !!mine });
   } catch (e) { console.error('event get:', e.message); res.status(500).json({ error: 'Could not load the event' }); }
 });
 

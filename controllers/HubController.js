@@ -235,6 +235,37 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
     const liveMap = realtime.liveStudioCounts(rooms.map(r => String(r._id))) || {};
     const liveRoom = rooms.find(r => (r.visibility === 'public') && (liveMap[String(r._id)] || 0) > 0);
 
+    // Upcoming Lightning Pass events this person is hosting. Visitors see only
+    // published public ones; on your own lobby drafts show too, because the
+    // profile doubles as the host console and a draft you cannot see is a draft
+    // you forget to publish.
+    let eventRows = [];
+    try {
+      const Event = require('../models/Event');
+      const evq = { hostId: u._id, startsAt: { $gte: new Date(Date.now() - 6 * 3600000) } };
+      if (!isMe) { evq.status = 'published'; evq.visibility = 'public'; }
+      else { evq.status = { $ne: 'cancelled' }; }
+      const evs = await Event.find(evq).sort({ startsAt: 1 }).limit(12).lean();
+      const t = require('../services/ticketing');
+      eventRows = evs.map(e => {
+        const tiers = e.tiers || [];
+        const min = tiers.length ? Math.min(...tiers.map(x => x.priceCents || 0)) : 0;
+        const sold = tiers.reduce((n, x) => n + (x.sold || 0), 0);
+        const cap = tiers.every(x => x.capacity != null) ? tiers.reduce((n, x) => n + x.capacity, 0) : null;
+        return {
+          id: e._id, slug: e.slug, title: e.title, startsAt: e.startsAt, endsAt: e.endsAt || null,
+          status: e.status, coverImage: e.coverImage || null,
+          venue: (e.venue && e.venue.name) ? { name: e.venue.name, city: e.venue.city || null } : null,
+          roomId: e.roomId || null,
+          online: !!e.roomId && !(e.venue && e.venue.name),
+          fromPrice: min === 0 ? 'Free' : t.usd(min),
+          soldOut: tiers.length > 0 && tiers.every(x => x.capacity != null && (x.sold || 0) >= x.capacity),
+          // Sales numbers are the host's business, not a visitor's.
+          ...(isMe ? { sold, capacity: cap } : {})
+        };
+      });
+    } catch (e) { console.error('profile events:', e.message); }
+
     res.json({
       success: true,
       profile: {
@@ -260,7 +291,8 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
         opensSoon: opensWithinMinutes(r, 30),
         live: liveMap[String(r._id)] || 0,
         price: r.price || 0
-      }))
+      })),
+      events: eventRows
     });
   } catch (e) { console.error('profile:', e.stack || e.message); res.status(500).json({ error: 'Failed to load profile' }); }
 });

@@ -166,8 +166,17 @@ app.use('/api/v1/drive', require('./controllers/DriveController'));
 // Ticketing. Mounted twice on purpose: /events for the host and browse
 // routes, and /api/v1 as well so the ticket recovery URL is a short
 // /tickets/:code — that link goes on posters and into inboxes.
+//
+// The second mount is gated to /tickets. Mounting the whole router at /api/v1
+// would let its `GET /:slugOrId` route swallow every single-segment API path
+// declared after it — /api/v1/directory would answer "Event not found" instead
+// of reaching DirectoryController. Nothing collides today; the guard is so
+// that adding a root GET to a controller below never silently breaks it.
 app.use('/api/v1/events', require('./controllers/EventController'));
-app.use('/api/v1', require('./controllers/EventController'));
+app.use('/api/v1', (req, res, next) => {
+  if (!/^\/tickets(\/|$)/.test(req.path)) return next();
+  return require('./controllers/EventController')(req, res, next);
+});
 app.use('/api/v1/directory', require('./controllers/DirectoryController'));
 app.use('/api/v1/hub', require('./controllers/HubController'));
 app.use('/api/v1/messages', require('./controllers/MessageController'));
