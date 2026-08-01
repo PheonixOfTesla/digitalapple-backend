@@ -242,6 +242,17 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
+    // Event tickets share this verified webhook; issuing lives in EventController.
+    if (session.metadata && session.metadata.type === 'event_ticket') {
+      try {
+        const t = await require('./EventController').fulfillTicket(session);
+        return res.json({ received: true, ticket: t && t.code });
+      } catch (err) {
+        console.error('[events] ticket issue error:', err.message);
+        return res.status(500).json({ error: 'Ticket issue failed' });
+      }
+    }
+
     // Shop orders share this verified webhook; fulfillment lives in ShopController.
     if (session.metadata && session.metadata.type === 'shop_order') {
       try {

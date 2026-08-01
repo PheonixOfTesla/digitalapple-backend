@@ -1,0 +1,565 @@
+/**
+ * EventController — self-hosted ticketing, native to Clockwork.
+ *
+ * Any member creates an event, attaches a Studio or a Messenger channel if it
+ * is a Clockwork one, sets tiers, and sells. Money moves on the Stripe Connect
+ * rail the paid-room door already uses: the host's Express account receives,
+ * Clockwork takes 3.7% + $1.79 (services/ticketing).
+ *
+ *   POST   /events                       create (draft)
+ *   PATCH  /events/:id                   edit / publish / cancel
+ *   POST   /events/:id/room              attach a Studio or channel
+ *   GET    /events                       browse published
+ *   GET    /events/mine                  my events, with sales
+ *   GET    /events/:slugOrId             one event
+ *   POST   /events/:id/checkout          buy — or claim, when free
+ *   GET    /tickets/:code                THE RECOVERY URL — no login
+ *   POST   /tickets/:code/scan           the door
+ *   GET    /events/:id/attendees         host only
+ *
+ * DELIVERY: email is best-effort, the URL is the guarantee. Checkout returns the
+ * ticket URL directly, and /tickets/:code needs no account, so a buyer whose
+ * email bounced still has a ticket they can open, screenshot or forward.
+ */
+const express = require('express');
+const mongoose = require('mongoose');
+const Event = require('../models/Event');
+const Ticket = require('../models/Ticket');
+const User = require('../models/User');
+const Conversation = require('../models/Conversation');
+const { verifyToken } = require('../middleware/auth');
+const tickets = require('../services/ticketing');
+
+const router = express.Router();
+
+const SITE = process.env.SITE_URL || 'https://www.theclockworkhub.com';
+
+/** The URL a buyer can always open, even if no email ever arrives. */
+function ticketUrl(code) { return `${SITE}/t/${encodeURIComponent(code)}`; }
+function eventUrl(ev) { return `${SITE}/e/${encodeURIComponent(ev.slug || ev._id)}`; }
+
+function clean(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
+
+/** URL-safe slug, with a short random suffix so two "summer-jam" never collide. */
+async function makeSlug(title) {
+  const base = clean(title, 60).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'event';
+  for (let i = 0; i < 5; i++) {
+    const s = base + '-' + Math.random().toString(36).slice(2, 7);
+    if (!(await Event.exists({ slug: s }))) return s;
+  }
+  return base + '-' + Date.now().toString(36);
+}
+
+async function isAdmin(userId) {
+  try { const u = await User.findById(userId).select('role').lean(); return !!(u && u.role === 'admin'); }
+  catch (e) { return false; }
+}
+
+function stripe() {
+  const Stripe = require('stripe');
+  return new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+}
+
+/**
+ * Where this event's money lands — the host's Express account when it can take
+ * transfers, otherwise the platform. Same rule the paid-room door uses.
+ */
+async function payoutDest(hostId) {
+  try {
+    const host = await User.findById(hostId).select('stripeAccountId').lean();
+    if (!host || !host.stripeAccountId) return null;
+    const acct = await stripe().accounts.retrieve(host.stripeAccountId);
+    if (acct && acct.capabilities && acct.capabilities.transfers === 'active') return host.stripeAccountId;
+  } catch (e) { /* fall back to platform */ }
+  return null;
+}
+
+/** Validate and normalise tiers coming from a host. */
+function parseTiers(raw) {
+  const out = [];
+  for (const t of (Array.isArray(raw) ? raw : []).slice(0, 12)) {
+    const name = clean(t && t.name, 60);
+    if (!name) continue;
+    const priceCents = Math.max(0, Math.round(Number(t.priceCents) || 0));
+    // A price between free and the floor cannot be charged: the flat fee would
+    // exceed the ticket and Stripe rejects an application fee larger than the
+    // amount. Refuse it at creation rather than at somebody's checkout.
+    if (!tickets.priceIsSellable(priceCents)) {
+      return { error: `"${name}" is ${tickets.usd(priceCents)} — tickets are either free or at least ${tickets.usd(tickets.MIN_PAID_CENTS)}.` };
+    }
+    let capacity = t.capacity == null || t.capacity === '' ? null : Math.round(Number(t.capacity));
+    if (capacity != null && (!Number.isFinite(capacity) || capacity < 1)) capacity = null;
+    out.push({ name, priceCents, capacity, description: clean(t.description, 200) });
+  }
+  if (!out.length) return { error: 'Add at least one ticket type.' };
+  return { tiers: out };
+}
+
+/** The public shape of an event. */
+function publicEvent(ev, opts = {}) {
+  const o = {
+    id: ev._id, slug: ev.slug, url: eventUrl(ev),
+    title: ev.title, description: ev.description, coverImage: ev.coverImage,
+    startsAt: ev.startsAt, endsAt: ev.endsAt, tzOffset: ev.tzOffset,
+    status: ev.status, visibility: ev.visibility, category: ev.category,
+    venue: (ev.venue && ev.venue.name) ? ev.venue : null,
+    roomId: ev.roomId || null,
+    online: !!ev.roomId && !(ev.venue && ev.venue.name),
+    hostId: ev.hostId,
+    tiers: (ev.tiers || []).map(t => ({
+      id: t._id, name: t.name, description: t.description || '',
+      priceCents: t.priceCents, price: t.priceCents ? tickets.usd(t.priceCents) : 'Free',
+      capacity: t.capacity, sold: t.sold || 0,
+      soldOut: t.capacity != null && (t.sold || 0) >= t.capacity,
+      // What the buyer actually pays. The service fee is ON TOP of the host's
+      // price — hosts set what they want to receive, buyers see the total
+      // before they commit, and nobody discovers a fee at the last screen.
+      totalCents: t.priceCents ? t.priceCents + tickets.serviceFee(t.priceCents) : 0,
+      feeCents: t.priceCents ? tickets.serviceFee(t.priceCents) : 0
+    }))
+  };
+  if (opts.host) {
+    o.soldTotal = (ev.tiers || []).reduce((n, t) => n + (t.sold || 0), 0);
+    o.grossCents = (ev.tiers || []).reduce((n, t) => n + (t.sold || 0) * t.priceCents, 0);
+  }
+  return o;
+}
+
+/* ─────────────────────────── create & manage ─────────────────────────── */
+
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const title = clean(b.title, 140);
+    if (!title) return res.status(400).json({ error: 'Give the event a name.' });
+    const startsAt = new Date(b.startsAt);
+    if (isNaN(startsAt.getTime())) return res.status(400).json({ error: 'When does it start?' });
+    let endsAt = null;
+    if (b.endsAt) {
+      endsAt = new Date(b.endsAt);
+      if (isNaN(endsAt.getTime())) return res.status(400).json({ error: 'That end time is not a valid date.' });
+      if (endsAt <= startsAt) return res.status(400).json({ error: 'The end time has to be after the start.' });
+    }
+    const parsed = parseTiers(b.tiers);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+    const ev = await Event.create({
+      hostId: req.userId,
+      title,
+      description: clean(b.description, 4000),
+      coverImage: clean(b.coverImage, 500) || null,
+      slug: await makeSlug(title),
+      startsAt, endsAt,
+      tzOffset: Number.isFinite(Number(b.tzOffset)) ? Number(b.tzOffset) : 0,
+      venue: b.venue ? {
+        name: clean(b.venue.name, 140) || null, address: clean(b.venue.address, 240) || null,
+        city: clean(b.venue.city, 90) || null, region: clean(b.venue.region, 90) || null,
+        postal: clean(b.venue.postal, 20) || null, country: clean(b.venue.country, 2).toUpperCase() || null
+      } : undefined,
+      tiers: parsed.tiers,
+      category: ['music', 'nightlife', 'workshop', 'talk', 'sport', 'community', 'online', 'other'].includes(b.category) ? b.category : 'other',
+      visibility: b.visibility === 'unlisted' ? 'unlisted' : 'public',
+      status: 'draft'
+    });
+
+    // Tell the host up front whether they can actually be paid, rather than
+    // letting them publish, sell, and then find the money sitting with us.
+    const paid = parsed.tiers.some(t => t.priceCents > 0);
+    const dest = paid ? await payoutDest(req.userId) : null;
+    res.json({
+      success: true, event: publicEvent(ev, { host: true }),
+      payoutReady: !paid || !!dest,
+      payoutWarning: (paid && !dest)
+        ? 'Connect a payout account before you publish, or ticket money will be held by Clockwork until you do.'
+        : null
+    });
+  } catch (e) { console.error('event create:', e.message); res.status(500).json({ error: 'Could not create the event' }); }
+});
+
+/** Edit, publish or cancel. Host or admin. */
+router.patch('/:id', verifyToken, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const ev = await Event.findById(req.params.id);
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+    if (String(ev.hostId) !== String(req.userId) && !(await isAdmin(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can change this event.' });
+    }
+    const b = req.body || {};
+    if (b.title !== undefined) ev.title = clean(b.title, 140) || ev.title;
+    if (b.description !== undefined) ev.description = clean(b.description, 4000);
+    if (b.coverImage !== undefined) ev.coverImage = clean(b.coverImage, 500) || null;
+    if (b.startsAt) { const d = new Date(b.startsAt); if (!isNaN(d.getTime())) ev.startsAt = d; }
+    if (b.endsAt !== undefined) {
+      if (!b.endsAt) ev.endsAt = null;
+      else { const d = new Date(b.endsAt); if (!isNaN(d.getTime()) && d > ev.startsAt) ev.endsAt = d; }
+    }
+    if (b.tiers) {
+      // Editing tiers after sales would orphan tickets whose tierId vanished,
+      // and silently change what someone already bought. Price and capacity
+      // stay editable; the set of tiers does not.
+      const sold = (ev.tiers || []).reduce((n, t) => n + (t.sold || 0), 0);
+      if (sold > 0) return res.status(409).json({ error: 'Tickets have already sold — you can no longer change the ticket types.' });
+      const parsed = parseTiers(b.tiers);
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      ev.tiers = parsed.tiers;
+    }
+    if (b.status && ['draft', 'published', 'cancelled'].includes(b.status)) ev.status = b.status;
+    if (b.visibility && ['public', 'unlisted'].includes(b.visibility)) ev.visibility = b.visibility;
+    ev.updatedAt = new Date();
+    await ev.save();
+    res.json({ success: true, event: publicEvent(ev, { host: true }) });
+  } catch (e) { console.error('event patch:', e.message); res.status(500).json({ error: 'Could not update the event' }); }
+});
+
+/**
+ * Attach a Studio or a Messenger channel — the Connect half of an event.
+ * Creates one when no roomId is supplied, so a host never has to go and make it
+ * separately and come back with an id.
+ */
+router.post('/:id/room', verifyToken, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const ev = await Event.findById(req.params.id);
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+    if (String(ev.hostId) !== String(req.userId) && !(await isAdmin(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can attach a room.' });
+    }
+    const b = req.body || {};
+    const wantStudio = b.kind !== 'channel';           // 'studio' (default) | 'channel'
+
+    let convo;
+    if (b.roomId && mongoose.isValidObjectId(b.roomId)) {
+      convo = await Conversation.findOne({ _id: b.roomId, closedAt: null });
+      if (!convo) return res.status(404).json({ error: 'That room no longer exists.' });
+      if (String(convo.ownerId) !== String(req.userId)) return res.status(403).json({ error: 'You do not host that room.' });
+    } else {
+      convo = await Conversation.create({
+        participants: [req.userId], ownerId: req.userId,
+        isRoom: true, isStudio: wantStudio,
+        name: clean(ev.title, 80),
+        // Invite-only: the room is a hard wall, and a ticket is what opens it.
+        visibility: 'invite',
+        updatedAt: new Date()
+      });
+    }
+    // Back-reference so the room shows its own doors in Messenger.
+    convo.event = { startsAt: ev.startsAt, endsAt: ev.endsAt || null, ticketUrl: eventUrl(ev) };
+    await convo.save();
+
+    ev.roomId = convo._id;
+    ev.updatedAt = new Date();
+    await ev.save();
+    res.json({ success: true, roomId: convo._id, isStudio: !!convo.isStudio, event: publicEvent(ev, { host: true }) });
+  } catch (e) { console.error('event room:', e.message); res.status(500).json({ error: 'Could not attach a room' }); }
+});
+
+/* ───────────────────────────── browse & read ─────────────────────────── */
+
+router.get('/', async (req, res) => {
+  try {
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 24));
+    const q = { status: 'published', visibility: 'public', startsAt: { $gte: new Date(Date.now() - 6 * 3600000) } };
+    if (req.query.category) q.category = req.query.category;
+    const evs = await Event.find(q).sort({ startsAt: 1 }).limit(limit).lean();
+    res.json({ success: true, events: evs.map(e => publicEvent(e)) });
+  } catch (e) { console.error('events list:', e.message); res.status(500).json({ error: 'Could not load events' }); }
+});
+
+router.get('/mine', verifyToken, async (req, res) => {
+  try {
+    const evs = await Event.find({ hostId: req.userId }).sort({ startsAt: -1 }).limit(100).lean();
+    res.json({ success: true, events: evs.map(e => publicEvent(e, { host: true })) });
+  } catch (e) { console.error('events mine:', e.message); res.status(500).json({ error: 'Could not load your events' }); }
+});
+
+router.get('/:slugOrId', async (req, res) => {
+  try {
+    const key = String(req.params.slugOrId || '');
+    const ev = mongoose.isValidObjectId(key)
+      ? await Event.findById(key).lean()
+      : await Event.findOne({ slug: key.toLowerCase() }).lean();
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+    if (ev.status === 'draft') return res.status(404).json({ error: 'Event not found' });
+    res.json({ success: true, event: publicEvent(ev) });
+  } catch (e) { console.error('event get:', e.message); res.status(500).json({ error: 'Could not load the event' }); }
+});
+
+module.exports = router;
+module.exports.publicEvent = publicEvent;
+module.exports.ticketUrl = ticketUrl;
+module.exports.payoutDest = payoutDest;
+
+/* ──────────────────────────── buying a ticket ────────────────────────── */
+
+/**
+ * Issue a ticket. The one place tickets are minted, so free claims and paid
+ * webhooks cannot drift apart.
+ *
+ * Capacity is enforced with an ATOMIC findOneAndUpdate guarded on sold <
+ * capacity. Reading the count and then saving would let two buyers racing for
+ * the last seat both pass the check — which is how oversold events happen, and
+ * you only find out at the door.
+ */
+async function issueTicket({ event, tierId, email, name, userId, session }) {
+  const tier = (event.tiers || []).id(tierId);
+  if (!tier) return { error: 'That ticket type no longer exists.' };
+
+  const claim = tier.capacity == null
+    ? { _id: event._id, 'tiers._id': tierId }
+    : { _id: event._id, tiers: { $elemMatch: { _id: tierId, sold: { $lt: tier.capacity } } } };
+
+  const taken = await Event.findOneAndUpdate(claim, { $inc: { 'tiers.$.sold': 1 } }, { new: true });
+  if (!taken) return { error: 'Sold out.', soldOut: true };
+
+  const price = tier.priceCents;
+  try {
+    const t = await Ticket.create({
+      eventId: event._id, tierId, tierName: tier.name,
+      email: String(email || '').toLowerCase().trim(),
+      name: clean(name, 120), userId: userId || null,
+      code: Ticket.newCode(),
+      pricePaidCents: price,
+      serviceFeeCents: tickets.serviceFee(price),
+      hostPayoutCents: tickets.hostPayout(price),
+      // Omit the key entirely for free tickets. Writing null would land inside
+      // the unique partial index and the second free ticket would be refused.
+      ...(session ? { stripeSessionId: session.id, paymentIntentId: session.payment_intent || null } : {})
+    });
+    return { ticket: t };
+  } catch (err) {
+    // Duplicate stripeSessionId: Stripe re-delivered a webhook we already
+    // handled. Give back the ticket that exists and RELEASE the seat we just
+    // claimed, or a retry storm silently eats the venue's capacity.
+    if (err.code === 11000 && session) {
+      await Event.updateOne({ _id: event._id, 'tiers._id': tierId }, { $inc: { 'tiers.$.sold': -1 } });
+      const existing = await Ticket.findOne({ stripeSessionId: session.id });
+      if (existing) return { ticket: existing, duplicate: true };
+    }
+    await Event.updateOne({ _id: event._id, 'tiers._id': tierId }, { $inc: { 'tiers.$.sold': -1 } });
+    throw err;
+  }
+}
+
+/**
+ * Buy — or claim, when the tier is free.
+ *
+ * Free tiers never touch Stripe: the ticket is issued immediately and the URL
+ * comes back in the response. Paid tiers return a Stripe Checkout URL, and the
+ * ticket is minted by the webhook once payment actually settles.
+ *
+ * Signing in is optional by design. The email is what the ticket belongs to.
+ */
+router.post('/:id/checkout', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const ev = await Event.findById(req.params.id);
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+    if (ev.status !== 'published') return res.status(400).json({ error: 'Tickets are not on sale for this event.' });
+
+    const b = req.body || {};
+    const email = String(b.email || '').toLowerCase().trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'We need a valid email to send the ticket to.' });
+    const tier = (ev.tiers || []).id(b.tierId);
+    if (!tier) return res.status(400).json({ error: 'Pick a ticket type.' });
+    if (tier.capacity != null && (tier.sold || 0) >= tier.capacity) return res.status(409).json({ error: 'That ticket type is sold out.' });
+
+    // Signed in? Attach the account. Not signed in? The email still works.
+    let userId = null;
+    try {
+      const auth = req.headers.authorization || '';
+      if (auth.startsWith('Bearer ')) {
+        const jwt = require('jsonwebtoken');
+        const d = jwt.verify(auth.slice(7), process.env.JWT_SECRET);
+        if (d && d.id) userId = d.id;
+      }
+    } catch (e) { /* guest checkout is a supported path, not an error */ }
+
+    if (tier.priceCents === 0) {
+      const r = await issueTicket({ event: ev, tierId: tier._id, email, name: b.name, userId, session: null });
+      if (r.error) return res.status(r.soldOut ? 409 : 400).json({ error: r.error });
+      return res.json({
+        success: true, free: true,
+        ticketUrl: ticketUrl(r.ticket.code), code: r.ticket.code,
+        message: 'Your ticket is ready. Save this link — it is your ticket, whether or not the email arrives.'
+      });
+    }
+
+    const dest = await payoutDest(ev.hostId);
+    const fee = tickets.serviceFee(tier.priceCents);
+    const total = tier.priceCents + fee;   // the fee is added on top, as quoted
+
+    const session = await stripe().checkout.sessions.create({
+      mode: 'payment',
+      customer_email: email,
+      line_items: [{
+        quantity: 1,
+        price_data: {
+          currency: 'usd',
+          unit_amount: total,
+          product_data: { name: `${ev.title} — ${tier.name}`, description: `Includes ${tickets.usd(fee)} service fee` }
+        }
+      }],
+      // The host receives their price; Clockwork keeps the fee it quoted.
+      ...(dest ? { payment_intent_data: { application_fee_amount: fee, transfer_data: { destination: dest } } } : {}),
+      metadata: {
+        type: 'event_ticket',
+        eventId: String(ev._id), tierId: String(tier._id),
+        email, name: clean(b.name, 120), userId: userId ? String(userId) : ''
+      },
+      success_url: `${SITE}/t/pending?s={CHECKOUT_SESSION_ID}`,
+      cancel_url: eventUrl(ev)
+    });
+
+    res.json({ success: true, checkoutUrl: session.url, sessionId: session.id });
+  } catch (e) { console.error('event checkout:', e.message); res.status(500).json({ error: 'Could not start checkout' }); }
+});
+
+/**
+ * Called by the verified Stripe webhook in TokenController. Mints the ticket
+ * once payment has settled, and admits the buyer to the room when there is one.
+ */
+async function fulfillTicket(session) {
+  const m = session.metadata || {};
+  const ev = await Event.findById(m.eventId);
+  if (!ev) throw new Error('event gone: ' + m.eventId);
+
+  const r = await issueTicket({
+    event: ev, tierId: m.tierId, email: m.email, name: m.name,
+    userId: m.userId || null, session
+  });
+  if (r.error) throw new Error(r.error);
+  if (r.duplicate) return r.ticket;             // Stripe re-delivery; nothing more to do
+
+  // A ticket to a Clockwork event opens the room. Invite-only is already a hard
+  // wall, so membership IS the admission — no separate access model needed.
+  if (ev.roomId && m.userId) {
+    try {
+      await Conversation.updateOne(
+        { _id: ev.roomId, closedAt: null, participants: { $ne: m.userId } },
+        { $addToSet: { participants: m.userId }, $set: { updatedAt: new Date() } }
+      );
+    } catch (e) { console.error('[event] room admit failed:', e.message); }
+  }
+  return r.ticket;
+}
+
+/* ─────────────────────── the ticket, and the door ────────────────────── */
+
+/**
+ * THE RECOVERY URL. No login, by design.
+ *
+ * Email delivery fails — spam folders, typos, corporate filters — and a buyer
+ * who paid must never be unable to reach what they bought. The code is a bearer
+ * token, so this URL is the ticket: openable, screenshotable, forwardable.
+ */
+router.get('/tickets/:code', async (req, res) => {
+  try {
+    const code = String(req.params.code || '').toUpperCase().trim();
+    const t = await Ticket.findOne({ code }).lean();
+    if (!t) return res.status(404).json({ error: 'No ticket with that code.' });
+    const ev = await Event.findById(t.eventId).lean();
+    res.json({
+      success: true,
+      ticket: {
+        code: t.code, status: t.status, tierName: t.tierName,
+        name: t.name || null, email: t.email,
+        scannedAt: t.scannedAt || null,
+        pricePaid: t.pricePaidCents ? tickets.usd(t.pricePaidCents) : 'Free',
+        url: ticketUrl(t.code),
+        createdAt: t.createdAt
+      },
+      event: ev ? {
+        id: ev._id, title: ev.title, startsAt: ev.startsAt, endsAt: ev.endsAt,
+        venue: (ev.venue && ev.venue.name) ? ev.venue : null,
+        roomId: ev.roomId || null, url: eventUrl(ev),
+        cancelled: ev.status === 'cancelled'
+      } : null
+    });
+  } catch (e) { console.error('ticket get:', e.message); res.status(500).json({ error: 'Could not load the ticket' }); }
+});
+
+/** Look up a session after checkout, so the success page can show the ticket. */
+router.get('/tickets/by-session/:sessionId', async (req, res) => {
+  try {
+    const t = await Ticket.findOne({ stripeSessionId: String(req.params.sessionId || '') }).lean();
+    // Not an error: the webhook may simply not have landed yet. The client
+    // polls, rather than showing someone who just paid a failure screen.
+    if (!t) return res.json({ success: true, pending: true });
+    res.json({ success: true, pending: false, code: t.code, ticketUrl: ticketUrl(t.code) });
+  } catch (e) { console.error('ticket by session:', e.message); res.status(500).json({ error: 'Lookup failed' }); }
+});
+
+/**
+ * The door. Host or admin only.
+ *
+ * Atomic: the status flips from valid to used in ONE guarded update. Two
+ * doormen scanning the same QR at the same instant must not both be told
+ * "valid" — the second gets "already used", with the time it was first scanned.
+ */
+router.post('/tickets/:code/scan', verifyToken, async (req, res) => {
+  try {
+    const code = String(req.params.code || '').toUpperCase().trim();
+    const t = await Ticket.findOne({ code });
+    if (!t) return res.status(404).json({ ok: false, reason: 'not_found', error: 'No ticket with that code.' });
+    const ev = await Event.findById(t.eventId).lean();
+    if (!ev) return res.status(404).json({ ok: false, reason: 'not_found', error: 'That event no longer exists.' });
+    if (String(ev.hostId) !== String(req.userId) && !(await isAdmin(req.userId))) {
+      return res.status(403).json({ ok: false, reason: 'forbidden', error: 'Only the host can scan tickets.' });
+    }
+    if (ev.status === 'cancelled') return res.json({ ok: false, reason: 'cancelled', error: 'This event was cancelled.' });
+    if (t.status === 'refunded' || t.status === 'void') {
+      return res.json({ ok: false, reason: t.status, error: `That ticket was ${t.status}.` });
+    }
+
+    const claimed = await Ticket.findOneAndUpdate(
+      { _id: t._id, status: 'valid' },
+      { $set: { status: 'used', scannedAt: new Date(), scannedBy: req.userId } },
+      { new: true }
+    );
+    if (!claimed) {
+      const now = await Ticket.findById(t._id).lean();
+      return res.json({
+        ok: false, reason: 'already_used',
+        error: 'Already scanned.',
+        scannedAt: now && now.scannedAt,
+        holder: { name: t.name || null, email: t.email, tier: t.tierName }
+      });
+    }
+    res.json({
+      ok: true, code: claimed.code, tier: claimed.tierName,
+      holder: { name: claimed.name || null, email: claimed.email },
+      event: { title: ev.title, startsAt: ev.startsAt }
+    });
+  } catch (e) { console.error('ticket scan:', e.message); res.status(500).json({ ok: false, error: 'Scan failed' }); }
+});
+
+/** Guest list — host or admin. */
+router.get('/:id/attendees', verifyToken, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const ev = await Event.findById(req.params.id).lean();
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+    if (String(ev.hostId) !== String(req.userId) && !(await isAdmin(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can see the guest list.' });
+    }
+    const list = await Ticket.find({ eventId: ev._id }).sort({ createdAt: -1 }).limit(2000).lean();
+    res.json({
+      success: true,
+      counts: {
+        sold: list.length,
+        checkedIn: list.filter(t => t.status === 'used').length,
+        refunded: list.filter(t => t.status === 'refunded').length
+      },
+      grossCents: list.reduce((n, t) => n + (t.pricePaidCents || 0), 0),
+      payoutCents: list.reduce((n, t) => n + (t.hostPayoutCents || 0), 0),
+      attendees: list.map(t => ({
+        code: t.code, name: t.name || null, email: t.email, tier: t.tierName,
+        status: t.status, scannedAt: t.scannedAt || null, at: t.createdAt
+      }))
+    });
+  } catch (e) { console.error('attendees:', e.message); res.status(500).json({ error: 'Could not load the guest list' }); }
+});
+
+module.exports.fulfillTicket = fulfillTicket;
+module.exports.issueTicket = issueTicket;

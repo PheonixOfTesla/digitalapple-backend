@@ -42,11 +42,16 @@ const ticketSchema = new mongoose.Schema({
   serviceFeeCents: { type: Number, default: 0, min: 0 },
   hostPayoutCents: { type: Number, default: 0, min: 0 },
 
-  // Stripe's session id, unique and sparse. THIS is the idempotency guard:
-  // Stripe retries webhooks, and a duplicate delivery must not mint a second
-  // ticket for one payment. The unique index makes the database refuse it
-  // rather than relying on the handler checking first.
-  stripeSessionId: { type: String, default: null, unique: true, sparse: true },
+  // Stripe's session id. THIS is the idempotency guard: Stripe retries
+  // webhooks, and a duplicate delivery must not mint a second ticket for one
+  // payment. The database refuses it rather than the handler remembering to.
+  //
+  // NO `default: null`, and a PARTIAL index rather than a sparse one. A sparse
+  // unique index only skips documents where the field is ABSENT — a stored
+  // null still collides. With a default of null every free ticket would write
+  // an explicit null, and the second free ticket ever sold would be rejected as
+  // a duplicate. Free events would have broken after exactly one sale.
+  stripeSessionId: { type: String },
   paymentIntentId: { type: String, default: null, index: true },
 
   createdAt: { type: Date, default: Date.now }
@@ -55,6 +60,13 @@ const ticketSchema = new mongoose.Schema({
 // The two reads the door and the buyer make.
 ticketSchema.index({ eventId: 1, status: 1 });
 ticketSchema.index({ email: 1, createdAt: -1 });
+
+// One ticket per Stripe session — enforced only over documents that actually
+// have one, so unlimited free tickets coexist with paid-ticket idempotency.
+ticketSchema.index(
+  { stripeSessionId: 1 },
+  { unique: true, partialFilterExpression: { stripeSessionId: { $type: 'string' } } }
+);
 
 /**
  * A human-typeable bearer code: CW-XXXX-XXXX.

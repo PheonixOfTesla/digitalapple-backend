@@ -163,6 +163,11 @@ app.use('/api/v1/tokens', TokenController);
 app.use('/api/v1/reels', ReelController);
 app.use('/api/v1/shop', require('./controllers/ShopController'));
 app.use('/api/v1/drive', require('./controllers/DriveController'));
+// Ticketing. Mounted twice on purpose: /events for the host and browse
+// routes, and /api/v1 as well so the ticket recovery URL is a short
+// /tickets/:code — that link goes on posters and into inboxes.
+app.use('/api/v1/events', require('./controllers/EventController'));
+app.use('/api/v1', require('./controllers/EventController'));
 app.use('/api/v1/directory', require('./controllers/DirectoryController'));
 app.use('/api/v1/hub', require('./controllers/HubController'));
 app.use('/api/v1/messages', require('./controllers/MessageController'));
