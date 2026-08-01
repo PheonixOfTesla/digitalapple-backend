@@ -228,6 +228,50 @@ router.patch('/:id', verifyToken, async (req, res) => {
 });
 
 /**
+ * Delete an event, for real.
+ *
+ * ONLY when nothing has been sold. A ticket is a promise to a named person who
+ * may have paid; deleting the event behind it would strand a pass that resolves
+ * to nothing, with no record of who is owed what. Cancel exists for that case —
+ * it keeps the row, keeps the tickets, and tells everyone holding one.
+ *
+ * So this is the "I made it wrong, start again" button, not an undo for a live
+ * event, and it says which one it is when it refuses.
+ */
+router.delete('/:id', verifyToken, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const ev = await Event.findById(req.params.id);
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+    if (String(ev.hostId) !== String(req.userId) && !(await isAdmin(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can delete this event.' });
+    }
+
+    // Count real tickets, not the sold counter: a counter can drift, a Ticket
+    // document is somebody holding a pass.
+    const issued = await Ticket.countDocuments({ eventId: ev._id, status: { $in: ['valid', 'used'] } });
+    if (issued > 0) {
+      return res.status(409).json({
+        error: `${issued} ${issued === 1 ? 'person has' : 'people have'} a pass to this. Cancel it instead — that keeps their tickets and the record of what they paid.`,
+        hasTickets: true, issued
+      });
+    }
+
+    // The room outlives the event. It is the host's own Studio or channel and
+    // may have a history in it; only the back-reference goes.
+    if (ev.roomId) {
+      try {
+        await Conversation.updateOne({ _id: ev.roomId }, { $unset: { event: 1 }, $set: { updatedAt: new Date() } });
+      } catch (e) { console.error('[event] detach room on delete:', e.message); }
+    }
+    // Sweep any refunded/void stragglers so no orphan rows point at a gone event.
+    await Ticket.deleteMany({ eventId: ev._id });
+    await Event.deleteOne({ _id: ev._id });
+    res.json({ success: true, deleted: true, id: ev._id });
+  } catch (e) { console.error('event delete:', e.message); res.status(500).json({ error: 'Could not delete the event' }); }
+});
+
+/**
  * Attach a Studio or a Messenger channel — the Connect half of an event.
  * Creates one when no roomId is supplied, so a host never has to go and make it
  * separately and come back with an id.

@@ -260,8 +260,11 @@ router.get('/profile/:id', optionalAuth, async (req, res) => {
           online: !!e.roomId && !(e.venue && e.venue.name),
           fromPrice: min === 0 ? 'Free' : t.usd(min),
           soldOut: tiers.length > 0 && tiers.every(x => x.capacity != null && (x.sold || 0) >= x.capacity),
-          // Sales numbers are the host's business, not a visitor's.
-          ...(isMe ? { sold, capacity: cap } : {})
+          // Sales numbers are the host's business, not a visitor's — and so is
+          // the fact that a row here is hidden from everyone else. A visitor is
+          // only ever sent published+public rows, so `visibility` would tell
+          // them nothing anyway.
+          ...(isMe ? { sold, capacity: cap, visibility: e.visibility } : {})
         };
       });
     } catch (e) { console.error('profile events:', e.message); }
