@@ -294,9 +294,17 @@ router.get('/mine', verifyToken, async (req, res) => {
     // them to discover when Publish refuses. Nobody should build an event,
     // price it, and only then learn the money has nowhere to go.
     const payoutReady = !!(await payoutDest(req.userId));
+    // Their handle, so the console can show where published events actually
+    // live for everybody else. Cheap here; a second round trip otherwise.
+    let handle = null;
+    try {
+      const me = await User.findById(req.userId).select('handle').lean();
+      handle = (me && me.handle) || null;
+    } catch (e) { /* the list still stands without it */ }
     res.json({
       success: true,
       payoutReady,
+      handle,
       events: upcoming.concat(past).map(e => publicEvent(e, { host: true }))
     });
   } catch (e) { console.error('events mine:', e.message); res.status(500).json({ error: 'Could not load your events' }); }
