@@ -9,6 +9,7 @@
  * catalog still renders; fulfillment records a draft to retry.
  */
 const express = require('express');
+const { ensurePaymentDomains } = require('../services/stripeDomains');
 const { siteUrl } = require('../services/siteUrl');
 const router = express.Router();
 
@@ -210,25 +211,6 @@ router.get('/catalog', async (req, res) => {
     ]
   });
 });
-
-// Apple Pay / Google Pay in embedded checkout require the serving domain to be
-// registered with Stripe. Registered lazily once per process; failures are non-fatal.
-let domainsEnsured = false;
-async function ensurePaymentDomains(stripe) {
-  if (domainsEnsured) return;
-  domainsEnsured = true;
-  for (const domain_name of ['www.theclockworkhub.com', 'theclockworkhub.com']) {
-    try {
-      const existing = await stripe.paymentMethodDomains.list({ domain_name, limit: 1 });
-      if (!existing.data.length) {
-        await stripe.paymentMethodDomains.create({ domain_name });
-        console.log('[shop] payment method domain registered:', domain_name);
-      }
-    } catch (e) {
-      console.error('[shop] payment domain registration failed:', domain_name, e.message);
-    }
-  }
-}
 
 // POST /shop/checkout { items: [{sku, quantity}] } — guest checkout allowed
 router.post('/checkout', async (req, res) => {

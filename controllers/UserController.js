@@ -245,17 +245,22 @@ router.post('/stripe/onboard', verifyToken, async (req, res) => {
 
 router.get('/stripe/status', verifyToken, async (req, res) => {
   try {
-    const user = await User.findById(req.userId).select('stripeAccountId').lean();
-    if (!user || !user.stripeAccountId) return res.json({ success: true, connected: false });
-    const Stripe = require('stripe');
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-    const acct = await stripe.accounts.retrieve(user.stripeAccountId);
+    // The SAME four states the events console uses. One bank connection per
+    // member covers tickets, gated Studios and anything paid that comes later,
+    // so "have you connected a bank" must answer identically wherever it is
+    // asked — otherwise the profile and the ticket console disagree about a
+    // fact, and somebody onboards twice.
+    const { payoutStatus } = require('../services/payouts');
+    const p = await payoutStatus(req.userId);
     res.json({
-      success: true, connected: true,
-      transfersActive: !!(acct && acct.capabilities && acct.capabilities.transfers === 'active'),
-      payoutsEnabled: !!(acct && acct.payouts_enabled)
+      success: true,
+      state: p.state,                    // none | incomplete | pending | ready | unknown
+      needs: p.needs || [],
+      connected: p.state !== 'none',
+      transfersActive: p.state === 'ready',
+      payoutsEnabled: !!p.payoutsEnabled
     });
-  } catch (e) { res.json({ success: true, connected: false }); }
+  } catch (e) { res.json({ success: true, state: 'unknown', needs: [], connected: false, transfersActive: false }); }
 });
 
 // Upload profile photo

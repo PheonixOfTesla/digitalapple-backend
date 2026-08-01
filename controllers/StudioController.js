@@ -12,6 +12,7 @@
  *   POST /studios/:id/blueprint   host: create + attach a blueprint to the room
  */
 const express = require('express');
+const { payoutDest } = require('../services/payouts');
 const { siteUrl } = require('../services/siteUrl');
 const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
@@ -101,17 +102,6 @@ async function isAdminUser(userId) {
 // Where a room's entry fee lands: the host's Express account when it can take
 // transfers (Clockwork keeps 10%), otherwise the platform account.
 const PLATFORM_FEE = 0.10;
-async function payoutDest(convo) {
-  try {
-    const host = await User.findById(convo.ownerId).select('stripeAccountId').lean();
-    if (!host || !host.stripeAccountId) return null;
-    const Stripe = require('stripe');
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-    const acct = await stripe.accounts.retrieve(host.stripeAccountId);
-    if (acct && acct.capabilities && acct.capabilities.transfers === 'active') return host.stripeAccountId;
-  } catch (e) { /* fall back to platform */ }
-  return null;
-}
 function feeFor(price) { return Math.max(1, Math.round(price * PLATFORM_FEE)); }
 
 async function members(convo) {
@@ -217,7 +207,7 @@ router.post('/:id/join', async (req, res) => {
       if ((convo.price || 0) > 0) {
         const Stripe = require('stripe');
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-        const dest = await payoutDest(convo);
+        const dest = await payoutDest(convo.ownerId);
         const session = await stripe.checkout.sessions.create({
           mode: 'payment',
           success_url: `${siteUrl()}/studio.html?id=${convo._id}&paid=1`,
@@ -238,7 +228,7 @@ router.post('/:id/join', async (req, res) => {
     if (!alreadyAsked && (convo.price || 0) > 0) {
       const Stripe = require('stripe');
       const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-      const dest = await payoutDest(convo);
+      const dest = await payoutDest(convo.ownerId);
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         success_url: `${siteUrl()}/studio.html?id=${convo._id}&requested=1`,

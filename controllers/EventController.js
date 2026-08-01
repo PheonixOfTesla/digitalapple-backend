@@ -29,6 +29,7 @@ const User = require('../models/User');
 const Conversation = require('../models/Conversation');
 const { verifyToken, optionalAuth } = require('../middleware/auth');
 const tickets = require('../services/ticketing');
+const { payoutDest, payoutStatus } = require('../services/payouts');
 
 const router = express.Router();
 
@@ -58,76 +59,6 @@ async function isAdmin(userId) {
 function stripe() {
   const Stripe = require('stripe');
   return new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-}
-
-/**
- * Where this event's money lands — the host's Express account when it can take
- * transfers, otherwise the platform. Same rule the paid-room door uses.
- */
-async function payoutDest(hostId) {
-  try {
-    const host = await User.findById(hostId).select('stripeAccountId').lean();
-    if (!host || !host.stripeAccountId) return null;
-    const acct = await stripe().accounts.retrieve(host.stripeAccountId);
-    if (acct && acct.capabilities && acct.capabilities.transfers === 'active') return host.stripeAccountId;
-  } catch (e) { /* fall back to platform */ }
-  return null;
-}
-
-/**
- * WHY the money cannot move yet, not just that it cannot.
- *
- * payoutDest() is a yes/no on `transfers === 'active'`, which is the right test
- * for routing a charge and the wrong thing to show a person. Stripe flips that
- * capability some time AFTER onboarding is submitted, so a host who has just
- * finished handing over their bank details was being told "no bank connected
- * yet" — which is false, and reads as though the whole thing failed.
- *
- * Four states, four different sentences, one of which is an action:
- *   none        no account at all — start
- *   incomplete  Stripe wants more from them — finish, and we can say what
- *   pending     everything is in, Stripe is checking — wait, nothing to do
- *   ready       sell
- */
-async function payoutStatus(hostId) {
-  try {
-    const host = await User.findById(hostId).select('stripeAccountId').lean();
-    if (!host || !host.stripeAccountId) return { state: 'none', needs: [] };
-    const acct = await stripe().accounts.retrieve(host.stripeAccountId);
-    if (!acct) return { state: 'none', needs: [] };
-
-    if (acct.capabilities && acct.capabilities.transfers === 'active') {
-      return { state: 'ready', needs: [], payoutsEnabled: !!acct.payouts_enabled };
-    }
-    const req = acct.requirements || {};
-    const due = [].concat(req.currently_due || [], req.past_due || []);
-    if (!acct.details_submitted || due.length) {
-      // The raw requirement keys are Stripe's ("individual.verification.document"),
-      // so hand back something a person can read.
-      return { state: 'incomplete', needs: due.slice(0, 6).map(humanRequirement) };
-    }
-    return { state: 'pending', needs: [], disabledReason: req.disabled_reason || null };
-  } catch (e) {
-    console.error('payout status:', e.message);
-    // Unknown is not the same as missing. Saying "no bank connected" because
-    // Stripe timed out is how a host is told to redo work they already did.
-    return { state: 'unknown', needs: [] };
-  }
-}
-
-/** Stripe's requirement keys, in English. */
-function humanRequirement(key) {
-  const k = String(key || '');
-  if (/verification\.document/.test(k)) return 'a photo of your ID';
-  if (/external_account/.test(k)) return 'your bank account details';
-  if (/tax_id|ssn_last_4|id_number/.test(k)) return 'your tax or ID number';
-  if (/dob/.test(k)) return 'your date of birth';
-  if (/address/.test(k)) return 'your address';
-  if (/phone/.test(k)) return 'a phone number';
-  if (/email/.test(k)) return 'an email address';
-  if (/url|business_profile/.test(k)) return 'a few business details';
-  if (/name/.test(k)) return 'your name';
-  return k.replace(/[._]/g, ' ');
 }
 
 /** Validate and normalise tiers coming from a host. */
@@ -637,7 +568,19 @@ router.post('/:id/checkout', async (req, res) => {
     const fee = tickets.serviceFee(tier.priceCents);
     const total = tier.priceCents + fee;   // the fee is added on top, as quoted
 
-    const session = await stripe().checkout.sessions.create({
+    // Embedded when the page asks for it: the payment sheet renders inside the
+    // event page instead of sending the buyer to checkout.stripe.com. No
+    // payment_method_types either way, so Stripe serves every method enabled —
+    // Apple Pay, Google Pay, Link, cards.
+    const embedded = b.embedded === true;
+    if (embedded) {
+      // Only matters for embedded. Wallets on OUR domain need it registered
+      // with Stripe, and without it Apple Pay simply does not appear.
+      const stripeSdk = stripe();
+      await require('../services/stripeDomains').ensurePaymentDomains(stripeSdk);
+    }
+
+    const base = {
       mode: 'payment',
       customer_email: email,
       line_items: [{
@@ -654,12 +597,35 @@ router.post('/:id/checkout', async (req, res) => {
         type: 'event_ticket',
         eventId: String(ev._id), tierId: String(tier._id),
         email, name: clean(b.name, 120), userId: userId ? String(userId) : ''
-      },
-      success_url: `${SITE}/t/pending?s={CHECKOUT_SESSION_ID}`,
-      cancel_url: eventUrl(ev)
-    });
+      }
+    };
+    // Both land on the same place: /t/pending polls until the webhook has
+    // minted the pass, so there is one post-payment path to get right.
+    const hostedUrls = { success_url: `${SITE}/t/pending?s={CHECKOUT_SESSION_ID}`, cancel_url: eventUrl(ev) };
+    const embeddedUrls = { ui_mode: 'embedded', return_url: `${SITE}/t/pending?s={CHECKOUT_SESSION_ID}` };
 
-    res.json({ success: true, checkoutUrl: session.url, sessionId: session.id });
+    let session = await stripe().checkout.sessions.create(
+      Object.assign({}, base, embedded ? embeddedUrls : hostedUrls));
+
+    // An embedded session carries a client secret and no URL. If the secret is
+    // missing there is nothing to mount AND nowhere to send them — a buyer with
+    // their card out, stuck. Open a hosted session here, where we still have
+    // their details, rather than letting the page discover the dead end.
+    let mode = embedded ? 'embedded' : 'hosted';
+    if (embedded && !session.client_secret) {
+      console.error('[event] embedded session had no client secret — falling back to hosted checkout');
+      session = await stripe().checkout.sessions.create(Object.assign({}, base, hostedUrls));
+      mode = 'hosted';
+    }
+
+    res.json({
+      success: true,
+      sessionId: session.id,
+      mode,
+      // Embedded gets a client secret to mount; hosted gets a URL to go to.
+      ...(mode === 'embedded' ? { clientSecret: session.client_secret } : { checkoutUrl: session.url }),
+      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || null
+    });
   } catch (e) { console.error('event checkout:', e.message); res.status(500).json({ error: 'Could not start checkout' }); }
 });
 
