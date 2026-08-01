@@ -711,9 +711,16 @@ router.get('/tickets/:code', async (req, res) => {
       });
     } catch (e) { console.error('[ticket] qr render failed:', e.message); }
 
+    // Whether the Wallet button can work at all. The page must not render a
+    // button that 501s — on a ticket, a control that fails is worse than one
+    // that was never there.
+    let walletReady = false;
+    try { walletReady = require('../services/wallet').available(); } catch (e) {}
+
     res.json({
       success: true,
       qrSvg,
+      walletReady,
       ticket: {
         code: t.code, status: t.status, tierName: t.tierName,
         name: t.name || null, email: t.email,
@@ -770,6 +777,51 @@ router.post('/tickets/:code/room', verifyToken, async (req, res) => {
       name: (convo && convo.name) || ev.title
     });
   } catch (e) { console.error('ticket room:', e.message); res.status(500).json({ error: 'Could not open the room' }); }
+});
+
+/**
+ * The same pass, for Apple Wallet.
+ *
+ * No login: identical reasoning to the recovery URL. Whoever holds the code
+ * holds the ticket, and requiring an account to add it to Wallet would put a
+ * sign-in between somebody and a door they already paid for.
+ *
+ * 501 when the signing material is absent, naming what is missing. An
+ * unsigned pass is rejected by iOS, so pretending otherwise would produce a
+ * button that fails at the worst possible moment.
+ */
+router.get('/tickets/:code/pass', async (req, res) => {
+  try {
+    const wallet = require('../services/wallet');
+    if (!wallet.available()) {
+      return res.status(501).json({
+        error: 'Apple Wallet passes are not set up yet.',
+        needs: wallet.missing()
+      });
+    }
+    const code = String(req.params.code || '').toUpperCase().trim();
+    const t = await Ticket.findOne({ code }).lean();
+    if (!t) return res.status(404).json({ error: 'No pass with that code.' });
+    if (t.status === 'refunded' || t.status === 'void') {
+      return res.status(410).json({ error: `That pass was ${t.status}.` });
+    }
+    const ev = await Event.findById(t.eventId).lean();
+    if (ev && ev.status === 'cancelled') return res.status(410).json({ error: 'This event was cancelled.' });
+
+    let host = null;
+    try {
+      const h = await User.findById(ev && ev.hostId).select('firstName lastName').lean();
+      if (h) host = { name: [h.firstName, h.lastName].filter(Boolean).join(' ').trim() };
+    } catch (e) { /* the pass stands without it */ }
+
+    const buf = await wallet.buildTicketPass({ ticket: t, event: ev, ticketUrl: ticketUrl(t.code), host });
+    res.set('Content-Type', 'application/vnd.apple.pkpass');
+    res.set('Content-Disposition', `attachment; filename="${t.code}.pkpass"`);
+    res.send(buf);
+  } catch (e) {
+    console.error('wallet pass:', e.message);
+    res.status(500).json({ error: 'Could not build the pass' });
+  }
 });
 
 /** Look up a session after checkout, so the success page can show the ticket. */

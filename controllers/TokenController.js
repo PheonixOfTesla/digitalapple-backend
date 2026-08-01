@@ -115,7 +115,11 @@ router.post('/checkout', optionalAuth, async (req, res) => {
 
     // Create Stripe Checkout session
     const checkoutSession = await stripeClient.checkout.sessions.create({
-      payment_method_types: ['card'],
+      // No payment_method_types. Naming ['card'] looks harmless and is not: it
+      // pins the session to cards and takes Apple Pay and Google Pay out of the
+      // sheet entirely, on exactly the devices most likely to be buying.
+      // Omitting it lets Stripe serve every method enabled in the dashboard,
+      // wallets included — which is what the ticket and shop checkouts do.
       mode: 'payment',
       line_items: [{
         price_data: {
