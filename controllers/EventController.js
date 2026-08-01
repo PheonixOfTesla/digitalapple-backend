@@ -459,8 +459,23 @@ router.get('/tickets/:code', async (req, res) => {
     const t = await Ticket.findOne({ code }).lean();
     if (!t) return res.status(404).json({ error: 'No ticket with that code.' });
     const ev = await Event.findById(t.eventId).lean();
+
+    // The QR is rendered HERE, not in the browser. A ticket whose QR depends on
+    // a third-party script is a ticket that fails at the door when a CDN is
+    // slow, blocked, or the path is wrong — and the QR is the product. Server
+    // SVG means the pass needs nothing but our own response. If even this
+    // fails, the printed code below it still gets the holder in.
+    let qrSvg = null;
+    try {
+      qrSvg = await require('qrcode').toString(ticketUrl(t.code), {
+        type: 'svg', margin: 1, width: 220,
+        color: { dark: '#0b0e14', light: '#ffffff' }
+      });
+    } catch (e) { console.error('[ticket] qr render failed:', e.message); }
+
     res.json({
       success: true,
+      qrSvg,
       ticket: {
         code: t.code, status: t.status, tierName: t.tierName,
         name: t.name || null, email: t.email,
