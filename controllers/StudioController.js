@@ -12,6 +12,7 @@
  *   POST /studios/:id/blueprint   host: create + attach a blueprint to the room
  */
 const express = require('express');
+const { siteUrl } = require('../services/siteUrl');
 const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
 const User = require('../models/User');
@@ -219,8 +220,8 @@ router.post('/:id/join', async (req, res) => {
         const dest = await payoutDest(convo);
         const session = await stripe.checkout.sessions.create({
           mode: 'payment',
-          success_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}&paid=1`,
-          cancel_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}`,
+          success_url: `${siteUrl()}/studio.html?id=${convo._id}&paid=1`,
+          cancel_url: `${siteUrl()}/studio.html?id=${convo._id}`,
           line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Entry — ' + (convo.name || 'Studio') }, unit_amount: convo.price }, quantity: 1 }],
           ...(dest ? { payment_intent_data: { application_fee_amount: feeFor(convo.price), transfer_data: { destination: dest } } } : {}),
           metadata: { type: 'room_entry', roomId: String(convo._id), userId: String(req.userId) }
@@ -240,8 +241,8 @@ router.post('/:id/join', async (req, res) => {
       const dest = await payoutDest(convo);
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
-        success_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}&requested=1`,
-        cancel_url: `${process.env.FRONTEND_URL}/studio.html?id=${convo._id}`,
+        success_url: `${siteUrl()}/studio.html?id=${convo._id}&requested=1`,
+        cancel_url: `${siteUrl()}/studio.html?id=${convo._id}`,
         line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Entry request — ' + (convo.name || 'Studio') }, unit_amount: convo.price }, quantity: 1 }],
         ...(dest ? { payment_intent_data: { application_fee_amount: feeFor(convo.price), transfer_data: { destination: dest } } } : {}),
         metadata: { type: 'room_request', roomId: String(convo._id), userId: String(req.userId) }

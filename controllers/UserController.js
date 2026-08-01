@@ -1,4 +1,5 @@
 const express = require('express');
+const { siteUrl } = require('../services/siteUrl');
 const User = require('../models/User');
 const { verifyToken, generateVerificationToken, verifyEmailToken } = require('../middleware/auth');
 const { upload, cloudinary } = require('../config/cloudinary');
@@ -202,8 +203,13 @@ router.post('/stripe/account-session', verifyToken, async (req, res) => {
     });
   } catch (e) {
     console.error('stripe account session:', e.message);
-    // Not fatal: the client falls back to the hosted redirect.
-    res.status(500).json({ error: 'Could not start the embedded setup', fallback: true });
+    // Not fatal: the client falls back to the hosted redirect. The reason
+    // still comes back, so a host who reports "I can't connect" is carrying
+    // the answer with them.
+    res.status(500).json({
+      error: 'Could not start the embedded setup', fallback: true,
+      reason: String(e.message || '').slice(0, 200)
+    });
   }
 });
 
@@ -222,12 +228,19 @@ router.post('/stripe/onboard', verifyToken, async (req, res) => {
     const back = RETURNS[String(req.body && req.body.from || '').trim()] || RETURNS.profile;
     const link = await stripe.accountLinks.create({
       account: user.stripeAccountId,
-      refresh_url: `${process.env.FRONTEND_URL}${back}?payouts=retry`,
-      return_url: `${process.env.FRONTEND_URL}${back}?payouts=done`,
+      refresh_url: `${siteUrl()}${back}?payouts=retry`,
+      return_url: `${siteUrl()}${back}?payouts=done`,
       type: 'account_onboarding'
     });
     res.json({ success: true, url: link.url });
-  } catch (e) { console.error('stripe onboard:', e.message); res.status(500).json({ error: 'Could not start payout setup' }); }
+  } catch (e) {
+    console.error('stripe onboard:', e.message);
+    // Hand back the reason. "Could not start payout setup" tells a host
+    // nothing and tells us nothing when they report it — and the causes here
+    // are our own configuration (a missing return URL, an incomplete Connect
+    // platform profile), not anything private to them.
+    res.status(500).json({ error: 'Could not start payout setup', reason: String(e.message || '').slice(0, 200) });
+  }
 });
 
 router.get('/stripe/status', verifyToken, async (req, res) => {

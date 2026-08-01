@@ -267,6 +267,19 @@ router.patch('/:id', verifyToken, async (req, res) => {
     // fortnight of sales that have to be reconciled by hand is not. Free
     // events publish freely — there is nothing to pay out.
     if (b.status === 'published' && ev.status !== 'published') {
+      // A tier priced under the current floor. Events created before the floor
+      // moved still carry the old price, and the floor is only checked when
+      // tiers are written — so without this a $2 ticket goes on sale, the host
+      // receives $0.21 and we take $1.79. The floor exists to prevent exactly
+      // that; it has to be enforced where the selling starts, not only where
+      // the price is typed.
+      const low = (ev.tiers || []).find(t => t.priceCents > 0 && !tickets.priceIsSellable(t.priceCents));
+      if (low) {
+        return res.status(409).json({
+          error: `"${low.name}" is ${tickets.usd(low.priceCents)}, and you would receive ${tickets.usd(tickets.hostPayout(low.priceCents))} of it. Paid tickets start at ${tickets.usd(tickets.MIN_PAID_CENTS)} — or make it free.`,
+          needsReprice: true, tierId: low._id, minPaidCents: tickets.MIN_PAID_CENTS
+        });
+      }
       const paid = (ev.tiers || []).some(t => t.priceCents > 0);
       if (paid && !(await payoutDest(ev.hostId))) {
         return res.status(409).json({
@@ -493,6 +506,25 @@ async function admitToRoom(ev, userId) {
   } catch (e) { console.error('[event] room admit failed:', e.message); return false; }
 }
 
+/**
+ * Tell the host their sales have stopped.
+ *
+ * Sales stopping silently is how a host finds out on the night. Deduped to one
+ * an hour per event and reason, so a queue of blocked buyers does not become a
+ * queue of bells — the guard is on the sale, not on the notification, so a
+ * missed one costs more than a duplicate.
+ */
+async function notifyHost(ev, type, text) {
+  try {
+    const Notification = require('../models/Notification');
+    const link = `/events?e=${ev._id}`;
+    const since = new Date(Date.now() - 3600000);
+    if (await Notification.exists({ userId: ev.hostId, type, link, createdAt: { $gte: since } })) return;
+    await Notification.push({ userId: ev.hostId, channel: 'personal', type, text, link });
+    require('../services/realtime').userEmit(String(ev.hostId), 'notify', { type, link });
+  } catch (e) { console.error('[event] host notify failed:', e.message); }
+}
+
 async function issueTicket({ event, tierId, email, name, userId, session }) {
   const tier = (event.tiers || []).id(tierId);
   if (!tier) return { error: 'That ticket type no longer exists.' };
@@ -581,6 +613,16 @@ router.post('/:id/checkout', async (req, res) => {
       });
     }
 
+    // Same guard at the till: an event may have been published before the floor
+    // moved, and every sale under it hands the host small change.
+    if (!tickets.priceIsSellable(tier.priceCents)) {
+      console.error('[event] BLOCKED checkout — tier under the floor:',
+        String(ev._id), tier.name, tickets.usd(tier.priceCents));
+      await notifyHost(ev, 'event_price_too_low',
+        `"${ev.title}" is not selling — ${tier.name} is priced at ${tickets.usd(tier.priceCents)} and you would keep ${tickets.usd(tickets.hostPayout(tier.priceCents))}. Reprice it to ${tickets.usd(tickets.MIN_PAID_CENTS)} or more, or make it free.`);
+      return res.status(409).json({ error: 'Ticket sales for this event are paused. The host has been notified.' });
+    }
+
     // Checked again at the till, not just at publish. A Stripe account can be
     // deactivated after an event goes on sale, and taking a stranger's money
     // with no route to the host is worse than a stalled checkout — one is a
@@ -588,28 +630,8 @@ router.post('/:id/checkout', async (req, res) => {
     const dest = await payoutDest(ev.hostId);
     if (!dest) {
       console.error('[event] BLOCKED paid checkout — host has no payout account:', String(ev.hostId), String(ev._id));
-      // Sales stopping silently is how a host finds out on the night. Tell
-      // them, once — the guard is on the ticket, not on the notification, so a
-      // duplicate row is cheaper than a missed one, but a bell that rings on
-      // every refresh is noise. One per hour is enough to be heard.
-      try {
-        const Notification = require('../models/Notification');
-        const since = new Date(Date.now() - 3600000);
-        const already = await Notification.exists({
-          userId: ev.hostId, type: 'event_payout_blocked',
-          link: `/events?e=${ev._id}`, createdAt: { $gte: since }
-        });
-        if (!already) {
-          await Notification.push({
-            userId: ev.hostId, channel: 'personal', type: 'event_payout_blocked',
-            text: `Ticket sales for "${ev.title}" are paused — connect a bank account so the money has somewhere to land.`,
-            link: `/events?e=${ev._id}`
-          });
-          require('../services/realtime').userEmit(String(ev.hostId), 'notify', {
-            type: 'event_payout_blocked', link: `/events?e=${ev._id}`
-          });
-        }
-      } catch (e) { console.error('[event] payout-block notify failed:', e.message); }
+      await notifyHost(ev, 'event_payout_blocked',
+        `Ticket sales for "${ev.title}" are paused — connect a bank account so the money has somewhere to land.`);
       return res.status(409).json({ error: 'Ticket sales for this event are paused. The host has been notified.' });
     }
     const fee = tickets.serviceFee(tier.priceCents);

@@ -9,6 +9,7 @@
  * catalog still renders; fulfillment records a draft to retry.
  */
 const express = require('express');
+const { siteUrl } = require('../services/siteUrl');
 const router = express.Router();
 
 const PF_BASE = 'https://api.printful.com';
@@ -251,9 +252,9 @@ router.post('/checkout', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       ...(embedded
-        ? { ui_mode: 'embedded', return_url: `${process.env.FRONTEND_URL}/shop.html?order=return&session_id={CHECKOUT_SESSION_ID}` }
-        : { success_url: `${process.env.FRONTEND_URL}/shop.html?order=success`,
-            cancel_url: `${process.env.FRONTEND_URL}/shop.html?order=cancelled` }),
+        ? { ui_mode: 'embedded', return_url: `${siteUrl()}/shop.html?order=return&session_id={CHECKOUT_SESSION_ID}` }
+        : { success_url: `${siteUrl()}/shop.html?order=success`,
+            cancel_url: `${siteUrl()}/shop.html?order=cancelled` }),
       line_items: items.map(i => ({
         price_data: {
           currency: 'usd',

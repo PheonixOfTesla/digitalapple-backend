@@ -12,6 +12,7 @@
  */
 
 const express = require('express');
+const { siteUrl } = require('../services/siteUrl');
 const router = express.Router();
 const Stripe = require('stripe');
 
@@ -133,8 +134,8 @@ router.post('/checkout', optionalAuth, async (req, res) => {
         userId: userId || '',
         sessionId: sessionId || ''
       },
-      success_url: `${process.env.FRONTEND_URL}/blueprint.html?purchase=success&tokens=${pack.tokens}`,
-      cancel_url: `${process.env.FRONTEND_URL}/blueprint.html?purchase=cancelled`
+      success_url: `${siteUrl()}/blueprint.html?purchase=success&tokens=${pack.tokens}`,
+      cancel_url: `${siteUrl()}/blueprint.html?purchase=cancelled`
     }, {
       idempotencyKey: idempotencyKey || undefined
     });

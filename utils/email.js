@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { siteUrl } = require('../services/siteUrl');
 
 // Check if email is configured
 const isEmailConfigured = !!(
@@ -45,7 +46,7 @@ async function sendEmail({ to, subject, html }) {
 }
 
 async function sendVerificationEmail(email, token) {
-  const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+  const verifyUrl = `${siteUrl()}/verify-email?token=${token}`;
 
   return sendEmail({
     to: email,
@@ -62,7 +63,7 @@ async function sendVerificationEmail(email, token) {
 }
 
 async function sendPasswordResetEmail(email, token) {
-  const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
+  const resetUrl = `${siteUrl()}/reset-password?token=${token}`;
 
   return sendEmail({
     to: email,
@@ -79,7 +80,7 @@ async function sendPasswordResetEmail(email, token) {
 }
 
 async function sendEmailChangeVerification(newEmail, token) {
-  const verifyUrl = `${process.env.FRONTEND_URL}/verify-email-change?token=${token}`;
+  const verifyUrl = `${siteUrl()}/verify-email-change?token=${token}`;
 
   return sendEmail({
     to: newEmail,
