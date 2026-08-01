@@ -74,6 +74,62 @@ async function payoutDest(hostId) {
   return null;
 }
 
+/**
+ * WHY the money cannot move yet, not just that it cannot.
+ *
+ * payoutDest() is a yes/no on `transfers === 'active'`, which is the right test
+ * for routing a charge and the wrong thing to show a person. Stripe flips that
+ * capability some time AFTER onboarding is submitted, so a host who has just
+ * finished handing over their bank details was being told "no bank connected
+ * yet" — which is false, and reads as though the whole thing failed.
+ *
+ * Four states, four different sentences, one of which is an action:
+ *   none        no account at all — start
+ *   incomplete  Stripe wants more from them — finish, and we can say what
+ *   pending     everything is in, Stripe is checking — wait, nothing to do
+ *   ready       sell
+ */
+async function payoutStatus(hostId) {
+  try {
+    const host = await User.findById(hostId).select('stripeAccountId').lean();
+    if (!host || !host.stripeAccountId) return { state: 'none', needs: [] };
+    const acct = await stripe().accounts.retrieve(host.stripeAccountId);
+    if (!acct) return { state: 'none', needs: [] };
+
+    if (acct.capabilities && acct.capabilities.transfers === 'active') {
+      return { state: 'ready', needs: [], payoutsEnabled: !!acct.payouts_enabled };
+    }
+    const req = acct.requirements || {};
+    const due = [].concat(req.currently_due || [], req.past_due || []);
+    if (!acct.details_submitted || due.length) {
+      // The raw requirement keys are Stripe's ("individual.verification.document"),
+      // so hand back something a person can read.
+      return { state: 'incomplete', needs: due.slice(0, 6).map(humanRequirement) };
+    }
+    return { state: 'pending', needs: [], disabledReason: req.disabled_reason || null };
+  } catch (e) {
+    console.error('payout status:', e.message);
+    // Unknown is not the same as missing. Saying "no bank connected" because
+    // Stripe timed out is how a host is told to redo work they already did.
+    return { state: 'unknown', needs: [] };
+  }
+}
+
+/** Stripe's requirement keys, in English. */
+function humanRequirement(key) {
+  const k = String(key || '');
+  if (/verification\.document/.test(k)) return 'a photo of your ID';
+  if (/external_account/.test(k)) return 'your bank account details';
+  if (/tax_id|ssn_last_4|id_number/.test(k)) return 'your tax or ID number';
+  if (/dob/.test(k)) return 'your date of birth';
+  if (/address/.test(k)) return 'your address';
+  if (/phone/.test(k)) return 'a phone number';
+  if (/email/.test(k)) return 'an email address';
+  if (/url|business_profile/.test(k)) return 'a few business details';
+  if (/name/.test(k)) return 'your name';
+  return k.replace(/[._]/g, ' ');
+}
+
 /** Validate and normalise tiers coming from a host. */
 function parseTiers(raw) {
   const out = [];
@@ -337,7 +393,8 @@ router.get('/mine', verifyToken, async (req, res) => {
     // Whether they can be paid, returned with the list rather than left for
     // them to discover when Publish refuses. Nobody should build an event,
     // price it, and only then learn the money has nowhere to go.
-    const payoutReady = !!(await payoutDest(req.userId));
+    const payout = await payoutStatus(req.userId);
+    const payoutReady = payout.state === 'ready';
     // Their handle, so the console can show where published events actually
     // live for everybody else. Cheap here; a second round trip otherwise.
     let handle = null;
@@ -348,7 +405,18 @@ router.get('/mine', verifyToken, async (req, res) => {
     res.json({
       success: true,
       payoutReady,
+      payout,          // state + what Stripe is still waiting on, in English
       handle,
+      // The rate, from the one module that owns it. The create form validates
+      // against these numbers, and a form validating against a stale copy of
+      // the rate card rejects prices the server would have accepted.
+      rate: {
+        minPaidCents: tickets.MIN_PAID_CENTS,
+        flatCents: tickets.FLAT_CENTS,
+        percent: tickets.PERCENT,
+        percentAboveCents: tickets.PERCENT_ABOVE_CENTS,
+        summary: tickets.rateSummary()
+      },
       events: upcoming.concat(past).map(e => publicEvent(e, { host: true }))
     });
   } catch (e) { console.error('events mine:', e.message); res.status(500).json({ error: 'Could not load your events' }); }

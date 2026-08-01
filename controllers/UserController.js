@@ -150,17 +150,70 @@ router.put('/profile', verifyToken, async (req, res) => {
 // ── Stripe Express payouts: hosts collect their rooms' entry fees ────────────
 // Onboarding is Stripe-hosted; we only hold the account id. Fees route to the
 // host automatically at checkout once their account can take transfers.
+
+/** The Express account for this user, created on first need. */
+async function ensureExpressAccount(stripe, user) {
+  if (user.stripeAccountId) return user.stripeAccountId;
+  const acct = await stripe.accounts.create({
+    type: 'express',
+    email: user.email,
+    capabilities: { transfers: { requested: true } }
+  });
+  user.stripeAccountId = acct.id;
+  await user.save();
+  return acct.id;
+}
+
+/**
+ * An Account Session — the credential that lets Stripe's own onboarding render
+ * INSIDE Clockwork instead of sending the host to stripe.com and back.
+ *
+ * The redirect flow below still exists and is still correct. It is the fallback
+ * whenever the embedded runtime cannot load, which is not hypothetical: this is
+ * a third-party script, and the last thing that should ever be blocked by an
+ * ad blocker is a host trying to connect their bank. Same Express account
+ * either way, so a host can start in one and finish in the other.
+ */
+router.post('/stripe/account-session', verifyToken, async (req, res) => {
+  try {
+    const Stripe = require('stripe');
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const account = await ensureExpressAccount(stripe, user);
+
+    const session = await stripe.accountSessions.create({
+      account,
+      components: {
+        // Setting up, and then living with it: a host who has connected should
+        // be able to see money land without leaving Clockwork either.
+        account_onboarding: { enabled: true },
+        payouts: { enabled: true },
+        account_management: { enabled: true }
+      }
+    });
+    res.json({
+      success: true,
+      clientSecret: session.client_secret,
+      accountId: account,
+      // Served rather than hardcoded in the page, so rotating the key is a
+      // Railway variable and not a frontend deploy.
+      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || null
+    });
+  } catch (e) {
+    console.error('stripe account session:', e.message);
+    // Not fatal: the client falls back to the hosted redirect.
+    res.status(500).json({ error: 'Could not start the embedded setup', fallback: true });
+  }
+});
+
 router.post('/stripe/onboard', verifyToken, async (req, res) => {
   try {
     const Stripe = require('stripe');
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    if (!user.stripeAccountId) {
-      const acct = await stripe.accounts.create({ type: 'express', email: user.email, capabilities: { transfers: { requested: true } } });
-      user.stripeAccountId = acct.id;
-      await user.save();
-    }
+    await ensureExpressAccount(stripe, user);
     // Come back where they left from. A host connecting a bank so they can
     // publish tonight's event should land back on the event, not on a profile
     // page they then have to navigate out of. Allowlisted, not free-form: this
