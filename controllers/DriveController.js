@@ -31,15 +31,25 @@ const { verifyToken } = require('../middleware/auth');
 const router = express.Router();
 
 /**
- * Turn a Cloudinary delivery URL into a download. fl_attachment flips the
- * response to Content-Disposition: attachment, so the browser saves the file
- * instead of rendering it — that's the "export" for every document in Drive,
- * including ones that arrived via chat or the Ticker.
+ * Turn a Cloudinary delivery URL into a download.
+ *
+ * fl_attachment flips the response to Content-Disposition: attachment, and it
+ * is verified to work on image and video delivery. So it is applied to THOSE
+ * ONLY.
+ *
+ * Raw delivery — which is every pptx, docx and pdf in Drive — does not accept
+ * transformation components the same way, and a flag Cloudinary does not
+ * recognise becomes part of the public_id and returns 404. Trading "opens
+ * instead of saving" for "the file is gone" is a bad trade, so raw URLs are
+ * handed back untouched. The client does the real work now: it fetches the
+ * bytes and saves them under the right filename, which needs no header at all.
  */
 function downloadUrl(url) {
   const u = String(url || '');
-  if (!u || u.indexOf('/upload/') < 0) return u || null;
-  return u.replace('/upload/', '/upload/fl_attachment/');
+  if (!u) return null;
+  if (u.indexOf('/image/upload/') >= 0) return u.replace('/image/upload/', '/image/upload/fl_attachment/');
+  if (u.indexOf('/video/upload/') >= 0) return u.replace('/video/upload/', '/video/upload/fl_attachment/');
+  return u;
 }
 
 function typeFromMime(mime) {
