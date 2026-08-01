@@ -59,4 +59,31 @@ function opensWithinMinutes(convo, mins = 30) {
   return false;
 }
 
-module.exports = { roomOpenNow, hoursPublic, noticeOf, minutes, opensWithinMinutes };
+/**
+ * The public shape of a room's event, or null when the room isn't one.
+ *
+ * Shared because three endpoints serialize rooms — the Messenger list, the
+ * Studio page, and the public Studio card — and a countdown that disagrees
+ * with itself between two of them is worse than no countdown. `live` and
+ * `soon` are derived here, once, rather than left to each client to work out
+ * from raw timestamps and drift apart.
+ */
+function eventPublic(convo) {
+  const e = convo && convo.event;
+  if (!e || !e.startsAt) return null;
+  const now = Date.now();
+  const start = new Date(e.startsAt).getTime();
+  const end = e.endsAt ? new Date(e.endsAt).getTime() : null;
+  return {
+    startsAt: e.startsAt,
+    endsAt: e.endsAt || null,
+    ticketUrl: e.ticketUrl || null,
+    // Live from the start until the end — or, with no end set, for two hours,
+    // so a host who forgets to set one doesn't leave a room "live" forever.
+    live: now >= start && now < (end || start + 2 * 60 * 60 * 1000),
+    soon: now < start && (start - now) <= 60 * 60 * 1000,
+    startsInMs: start - now
+  };
+}
+
+module.exports = { roomOpenNow, hoursPublic, noticeOf, minutes, opensWithinMinutes, eventPublic };

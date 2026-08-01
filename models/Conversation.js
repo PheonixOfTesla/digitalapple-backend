@@ -26,6 +26,18 @@ const conversationSchema = new mongoose.Schema({
   },
   // Entry price in cents (0 = free). Paid rooms collect via Stripe at the door.
   price: { type: Number, default: 0, min: 0, max: 50000 },
+  // A room can BE an event: a time it starts, and a door people buy through.
+  //
+  // Deliberately only a time and a link for now. The room already has an access
+  // model — invite-only is a hard wall, entry by host invite alone — so a ticket
+  // does not need a new one; it becomes another way to be invited. That
+  // handshake (Lightning Pass calling back on a completed sale) is the next
+  // piece of work. Until it exists, ticketUrl is simply where the door is.
+  event: {
+    startsAt: { type: Date, default: null },
+    endsAt: { type: Date, default: null },
+    ticketUrl: { type: String, trim: true, maxlength: 500, default: null }
+  },
   category: { type: String, enum: ['ideas', 'network', 'social', 'business', 'party', 'other'], default: 'other' },
   description: { type: String, trim: true, maxlength: 300 },
   // A room can be "about" something on the platform — an Atlas map, a Directory

@@ -19,7 +19,7 @@ const Project = require('../models/Project');
 const Notification = require('../models/Notification');
 const realtime = require('../services/realtime');
 const { verifyToken } = require('../middleware/auth');
-const { roomOpenNow, hoursPublic, noticeOf } = require('../utils/roomHours');
+const { roomOpenNow, hoursPublic, noticeOf, eventPublic } = require('../utils/roomHours');
 
 const router = express.Router();
 
@@ -56,7 +56,7 @@ router.get('/:id/public', async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
     const c = await Conversation.findOne({ _id: req.params.id, closedAt: null }).select('name visibility isStudio isRoom photo hours price').lean();
     if (!c || (!c.isStudio && !c.isRoom)) return res.status(404).json({ error: 'Studio not found' });
-    res.json({ success: true, studio: { id: c._id, name: c.name || 'Studio', visibility: c.visibility || 'private', photo: c.photo || null, openNow: roomOpenNow(c), hours: hoursPublic(c), price: c.price || 0 } });
+    res.json({ success: true, studio: { id: c._id, name: c.name || 'Studio', visibility: c.visibility || 'private', photo: c.photo || null, openNow: roomOpenNow(c), hours: hoursPublic(c), price: c.price || 0, event: eventPublic(c) } });
   } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
@@ -182,6 +182,7 @@ router.get('/:id', async (req, res) => {
       studio: {
         id: convo._id, name: convo.name, hostId: convo.ownerId,
         isHost, isMember, visibility: convo.visibility, blueprint,
+        event: eventPublic(convo),
         members: await members(convo), requests
       }
     });

@@ -21,7 +21,7 @@ const { verifyToken } = require('../middleware/auth');
 const { encryptText, decryptText } = require('../services/crypto');
 const realtime = require('../services/realtime');
 const { chatUpload } = require('../config/cloudinary');
-const { roomOpenNow, hoursPublic, minutes } = require('../utils/roomHours');
+const { roomOpenNow, hoursPublic, minutes, eventPublic } = require('../utils/roomHours');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -103,6 +103,7 @@ router.get('/conversations', async (req, res) => {
         photo: c.photo || null,
         visibility: c.visibility || 'private',
         hours: hoursPublic(c), openNow: roomOpenNow(c), price: c.price || 0,
+        event: eventPublic(c),
         // Rename/delete rights: the host always, admins even when they're not.
         canManage: (c.isRoom || c.isStudio) &&
           (admin || (c.ownerId && String(c.ownerId) === String(req.userId)))
@@ -279,6 +280,69 @@ router.post('/conversations/:id/visibility', async (req, res) => {
     await convo.save();
     res.json({ success: true, visibility: v });
   } catch (e) { console.error('room visibility:', e.message); res.status(500).json({ error: 'Could not change visibility' }); }
+});
+
+/**
+ * Turn a room into an event — a start time and a door.
+ *
+ * POST { startsAt, endsAt?, ticketUrl? }   host or admin only
+ * POST { startsAt: null }                  clears it back to an ordinary room
+ *
+ * ticketUrl is validated as an absolute http(s) URL rather than stored raw: it
+ * is rendered as a link other people click, so a `javascript:` value would be a
+ * stored XSS delivered by the host to their own guests.
+ */
+router.post('/conversations/:id/event', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
+    const convo = await Conversation.findOne({ _id: req.params.id, closedAt: null });
+    if (!convo) return res.status(404).json({ error: 'Thread not found' });
+    if (!convo.isRoom && !convo.isStudio) return res.status(400).json({ error: 'Only rooms and Studios can be events.' });
+    const isOwner = convo.ownerId && String(convo.ownerId) === String(req.userId);
+    if (!isOwner && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only the host can schedule this room.' });
+    }
+
+    const b = req.body || {};
+
+    if (b.startsAt === null || b.startsAt === '') {         // clear
+      convo.event = { startsAt: null, endsAt: null, ticketUrl: null };
+      convo.updatedAt = new Date();
+      await convo.save();
+      return res.json({ success: true, event: null });
+    }
+
+    const startsAt = new Date(b.startsAt);
+    if (isNaN(startsAt.getTime())) return res.status(400).json({ error: 'That start time is not a valid date.' });
+
+    let endsAt = null;
+    if (b.endsAt) {
+      endsAt = new Date(b.endsAt);
+      if (isNaN(endsAt.getTime())) return res.status(400).json({ error: 'That end time is not a valid date.' });
+      // A door that closes before it opens would render as a negative countdown
+      // and silently break every "is it live now" check downstream.
+      if (endsAt <= startsAt) return res.status(400).json({ error: 'The end time has to be after the start time.' });
+    }
+
+    let ticketUrl = null;
+    if (b.ticketUrl) {
+      const raw = String(b.ticketUrl).trim().slice(0, 500);
+      let u = null;
+      try { u = new URL(raw); } catch (e) { u = null; }
+      if (!u || !/^https?:$/.test(u.protocol)) {
+        return res.status(400).json({ error: 'The ticket link has to be a full http(s) URL.' });
+      }
+      ticketUrl = u.toString();
+    }
+
+    convo.event = { startsAt, endsAt, ticketUrl };
+    convo.updatedAt = new Date();
+    await convo.save();
+    res.json({ success: true, event: { startsAt, endsAt, ticketUrl } });
+  } catch (e) {
+    console.error('room event:', e.message);
+    res.status(500).json({ error: 'Could not schedule this room' });
+  }
 });
 
 // Room photo — host (or admin) uploads an image that fronts the room
