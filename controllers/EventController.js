@@ -330,6 +330,26 @@ module.exports.payoutDest = payoutDest;
  * the last seat both pass the check — which is how oversold events happen, and
  * you only find out at the door.
  */
+/**
+ * Membership IS admission.
+ *
+ * The room an event creates is invite-only, and invite-only is a hard wall in
+ * StudioController — no walk-ins, no knocking, a flat 403. So the only way a
+ * ticket opens a Studio is by putting the holder in `participants`. Guarded on
+ * $ne so re-running it is free, and never fatal: a room that failed to open is
+ * a support ticket, a ticket that failed to issue is a refund.
+ */
+async function admitToRoom(ev, userId) {
+  if (!ev || !ev.roomId || !userId) return false;
+  try {
+    const r = await Conversation.updateOne(
+      { _id: ev.roomId, closedAt: null, participants: { $ne: userId } },
+      { $addToSet: { participants: userId }, $set: { updatedAt: new Date() } }
+    );
+    return !!(r && r.modifiedCount);
+  } catch (e) { console.error('[event] room admit failed:', e.message); return false; }
+}
+
 async function issueTicket({ event, tierId, email, name, userId, session }) {
   const tier = (event.tiers || []).id(tierId);
   if (!tier) return { error: 'That ticket type no longer exists.' };
@@ -355,6 +375,10 @@ async function issueTicket({ event, tierId, email, name, userId, session }) {
       // the unique partial index and the second free ticket would be refused.
       ...(session ? { stripeSessionId: session.id, paymentIntentId: session.payment_intent || null } : {})
     });
+    // A ticket to a Clockwork event opens its room. This lives HERE, not only
+    // in the paid webhook, because a free RSVP is the commonest Studio event
+    // there is — and it was issuing passes that opened nothing.
+    await admitToRoom(event, userId);
     return { ticket: t };
   } catch (err) {
     // Duplicate stripeSessionId: Stripe re-delivered a webhook we already
@@ -458,18 +482,8 @@ async function fulfillTicket(session) {
     userId: m.userId || null, session
   });
   if (r.error) throw new Error(r.error);
-  if (r.duplicate) return r.ticket;             // Stripe re-delivery; nothing more to do
-
-  // A ticket to a Clockwork event opens the room. Invite-only is already a hard
-  // wall, so membership IS the admission — no separate access model needed.
-  if (ev.roomId && m.userId) {
-    try {
-      await Conversation.updateOne(
-        { _id: ev.roomId, closedAt: null, participants: { $ne: m.userId } },
-        { $addToSet: { participants: m.userId }, $set: { updatedAt: new Date() } }
-      );
-    } catch (e) { console.error('[event] room admit failed:', e.message); }
-  }
+  // Room admission happens inside issueTicket now, so free claims and paid
+  // webhooks cannot drift apart. Duplicates already returned the same ticket.
   return r.ticket;
 }
 
@@ -521,6 +535,46 @@ router.get('/tickets/:code', async (req, res) => {
       } : null
     });
   } catch (e) { console.error('ticket get:', e.message); res.status(500).json({ error: 'Could not load the ticket' }); }
+});
+
+/**
+ * Redeem a pass for room access, holding the pass rather than an account
+ * history.
+ *
+ * Buying a ticket does not require signing in — that is deliberate, and it is
+ * also why this route has to exist. A guest who buys a pass to an online event
+ * has no userId to admit at purchase time, so their pass links to an
+ * invite-only room that answers 403. The pass itself is the proof: present a
+ * valid code while signed in and the room opens.
+ *
+ * The code is a bearer instrument, so this also claims the ticket for the
+ * account presenting it, and stops accepting a code that has already been
+ * scanned or refunded.
+ */
+router.post('/tickets/:code/room', verifyToken, async (req, res) => {
+  try {
+    const code = String(req.params.code || '').toUpperCase().trim();
+    const t = await Ticket.findOne({ code });
+    if (!t) return res.status(404).json({ error: 'No pass with that code.' });
+    if (t.status === 'refunded' || t.status === 'void') {
+      return res.status(403).json({ error: `That pass was ${t.status}.` });
+    }
+    const ev = await Event.findById(t.eventId).lean();
+    if (!ev) return res.status(404).json({ error: 'That event no longer exists.' });
+    if (ev.status === 'cancelled') return res.status(403).json({ error: 'This event was cancelled.' });
+    if (!ev.roomId) return res.status(400).json({ error: 'This event has no Clockwork room.' });
+
+    await admitToRoom(ev, req.userId);
+    // First account to present an unclaimed pass owns it from here.
+    if (!t.userId) { t.userId = req.userId; await t.save(); }
+
+    const convo = await Conversation.findById(ev.roomId).select('isStudio name').lean();
+    res.json({
+      success: true, roomId: ev.roomId,
+      isStudio: !!(convo && convo.isStudio),
+      name: (convo && convo.name) || ev.title
+    });
+  } catch (e) { console.error('ticket room:', e.message); res.status(500).json({ error: 'Could not open the room' }); }
 });
 
 /** Look up a session after checkout, so the success page can show the ticket. */
