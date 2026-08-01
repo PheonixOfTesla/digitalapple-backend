@@ -161,10 +161,16 @@ router.post('/stripe/onboard', verifyToken, async (req, res) => {
       user.stripeAccountId = acct.id;
       await user.save();
     }
+    // Come back where they left from. A host connecting a bank so they can
+    // publish tonight's event should land back on the event, not on a profile
+    // page they then have to navigate out of. Allowlisted, not free-form: this
+    // ends up in a Stripe redirect, and an open one is a phishing gift.
+    const RETURNS = { profile: '/profile.html', events: '/events', hub: '/host-portal.html' };
+    const back = RETURNS[String(req.body && req.body.from || '').trim()] || RETURNS.profile;
     const link = await stripe.accountLinks.create({
       account: user.stripeAccountId,
-      refresh_url: `${process.env.FRONTEND_URL}/profile.html?payouts=retry`,
-      return_url: `${process.env.FRONTEND_URL}/profile.html?payouts=done`,
+      refresh_url: `${process.env.FRONTEND_URL}${back}?payouts=retry`,
+      return_url: `${process.env.FRONTEND_URL}${back}?payouts=done`,
       type: 'account_onboarding'
     });
     res.json({ success: true, url: link.url });

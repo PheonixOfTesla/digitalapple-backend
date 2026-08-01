@@ -204,6 +204,21 @@ router.patch('/:id', verifyToken, async (req, res) => {
       if (parsed.error) return res.status(400).json({ error: parsed.error });
       ev.tiers = parsed.tiers;
     }
+    // Publishing a PAID event with no payout account is the one failure that
+    // succeeds silently: Stripe takes the money into the platform balance with
+    // no transfer_data, and the host's share sits with Clockwork with no
+    // automatic way out. Refusing here is recoverable in two minutes; a
+    // fortnight of sales that have to be reconciled by hand is not. Free
+    // events publish freely — there is nothing to pay out.
+    if (b.status === 'published' && ev.status !== 'published') {
+      const paid = (ev.tiers || []).some(t => t.priceCents > 0);
+      if (paid && !(await payoutDest(ev.hostId))) {
+        return res.status(409).json({
+          error: 'Connect a bank account before you sell tickets — otherwise the money has nowhere to land.',
+          needsPayout: true
+        });
+      }
+    }
     if (b.status && ['draft', 'published', 'cancelled'].includes(b.status)) ev.status = b.status;
     if (b.visibility && ['public', 'unlisted'].includes(b.visibility)) ev.visibility = b.visibility;
     ev.updatedAt = new Date();
@@ -275,7 +290,15 @@ router.get('/mine', verifyToken, async (req, res) => {
     const cut = Date.now() - 6 * 3600000;
     const upcoming = evs.filter(e => new Date(e.startsAt).getTime() >= cut).sort((a, b) => a.startsAt - b.startsAt);
     const past = evs.filter(e => new Date(e.startsAt).getTime() < cut);   // already newest-first
-    res.json({ success: true, events: upcoming.concat(past).map(e => publicEvent(e, { host: true })) });
+    // Whether they can be paid, returned with the list rather than left for
+    // them to discover when Publish refuses. Nobody should build an event,
+    // price it, and only then learn the money has nowhere to go.
+    const payoutReady = !!(await payoutDest(req.userId));
+    res.json({
+      success: true,
+      payoutReady,
+      events: upcoming.concat(past).map(e => publicEvent(e, { host: true }))
+    });
   } catch (e) { console.error('events mine:', e.message); res.status(500).json({ error: 'Could not load your events' }); }
 });
 
@@ -438,7 +461,37 @@ router.post('/:id/checkout', async (req, res) => {
       });
     }
 
+    // Checked again at the till, not just at publish. A Stripe account can be
+    // deactivated after an event goes on sale, and taking a stranger's money
+    // with no route to the host is worse than a stalled checkout — one is a
+    // refund queue, the other is a sale we can honour.
     const dest = await payoutDest(ev.hostId);
+    if (!dest) {
+      console.error('[event] BLOCKED paid checkout — host has no payout account:', String(ev.hostId), String(ev._id));
+      // Sales stopping silently is how a host finds out on the night. Tell
+      // them, once — the guard is on the ticket, not on the notification, so a
+      // duplicate row is cheaper than a missed one, but a bell that rings on
+      // every refresh is noise. One per hour is enough to be heard.
+      try {
+        const Notification = require('../models/Notification');
+        const since = new Date(Date.now() - 3600000);
+        const already = await Notification.exists({
+          userId: ev.hostId, type: 'event_payout_blocked',
+          link: `/events?e=${ev._id}`, createdAt: { $gte: since }
+        });
+        if (!already) {
+          await Notification.push({
+            userId: ev.hostId, channel: 'personal', type: 'event_payout_blocked',
+            text: `Ticket sales for "${ev.title}" are paused — connect a bank account so the money has somewhere to land.`,
+            link: `/events?e=${ev._id}`
+          });
+          require('../services/realtime').userEmit(String(ev.hostId), 'notify', {
+            type: 'event_payout_blocked', link: `/events?e=${ev._id}`
+          });
+        }
+      } catch (e) { console.error('[event] payout-block notify failed:', e.message); }
+      return res.status(409).json({ error: 'Ticket sales for this event are paused. The host has been notified.' });
+    }
     const fee = tickets.serviceFee(tier.priceCents);
     const total = tier.priceCents + fee;   // the fee is added on top, as quoted
 
