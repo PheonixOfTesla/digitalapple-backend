@@ -162,6 +162,7 @@ app.use('/api/v1/share', ShareController);
 app.use('/api/v1/tokens', TokenController);
 app.use('/api/v1/reels', ReelController);
 app.use('/api/v1/shop', require('./controllers/ShopController'));
+app.use('/api/v1/jobs', require('./controllers/JobsController'));
 app.use('/api/v1/drive', require('./controllers/DriveController'));
 // Ticketing. Mounted twice on purpose: /events for the host and browse
 // routes, and /api/v1 as well so the ticket recovery URL is a short
