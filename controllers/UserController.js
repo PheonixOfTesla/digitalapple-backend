@@ -152,6 +152,39 @@ router.put('/profile', verifyToken, async (req, res) => {
 // Onboarding is Stripe-hosted; we only hold the account id. Fees route to the
 // host automatically at checkout once their account can take transfers.
 
+/**
+ * Which Stripe we are talking to — and whether both halves agree.
+ *
+ * A publishable key is public by design: it ships in page source, which is why
+ * the pages carry one as a fallback. What is NOT visible from outside is
+ * whether it matches the secret key's mode. A live pk in front of a test sk
+ * mints a test Account Session and then boots Stripe.js in live mode, and the
+ * failure surfaces as a Stripe error that reads like anything but its cause.
+ *
+ * So: modes only, derived from key prefixes. The secret key itself never
+ * leaves this process — `secretMode` is the word "test" or "live", nothing more.
+ */
+function keyMode(k) {
+  const s = String(k || '');
+  if (!s) return null;
+  if (s.startsWith('pk_live_') || s.startsWith('sk_live_') || s.startsWith('rk_live_')) return 'live';
+  if (s.startsWith('pk_test_') || s.startsWith('sk_test_') || s.startsWith('rk_test_')) return 'test';
+  return 'unknown';
+}
+
+router.get('/stripe/config', (req, res) => {
+  const pk = process.env.STRIPE_PUBLISHABLE_KEY || null;
+  const pubMode = keyMode(pk), secretMode = keyMode(process.env.STRIPE_SECRET_KEY);
+  res.json({
+    success: true,
+    publishableKey: pk,                       // public by design
+    publishableKeySet: !!pk,
+    pubMode, secretMode,
+    // null on either side means we cannot tell, which is not the same as "fine".
+    match: pubMode && secretMode ? pubMode === secretMode : null
+  });
+});
+
 /** The Express account for this user, created on first need. */
 async function ensureExpressAccount(stripe, user) {
   if (user.stripeAccountId) return user.stripeAccountId;
