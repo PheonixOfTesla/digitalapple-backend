@@ -21,6 +21,7 @@ const { runIngest } = require('../services/jobs/ingest');
 const { rankArchetypes, rankPostings, scorePosting } = require('../services/jobs/match');
 const { readResume } = require('../services/jobs/resume');
 const { formatSalary } = require('../services/jobs/salary');
+const { offerOdds, observedCallbackRate, versusTarget } = require('../services/jobs/odds');
 const { atsTargets } = require('../services/jobs/companies');
 const { SOURCES } = require('../services/jobs/sources');
 
@@ -34,6 +35,21 @@ async function profileFor(userId) {
   let p = await JobProfile.findOne({ userId }).lean();
   if (!p) p = { userId, skillNames: [], seniority: 'mid', yearsExperience: null, prefs: { remoteOnly: true } };
   return p;
+}
+
+/**
+ * How many roles each employer has open. The odds model uses it as a proxy for
+ * how many people are applying — a company with a 300-role board is a company
+ * people have heard of.
+ */
+async function companySizes() {
+  const rows = await JobPosting.aggregate([
+    { $match: { closed: false } },
+    { $group: { _id: '$company', n: { $sum: 1 } } }
+  ]);
+  const m = new Map();
+  rows.forEach(r => m.set(r._id, r.n));
+  return m;
 }
 
 /** The corpus, as plain objects the matcher can scan. */
@@ -70,7 +86,15 @@ router.get('/overview', verifyToken, async (req, res) => {
         years: profile.yearsExperience, seniority: profile.seniority,
         skills: (profile.skillNames || []).length
       },
-      pipeline: { queued, applied, responded }
+      pipeline: { queued, applied, responded },
+      prefs: profile.prefs || {},
+      // Your real rate, once there is enough of one to mean anything. This is
+      // what recalibrates every probability shown.
+      callback: await (async () => {
+        const apps = await JobApplication.find({ userId: req.userId }).select('appliedAt status responses').lean();
+        const { observedRate, observedN } = observedCallbackRate(apps);
+        return { rate: observedRate, n: observedN };
+      })()
     });
   } catch (e) { console.error('jobs overview:', e.message); res.status(500).json({ error: 'Could not load overview' }); }
 });
@@ -110,6 +134,20 @@ router.get('/profile', verifyToken, async (req, res) => {
   res.json({ success: true, profile: rest });
 });
 
+router.patch('/prefs', verifyToken, async (req, res) => {
+  try {
+    const set = {};
+    const n = v => { const x = Math.round(Number(v)); return Number.isFinite(x) && x >= 0 && x <= 2000000 ? x : null; };
+    if ('targetBase' in req.body) set['prefs.targetBase'] = req.body.targetBase === null ? null : n(req.body.targetBase);
+    if ('minSalary' in req.body) set['prefs.minSalary'] = req.body.minSalary === null ? null : n(req.body.minSalary);
+    if ('remoteOnly' in req.body) set['prefs.remoteOnly'] = !!req.body.remoteOnly;
+    if (!Object.keys(set).length) return res.status(400).json({ error: 'Nothing to change' });
+    await JobProfile.updateOne({ userId: req.userId }, { $set: set }, { upsert: true });
+    const p = await profileFor(req.userId);
+    res.json({ success: true, prefs: p.prefs });
+  } catch (e) { console.error('jobs prefs:', e.message); res.status(500).json({ error: 'Could not save' }); }
+});
+
 // ── Matches ─────────────────────────────────────────────────────────────────
 
 /** The archetype table: soonest and highest paid, side by side. */
@@ -135,7 +173,39 @@ router.get('/matches', verifyToken, async (req, res) => {
     const archetype = req.query.archetype || null;
     const limit = Math.min(200, parseInt(req.query.limit, 10) || 60);
     const postings = await corpus();
-    const ranked = rankPostings(profile, postings, { archetype, remoteOnly, minScore: 0, limit });
+    let pool = postings;
+    // The floor is a filter, not a sort key: a job under it is not a worse
+    // option, it is not an option.
+    const floor = profile.prefs && profile.prefs.minSalary;
+    if (floor) pool = pool.filter(p => !p.salary || !p.salary.midAnnual || p.salary.midAnnual >= floor);
+    const ranked = rankPostings(profile, pool, { archetype, remoteOnly, minScore: 0, limit: limit * 2 });
+
+    // Odds need context the matcher does not have: how crowded this employer
+    // is, whether the resume parses, and your own real callback rate.
+    const [sizes, myApps] = await Promise.all([
+      companySizes(),
+      JobApplication.find({ userId: req.userId }).select('appliedAt status responses').lean()
+    ]);
+    const { observedRate, observedN } = observedCallbackRate(myApps);
+    const target = (profile.prefs && profile.prefs.targetBase) || null;
+    const atsScore = profile.ats ? profile.ats.score : null;
+
+    for (const r of ranked) {
+      r.odds = offerOdds(profile, r.job, r, {
+        companySize: sizes.get(r.job.company) || 0, atsScore, observedRate, observedN
+      });
+      r.target = versusTarget(r.job, target);
+    }
+    // Rank by what the application is WORTH: the chance of it landing, and
+    // whether the job clears your number. A 100% skill match on a role that
+    // pays under target and has been open six weeks is not the top of a list.
+    ranked.sort((a, b) => {
+      if (a.odds.blocked !== b.odds.blocked) return a.odds.blocked ? 1 : -1;
+      const at = a.target && a.target.known && !a.target.meetsAtTop ? 0.7 : 1;
+      const bt = b.target && b.target.known && !b.target.meetsAtTop ? 0.7 : 1;
+      return (b.odds.probability * bt) - (a.odds.probability * at);
+    });
+    ranked.length = Math.min(ranked.length, limit);
 
     // Which of these you have already dealt with — a queue that keeps showing
     // you jobs you applied to last week is a queue nobody opens twice.
@@ -155,6 +225,10 @@ router.get('/matches', verifyToken, async (req, res) => {
         salary: r.job.salary ? formatSalary(r.job.salary) : null,
         salaryMid: r.job.salary ? r.job.salary.midAnnual : null,
         score: r.score, matched: r.matched.slice(0, 10), missing: r.missing.slice(0, 8),
+        odds: { band: r.odds.band, probability: r.odds.probability, blocked: r.odds.blocked,
+                blockers: r.odds.blockers, confidence: r.odds.confidence,
+                summary: r.odds.summary, factors: r.odds.factors.slice(0, 6) },
+        target: r.target,
         status: byId.get(String(r.job._id)) || null
       }))
     });

@@ -37,6 +37,10 @@ const jobProfileSchema = new mongoose.Schema({
   // What you want. Used to filter the corpus before scoring.
   prefs: {
     remoteOnly: { type: Boolean, default: true },
+    // What you actually want to earn. Everything ranks against this — a job
+    // is not "good" in the abstract, it is above or below your number.
+    targetBase: { type: Number, default: null },
+    // The floor. Below this a posting is not shown at all.
     minSalary: { type: Number, default: null },
     titles: [String],
     excludeCompanies: [String]
