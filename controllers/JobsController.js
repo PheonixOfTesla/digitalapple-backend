@@ -88,6 +88,14 @@ router.get('/overview', verifyToken, async (req, res) => {
       },
       pipeline: { queued, applied, responded },
       prefs: profile.prefs || {},
+      // The channel every application goes out on, surfaced rather than
+      // assumed: it is the only way a reply can reach you.
+      contact: {
+        email: (profile.contact && (profile.contact.replyTo || profile.contact.email)) || profile.email || null,
+        resumeEmail: (profile.contact && profile.contact.email) || profile.email || null,
+        replyTo: (profile.contact && profile.contact.replyTo) || null,
+        phone: (profile.contact && profile.contact.phone) || profile.phone || null
+      },
       // Your real rate, once there is enough of one to mean anything. This is
       // what recalibrates every probability shown.
       callback: await (async () => {
@@ -121,7 +129,9 @@ router.post('/resume', verifyToken, upload.single('resume'), async (req, res) =>
         resumeKind: r.kind, resumeText: r.text.slice(0, 60000), resumeUploadedAt: new Date(),
         email: p.email, phone: p.phone, github: p.github, linkedin: p.linkedin, links: p.links,
         yearsExperience: p.yearsExperience, seniority: p.seniority, titles: p.titles,
-        skills: p.skills, skillNames: p.skillNames, ats: r.ats
+        skills: p.skills, skillNames: p.skillNames, ats: r.ats,
+        // The address on the resume is the one employers will actually use.
+        'contact.email': p.email, 'contact.phone': p.phone
       }
     }, { upsert: true });
     res.json({ success: true, parsed: p, ats: r.ats, kind: r.kind, pages: r.pages });
@@ -146,6 +156,33 @@ router.patch('/prefs', verifyToken, async (req, res) => {
     const p = await profileFor(req.userId);
     res.json({ success: true, prefs: p.prefs });
   } catch (e) { console.error('jobs prefs:', e.message); res.status(500).json({ error: 'Could not save' }); }
+});
+
+/**
+ * How employers reach you.
+ *
+ * Worth its own endpoint rather than being buried in prefs: an application is
+ * a promise that somebody can answer it, and a reply sent to an address you no
+ * longer read is indistinguishable from never hearing back.
+ */
+router.patch('/contact', verifyToken, async (req, res) => {
+  try {
+    const clean = (v, max) => v == null ? null : String(v).trim().slice(0, max) || null;
+    const email = clean(req.body.email, 200), replyTo = clean(req.body.replyTo, 200);
+    for (const [k, v] of [['email', email], ['replyTo', replyTo]]) {
+      if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) {
+        return res.status(400).json({ error: `That ${k === 'replyTo' ? 'reply-to' : 'email'} address does not look right.` });
+      }
+    }
+    const set = {};
+    if ('email' in req.body) set['contact.email'] = email;
+    if ('phone' in req.body) set['contact.phone'] = clean(req.body.phone, 40);
+    if ('replyTo' in req.body) set['contact.replyTo'] = replyTo;
+    if (!Object.keys(set).length) return res.status(400).json({ error: 'Nothing to change' });
+    await JobProfile.updateOne({ userId: req.userId }, { $set: set }, { upsert: true });
+    const p = await profileFor(req.userId);
+    res.json({ success: true, contact: p.contact || {} });
+  } catch (e) { console.error('jobs contact:', e.message); res.status(500).json({ error: 'Could not save' }); }
 });
 
 // ── Matches ─────────────────────────────────────────────────────────────────
@@ -256,6 +293,8 @@ router.post('/apply/:postingId', verifyToken, async (req, res) => {
           title: job.title, company: job.company, url: job.applyUrl || job.url,
           salaryMid: job.salary ? job.salary.midAnnual : null,
           matchScore: s.score, matched: s.matched.slice(0, 12), missing: s.missing.slice(0, 12),
+          ats: job.ats || null,
+          contactEmail: (profile.contact && (profile.contact.replyTo || profile.contact.email)) || profile.email || null,
           status, ...(status === 'applied' ? { appliedAt: new Date() } : {})
         }
       },
@@ -265,11 +304,81 @@ router.post('/apply/:postingId', verifyToken, async (req, res) => {
   } catch (e) { console.error('jobs apply:', e.message); res.status(500).json({ error: 'Could not record that' }); }
 });
 
+/**
+ * Queue every role in a lane.
+ *
+ * Deliberately NOT "mark them all applied". Nothing here submits a form yet,
+ * so recording fifty applications that were never sent would corrupt the one
+ * number that makes the odds honest — your real callback rate. These are
+ * queued, which is a true statement, and each becomes applied when it is.
+ *
+ * Blocked roles are skipped rather than queued: a job requiring a clearance
+ * you do not have should never reach the run list.
+ */
+router.post('/queue-lane', verifyToken, async (req, res) => {
+  try {
+    const profile = await profileFor(req.userId);
+    if (!profile.skillNames || !profile.skillNames.length) {
+      return res.status(400).json({ error: 'Upload a resume first — there is nothing to score against.' });
+    }
+    const archetype = req.body.archetype || null;
+    const remoteOnly = req.body.remoteOnly !== false;
+    const minOdds = Number(req.body.minOdds) || 0.02;
+    const cap = Math.min(100, parseInt(req.body.limit, 10) || 40);
+
+    let pool = await corpus();
+    const floor = profile.prefs && profile.prefs.minSalary;
+    if (floor) pool = pool.filter(p => !p.salary || !p.salary.midAnnual || p.salary.midAnnual >= floor);
+    const ranked = rankPostings(profile, pool, { archetype, remoteOnly, limit: 400 });
+
+    const [sizes, myApps] = await Promise.all([
+      companySizes(),
+      JobApplication.find({ userId: req.userId }).select('postingId appliedAt status responses').lean()
+    ]);
+    const { observedRate, observedN } = observedCallbackRate(myApps);
+    const already = new Set(myApps.map(a => String(a.postingId)));
+    const atsScore = profile.ats ? profile.ats.score : null;
+    const contactEmail = (profile.contact && (profile.contact.replyTo || profile.contact.email)) || profile.email || null;
+
+    const chosen = [];
+    let blocked = 0, seen = 0;
+    for (const r of ranked) {
+      if (already.has(String(r.job._id))) { seen++; continue; }
+      const o = offerOdds(profile, r.job, r, { companySize: sizes.get(r.job.company) || 0, atsScore, observedRate, observedN });
+      if (o.blocked) { blocked++; continue; }
+      if (o.probability < minOdds) continue;
+      chosen.push({ r, o });
+      if (chosen.length >= cap) break;
+    }
+
+    if (chosen.length) {
+      await JobApplication.insertMany(chosen.map(({ r, o }) => ({
+        userId: req.userId, postingId: r.job._id,
+        title: r.job.title, company: r.job.company, url: r.job.applyUrl || r.job.url,
+        salaryMid: r.job.salary ? r.job.salary.midAnnual : null,
+        ats: r.job.ats || null, contactEmail,
+        matchScore: r.score, matched: r.matched.slice(0, 12), missing: r.missing.slice(0, 12),
+        status: 'queued', preparedAt: new Date()
+      })), { ordered: false }).catch(e => {
+        // A duplicate key here means it was already queued, which is fine.
+        if (e.code !== 11000) throw e;
+      });
+    }
+
+    res.json({
+      success: true,
+      queued: chosen.length, skippedAlreadySeen: seen, skippedBlocked: blocked,
+      contactEmail,
+      note: 'Queued, not submitted. Each one still needs opening — marking them applied without sending would corrupt your callback rate, which is what makes the odds honest.'
+    });
+  } catch (e) { console.error('jobs queue-lane:', e.message); res.status(500).json({ error: 'Could not queue those' }); }
+});
+
 router.get('/applications', verifyToken, async (req, res) => {
   try {
     const q = { userId: req.userId };
     if (req.query.status) q.status = req.query.status;
-    else q.status = { $in: ['applied', 'responded', 'interview', 'offer', 'rejected'] };
+    else q.status = { $in: ['queued', 'applied', 'responded', 'interview', 'offer', 'rejected'] };
     const apps = await JobApplication.find(q).sort({ appliedAt: -1, updatedAt: -1 }).limit(300).lean();
     res.json({ success: true, applications: apps });
   } catch (e) { console.error('jobs applications:', e.message); res.status(500).json({ error: 'Could not load applications' }); }

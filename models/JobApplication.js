@@ -31,6 +31,13 @@ const jobApplicationSchema = new mongoose.Schema({
   appliedAt: { type: Date, default: null, index: true },
   respondedAt: { type: Date, default: null },
 
+  // The address this application went out on. Recorded per application, not
+  // read from the profile at display time: change your email in six months and
+  // the record of where a reply is waiting must not silently change with it.
+  contactEmail: { type: String, maxlength: 200, default: null },
+  // Which ATS holds it, so "where do I check on this" has an answer.
+  ats: { type: String, maxlength: 40, default: null },
+
   matchScore: { type: Number, default: null },
   // Why it scored that way, kept so a decision is inspectable later rather
   // than being a number you have to trust.

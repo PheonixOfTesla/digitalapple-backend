@@ -46,6 +46,20 @@ const jobProfileSchema = new mongoose.Schema({
     excludeCompanies: [String]
   },
 
+  /**
+   * How employers reach you.
+   *
+   * Seeded from the resume, because the address on the resume is the one they
+   * will actually use — but overridable, since the resume may carry an old one
+   * and a reply sent to a dead inbox is indistinguishable from silence.
+   */
+  contact: {
+    email: { type: String, maxlength: 200, default: null },
+    phone: { type: String, maxlength: 40, default: null },
+    // Where you want replies to land, if different from the resume's address.
+    replyTo: { type: String, maxlength: 200, default: null }
+  },
+
   // Reused answers for screening questions, so nothing is retyped.
   answers: [{ key: String, question: String, answer: String }]
 }, { timestamps: true });
