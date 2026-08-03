@@ -312,8 +312,15 @@ router.get('/archetypes', verifyToken, async (req, res) => {
     // The third ranking, and the one that actually decides: expected value is
     // hire probability times pay, which is the only way to compare a long shot
     // at a lot of money with a likely offer at less.
+    // Expected value ranks lanes, but a demotion with good EV is still a
+    // demotion — the same rule the soonest column already follows. Below-level
+    // lanes sort last rather than heading a column called Best bet.
     const bestBet = [...rows].filter(r => r.evMedian != null)
-      .sort((a, b) => b.evMedian - a.evMedian);
+      .sort((a, b) => {
+        const aDown = a.levelDelta < 0, bDown = b.levelDelta < 0;
+        if (aDown !== bDown) return aDown ? 1 : -1;
+        return b.evMedian - a.evMedian;
+      });
     // The question under all the others: will I get hired at all? Nobody
     // applies once, and 1 - (1-p)^N turns a demoralising per-application
     // number into something you can plan a month around.

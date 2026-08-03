@@ -88,7 +88,19 @@ const DATE_RANGE = new RegExp(
   '\\s*(?:-|–|—|to|until)\\s*' +
   '((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?\\s*)?(\\d{4}|present|current|now)\\b', 'gi');
 
-const SENIOR_WORDS = /\b(senior|sr\.?|staff|principal|lead|architect|head of|director|vp|founding)\b/i;
+/**
+ * Words that mean this person is not junior.
+ *
+ * "founder" was missing — the pattern had "founding" and nothing else — so a
+ * resume headed "Full-Stack Software Engineer (Founder)" parsed as MID. That
+ * one omission put a 0.6 penalty on every senior posting and 0.25 on every
+ * staff one, and pushed an eleven-year engineer's best lane down to Mid
+ * Frontend. Founding an engineering company is not a mid-level signal.
+ *
+ * Also widened past the first heading, because seniority is often stated in
+ * the summary rather than the job title.
+ */
+const SENIOR_WORDS = /\b(senior|sr\.?|staff|principal|lead|architect|head of|director|vp|founder|founding|co-?founder|owner|cto|chief)\b/i;
 
 /**
  * Years of experience, from the dates on the page.
@@ -169,7 +181,11 @@ function parseResume(text) {
     careerSpans: spans,
     // Claimed seniority is what the page says; the matcher weighs it against
     // years, because "Senior" after eighteen months means something different.
-    seniority: SENIOR_WORDS.test(text.slice(0, 1200)) ? 'senior' : 'mid',
+    // Years carry the read when the words do not: nobody with a decade of
+    // shipped work is mid, whatever their resume calls them.
+    seniority: (SENIOR_WORDS.test(text.slice(0, 2000)) || (years != null && years >= 8)) ? 'senior'
+             : (years != null && years >= 4) ? 'mid'
+             : SENIOR_WORDS.test(text) ? 'senior' : 'mid',
     titles,
     skills,
     skillNames: skills.map(s => s.skill),
