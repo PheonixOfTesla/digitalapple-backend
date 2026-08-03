@@ -52,9 +52,14 @@ const jobApplicationSchema = new mongoose.Schema({
   // a rejection dressed as a thank-you is still a rejection.
   responses: [{
     at: { type: Date, default: Date.now },
-    kind: { type: String, enum: ['rejection', 'interview', 'offer', 'other'], default: 'other' },
+    kind: { type: String, enum: ['rejection', 'interview', 'offer', 'other', 'acknowledgement'], default: 'other' },
     subject: { type: String, maxlength: 300 },
-    excerpt: { type: String, maxlength: 2000 }
+    excerpt: { type: String, maxlength: 2000 },
+    from: { type: String, maxlength: 300 },
+    // Gmail's message id, so a rescan cannot record the same reply twice.
+    messageId: { type: String, maxlength: 120, index: true },
+    source: { type: String, enum: ['manual', 'gmail'], default: 'manual' },
+    confidence: { type: Number, default: null }
   }]
 }, { timestamps: true });
 

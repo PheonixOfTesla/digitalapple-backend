@@ -25,6 +25,8 @@ const { offerOdds, hireOdds, campaignOdds, applicationsFor, observedCallbackRate
 const { atsTargets } = require('../services/jobs/companies');
 const { SOURCES } = require('../services/jobs/sources');
 const { autofillScript, bookmarklet } = require('../services/jobs/autofill');
+const gmail = require('../services/jobs/gmail');
+const { encryptText } = require('../services/crypto');
 const jwt = require('jsonwebtoken');
 
 const router = express.Router();
@@ -286,6 +288,127 @@ router.get('/autofill/resume', async (req, res) => {
   res.type(p.resumeMime || 'application/pdf');
   res.set('Content-Disposition', 'inline; filename="' + String(p.resumeFilename || 'resume.pdf').replace(/[^\w.\-]/g, '_') + '"');
   res.send(Buffer.from(p.resumeFile.buffer || p.resumeFile));
+});
+
+// ── Gmail: replies, detected rather than remembered ─────────────────────────
+/**
+ * The whole point of reading the inbox is that the callback rate stops being a
+ * measure of how diligently you update a dropdown. Scope is gmail.readonly —
+ * this can read and nothing else. It never sends, labels or deletes.
+ */
+router.get('/gmail/status', verifyToken, async (req, res) => {
+  const p = await profileFor(req.userId);
+  const g = p.gmail || {};
+  res.json({
+    success: true,
+    configured: gmail.configured(),
+    connected: !!g.refreshToken && !g.revoked,
+    revoked: !!g.revoked,
+    email: g.email || null,
+    lastScanAt: g.lastScanAt || null,
+    lastScanFound: g.lastScanFound || 0,
+    scope: 'read-only'
+  });
+});
+
+router.get('/gmail/connect', verifyToken, (req, res) => {
+  if (!gmail.configured()) return res.status(503).json({ error: 'Google OAuth is not configured on the server.' });
+  // The state carries the user, signed and short-lived — the callback arrives
+  // from Google with no session of its own.
+  const state = jwt.sign({ id: String(req.userId), purpose: 'jobs-gmail' }, process.env.JWT_SECRET, { expiresIn: '15m' });
+  res.json({ success: true, url: gmail.consentUrl(state) });
+});
+
+router.get('/gmail/callback', async (req, res) => {
+  const site = (process.env.FRONTEND_URL || 'https://www.theclockworkhub.com').replace(/\/+$/, '');
+  try {
+    const d = jwt.verify(String(req.query.state || ''), process.env.JWT_SECRET);
+    if (!d || d.purpose !== 'jobs-gmail') throw new Error('bad state');
+    if (req.query.error) throw new Error(String(req.query.error));
+    const tok = await gmail.exchangeCode(String(req.query.code || ''));
+
+    let email = null;
+    try {
+      const pr = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + tok.access_token } });
+      if (pr.ok) email = (await pr.json()).email || null;
+    } catch (e) { /* the address is a nicety, not a requirement */ }
+
+    await JobProfile.updateOne({ userId: d.id }, {
+      $set: {
+        'gmail.refreshToken': encryptText(tok.refresh_token),
+        'gmail.email': email, 'gmail.connectedAt': new Date(), 'gmail.revoked': false
+      }
+    }, { upsert: true });
+    res.redirect(site + '/admin.html?jobs=gmail-connected');
+  } catch (e) {
+    console.error('jobs gmail callback:', e.message);
+    res.redirect(site + '/admin.html?jobs=gmail-failed');
+  }
+});
+
+router.delete('/gmail', verifyToken, async (req, res) => {
+  await JobProfile.updateOne({ userId: req.userId }, {
+    $set: { 'gmail.refreshToken': null, 'gmail.email': null, 'gmail.connectedAt': null, 'gmail.revoked': false }
+  });
+  res.json({ success: true });
+});
+
+// One scan at a time per process: Gmail rate-limits, and two concurrent scans
+// would race to write the same statuses.
+let scanning = false;
+router.post('/gmail/scan', verifyToken, async (req, res) => {
+  if (scanning) return res.status(409).json({ error: 'A scan is already running' });
+  scanning = true;
+  try {
+    const p = await profileFor(req.userId);
+    if (!p.gmail || !p.gmail.refreshToken) return res.status(400).json({ error: 'Gmail is not connected.' });
+
+    let token;
+    try { token = await gmail.accessToken(p.gmail.refreshToken); }
+    catch (e) {
+      if (e.revoked) await JobProfile.updateOne({ userId: req.userId }, { $set: { 'gmail.revoked': true } });
+      return res.status(e.revoked ? 401 : 502).json({ error: e.message, revoked: !!e.revoked });
+    }
+
+    // Only applications actually sent, and only those not already resolved —
+    // there is nothing to learn from re-reading a rejection.
+    const apps = await JobApplication.find({
+      userId: req.userId, appliedAt: { $ne: null },
+      status: { $in: ['applied', 'responded', 'interview'] }
+    }).sort({ appliedAt: -1 }).limit(120).lean();
+
+    let found = 0, updated = 0;
+    const seen = [];
+    for (const a of apps) {
+      let replies = [];
+      try { replies = await gmail.repliesFor(token, a); } catch (e) { continue; }
+      const known = new Set((a.responses || []).map(r => r.messageId).filter(Boolean));
+      for (const r of replies) {
+        if (known.has(r.id)) continue;
+        found++;
+        const push = {
+          at: r.at, kind: r.kind, subject: r.subject, excerpt: r.excerpt,
+          from: r.from, messageId: r.id, source: 'gmail', confidence: r.confidence
+        };
+        const set = { respondedAt: r.at };
+        // An acknowledgement is not a callback and must not move the status:
+        // counting "thank you for applying" as a reply would inflate the one
+        // rate every probability on the console is calibrated against.
+        if (r.status) set.status = r.status;
+        await JobApplication.updateOne({ _id: a._id, userId: req.userId },
+          { $push: { responses: push }, $set: set });
+        if (r.status) updated++;
+        seen.push({ company: a.company, title: a.title, kind: r.kind, subject: r.subject });
+      }
+    }
+
+    await JobProfile.updateOne({ userId: req.userId },
+      { $set: { 'gmail.lastScanAt': new Date(), 'gmail.lastScanFound': found } });
+    res.json({ success: true, scanned: apps.length, found, updated, replies: seen.slice(0, 25) });
+  } catch (e) {
+    console.error('jobs gmail scan:', e.message);
+    res.status(500).json({ error: 'Scan failed', reason: String(e.message).slice(0, 200) });
+  } finally { scanning = false; }
 });
 
 // ── Matches ─────────────────────────────────────────────────────────────────

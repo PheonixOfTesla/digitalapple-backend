@@ -71,6 +71,21 @@ const jobProfileSchema = new mongoose.Schema({
     replyTo: { type: String, maxlength: 200, default: null }
   },
 
+  /**
+   * Gmail, read-only, so replies are detected rather than remembered.
+   *
+   * The refresh token is encrypted at rest with the same service that protects
+   * message bodies. Scope is gmail.readonly — this can read and nothing else.
+   */
+  gmail: {
+    refreshToken: { type: String, default: null },   // encrypted
+    email: { type: String, maxlength: 200, default: null },
+    connectedAt: { type: Date, default: null },
+    lastScanAt: { type: Date, default: null },
+    lastScanFound: { type: Number, default: 0 },
+    revoked: { type: Boolean, default: false }
+  },
+
   // Reused answers for screening questions, so nothing is retyped.
   answers: [{ key: String, question: String, answer: String }]
 }, { timestamps: true });
