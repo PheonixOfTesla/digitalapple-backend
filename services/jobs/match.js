@@ -96,6 +96,9 @@ function rankArchetypes(profile, postings, { minPostings = 5 } = {}) {
     groups.get(p.archetype).push(p);
   }
 
+  const LEVEL_OF = { junior: 0, mid: 1, senior: 2, staff: 3 };
+  const myLevel = LEVEL_OF[profile.seniority] ?? 1;
+
   const rows = [];
   for (const [archetype, jobs] of groups) {
     // A handful of postings is not a job market, it is noise with a name.
@@ -122,8 +125,19 @@ function rankArchetypes(profile, postings, { minPostings = 5 } = {}) {
       .sort((a, b) => (b.share * b.weight) - (a.share * a.weight))
       .slice(0, 6);
 
+    // Where this lane sits relative to YOU. Without this the "soonest" column
+    // is a ranking of the easiest jobs in the corpus and nothing else: a lower
+    // bar always produces a higher match, so an eleven-year engineer was being
+    // shown Mid Frontend at the top and reading it as a recommendation.
+    const laneLevel = LEVEL_OF[(jobs[0] && jobs[0].seniority) || 'mid'] ?? 1;
+    const levelDelta = laneLevel - myLevel;
+
     rows.push({
       archetype,
+      level: (jobs[0] && jobs[0].seniority) || 'mid',
+      levelDelta,
+      levelNote: levelDelta < 0 ? 'below your level' : levelDelta === 0 ? 'at your level'
+               : levelDelta === 1 ? 'one step up' : 'two steps up',
       postings: jobs.length,
       remote: jobs.filter(j => j.remote).length,
       withSalary: pays.length,
@@ -140,8 +154,15 @@ function rankArchetypes(profile, postings, { minPostings = 5 } = {}) {
     });
   }
 
-  const soonest = [...rows].sort((a, b) =>
-    (b.soonestScore - a.soonestScore) || (b.strongMatches - a.strongMatches));
+  // "Soonest" now means soonest WORTH TAKING. A lane below your level is not
+  // an opportunity, it is a demotion that happens to score well, so it sorts
+  // last rather than first. Still listed — a genuine fallback exists — but it
+  // can no longer masquerade as the recommendation.
+  const soonest = [...rows].sort((a, b) => {
+    const aDown = a.levelDelta < 0, bDown = b.levelDelta < 0;
+    if (aDown !== bDown) return aDown ? 1 : -1;
+    return (b.soonestScore - a.soonestScore) || (b.strongMatches - a.strongMatches);
+  });
   const highest = [...rows]
     .filter(r => r.payRankable)
     .sort((a, b) => (b.payMedian || 0) - (a.payMedian || 0));
