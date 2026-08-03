@@ -24,16 +24,26 @@ const { formatSalary } = require('../services/jobs/salary');
 const { offerOdds, observedCallbackRate, versusTarget } = require('../services/jobs/odds');
 const { atsTargets } = require('../services/jobs/companies');
 const { SOURCES } = require('../services/jobs/sources');
+const { autofillScript, bookmarklet } = require('../services/jobs/autofill');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 
-// Resumes are parsed in memory and the text stored; the binary is never kept.
 // 8MB is far above any real resume and well below anything that would hurt.
+// The binary IS kept: a form's file input cannot be satisfied with parsed text.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
 
 async function profileFor(userId) {
   let p = await JobProfile.findOne({ userId }).lean();
   if (!p) p = { userId, skillNames: [], seniority: 'mid', yearsExperience: null, prefs: { remoteOnly: true } };
+  // Forms ask for a name and the resume parser does not reliably find one —
+  // the biggest text on the page is a name to a human and a heading to a
+  // regex. The account has it already.
+  if (!p.firstName) {
+    const User = require('../models/User');
+    const u = await User.findById(userId).select('firstName lastName email').lean();
+    if (u) { p.firstName = u.firstName; p.lastName = u.lastName; p.email = p.email || u.email; }
+  }
   return p;
 }
 
@@ -127,6 +137,7 @@ router.post('/resume', verifyToken, upload.single('resume'), async (req, res) =>
       $set: {
         resumeFilename: String(req.file.originalname || '').slice(0, 200),
         resumeKind: r.kind, resumeText: r.text.slice(0, 60000), resumeUploadedAt: new Date(),
+        resumeFile: req.file.buffer, resumeMime: req.file.mimetype || null,
         email: p.email, phone: p.phone, github: p.github, linkedin: p.linkedin, links: p.links,
         yearsExperience: p.yearsExperience, seniority: p.seniority, titles: p.titles,
         skills: p.skills, skillNames: p.skillNames, ats: r.ats,
@@ -183,6 +194,98 @@ router.patch('/contact', verifyToken, async (req, res) => {
     const p = await profileFor(req.userId);
     res.json({ success: true, contact: p.contact || {} });
   } catch (e) { console.error('jobs contact:', e.message); res.status(500).json({ error: 'Could not save' }); }
+});
+
+// ── Autofill ────────────────────────────────────────────────────────────────
+/**
+ * Applications are submitted from YOUR browser, not from a server.
+ *
+ * Every ATS that matters gates its form — Greenhouse with an invisible
+ * reCAPTCHA, Lever with hCaptcha holding the submit button hostage, Ashby with
+ * reCAPTCHA behind a React form. Read from their live pages, not assumed. A
+ * headless submitter scores badly on the invisible check and gets dropped
+ * silently, which is the worst outcome available: the application never
+ * arrives, you believe it did, and the callback rate that calibrates every
+ * probability on the console fills with ghosts.
+ *
+ * So the fill happens where the checks pass on their own — in your session,
+ * where you are a real person with real history — and you press Submit.
+ *
+ * These three routes are token-authenticated rather than header-authenticated
+ * because they are called from greenhouse.io, not from our own page.
+ */
+const AUTOFILL_PURPOSE = 'jobs-autofill';
+
+function autofillToken(userId) {
+  return jwt.sign({ id: String(userId), purpose: AUTOFILL_PURPOSE }, process.env.JWT_SECRET, { expiresIn: '90d' });
+}
+function readAutofillToken(raw) {
+  try {
+    const d = jwt.verify(String(raw || ''), process.env.JWT_SECRET);
+    // A general session token must NOT work here: this one is handed to a
+    // third-party page, so it is scoped to exactly this job and nothing else.
+    return d && d.purpose === AUTOFILL_PURPOSE ? d.id : null;
+  } catch (e) { return null; }
+}
+
+// Called cross-origin from the ATS page.
+function allowAtsOrigin(req, res) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Headers', 'X-CW-Token, Content-Type');
+}
+
+router.get('/autofill/setup', verifyToken, async (req, res) => {
+  const p = await profileFor(req.userId);
+  const token = autofillToken(req.userId);
+  const base = (process.env.PUBLIC_API_URL || 'https://digitalapple-backend-production.up.railway.app').replace(/\/+$/, '');
+  res.json({
+    success: true,
+    bookmarklet: bookmarklet(base, token),
+    ready: !!p.resumeFile,
+    // Named plainly, because a half-configured autofill that silently skips
+    // the resume is worse than one that refuses.
+    missing: [!p.resumeFile ? 'resume file (re-upload it — older uploads stored only the text)' : null,
+              !(p.contact && (p.contact.replyTo || p.contact.email)) && !p.email ? 'email address' : null].filter(Boolean)
+  });
+});
+
+router.options('/autofill.js', (req, res) => { allowAtsOrigin(res.req, res); res.sendStatus(204); });
+router.get('/autofill.js', async (req, res) => {
+  const userId = readAutofillToken(req.query.t);
+  allowAtsOrigin(req, res);
+  res.type('application/javascript');
+  if (!userId) return res.send('alert("Clockwork: this autofill link has expired — regenerate it in the Jobs tab.");');
+
+  const p = await profileFor(userId);
+  const base = (process.env.PUBLIC_API_URL || 'https://digitalapple-backend-production.up.railway.app').replace(/\/+$/, '');
+  const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
+  const titleName = (p.titles && p.titles[0]) || '';
+  const cfg = {
+    firstName: p.firstName || null, lastName: p.lastName || null,
+    fullName: name || null,
+    email: (p.contact && (p.contact.replyTo || p.contact.email)) || p.email || null,
+    phone: (p.contact && p.contact.phone) || p.phone || null,
+    location: (p.prefs && p.prefs.location) || null,
+    org: null,
+    linkedin: p.linkedin || null, github: p.github || null,
+    website: (p.links || []).find(l => !/linkedin|github/i.test(l)) || null,
+    resumeUrl: p.resumeFile ? `${base}/api/v1/jobs/autofill/resume` : null,
+    resumeName: p.resumeFilename || 'resume.pdf',
+    token: String(req.query.t || '')
+  };
+  res.send('window.__CW_JOBS__=' + JSON.stringify(cfg) + ';\n' + autofillScript());
+});
+
+router.options('/autofill/resume', (req, res) => { allowAtsOrigin(res.req, res); res.sendStatus(204); });
+router.get('/autofill/resume', async (req, res) => {
+  allowAtsOrigin(req, res);
+  const userId = readAutofillToken(req.get('X-CW-Token') || req.query.t);
+  if (!userId) return res.status(401).json({ error: 'expired' });
+  const p = await JobProfile.findOne({ userId }).select('resumeFile resumeMime resumeFilename').lean();
+  if (!p || !p.resumeFile) return res.status(404).json({ error: 'no resume stored' });
+  res.type(p.resumeMime || 'application/pdf');
+  res.set('Content-Disposition', 'inline; filename="' + String(p.resumeFilename || 'resume.pdf').replace(/[^\w.\-]/g, '_') + '"');
+  res.send(Buffer.from(p.resumeFile.buffer || p.resumeFile));
 });
 
 // ── Matches ─────────────────────────────────────────────────────────────────
@@ -323,7 +426,10 @@ router.post('/queue-lane', verifyToken, async (req, res) => {
     }
     const archetype = req.body.archetype || null;
     const remoteOnly = req.body.remoteOnly !== false;
-    const minOdds = Number(req.body.minOdds) || 0.02;
+    // Default to queueing EVERYTHING that is not outright blocked. A silent
+    // odds floor made "Apply to all 42" queue nothing and say so in six words
+    // at the bottom of the page, which reads exactly like a dead button.
+    const minOdds = req.body.minOdds == null ? 0 : Number(req.body.minOdds);
     const cap = Math.min(100, parseInt(req.body.limit, 10) || 40);
 
     let pool = await corpus();
@@ -341,12 +447,12 @@ router.post('/queue-lane', verifyToken, async (req, res) => {
     const contactEmail = (profile.contact && (profile.contact.replyTo || profile.contact.email)) || profile.email || null;
 
     const chosen = [];
-    let blocked = 0, seen = 0;
+    let blocked = 0, seen = 0, belowOdds = 0;
     for (const r of ranked) {
       if (already.has(String(r.job._id))) { seen++; continue; }
       const o = offerOdds(profile, r.job, r, { companySize: sizes.get(r.job.company) || 0, atsScore, observedRate, observedN });
       if (o.blocked) { blocked++; continue; }
-      if (o.probability < minOdds) continue;
+      if (o.probability < minOdds) { belowOdds++; continue; }
       chosen.push({ r, o });
       if (chosen.length >= cap) break;
     }
@@ -365,9 +471,26 @@ router.post('/queue-lane', verifyToken, async (req, res) => {
       });
     }
 
+    // Zero is an answer that has to explain itself. "0 queued" alone is
+    // indistinguishable from a button that does nothing, which is how this
+    // got reported as broken.
+    let reason = null;
+    if (!chosen.length) {
+      if (!ranked.length) reason = archetype
+        ? `No postings in ${archetype} match your filters. Try turning off Remote only, or clear the salary floor.`
+        : 'Nothing matched your filters. Try turning off Remote only, or clear the salary floor.';
+      else if (seen && !blocked && !belowOdds) reason = `All ${seen} are already in your list — check the Applied tab.`;
+      else if (blocked && blocked >= ranked.length - seen) reason = `All ${blocked} have a hard requirement you do not meet (clearance, PhD, fully onsite).`;
+      else if (belowOdds) reason = `${belowOdds} fell below the odds threshold you set.`;
+      else reason = 'Nothing new to queue.';
+    }
+
     res.json({
       success: true,
-      queued: chosen.length, skippedAlreadySeen: seen, skippedBlocked: blocked,
+      queued: chosen.length,
+      considered: ranked.length,
+      skippedAlreadySeen: seen, skippedBlocked: blocked, skippedBelowOdds: belowOdds,
+      reason,
       contactEmail,
       note: 'Queued, not submitted. Each one still needs opening — marking them applied without sending would corrupt your callback rate, which is what makes the odds honest.'
     });

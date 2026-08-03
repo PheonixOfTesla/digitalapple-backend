@@ -14,6 +14,17 @@ const jobProfileSchema = new mongoose.Schema({
   resumeKind: { type: String, enum: ['pdf', 'docx'], default: null },
   resumeText: { type: String, maxlength: 60000 },
   resumeUploadedAt: { type: Date, default: null },
+  /**
+   * The file itself, not just its text.
+   *
+   * Every application form has a file input, and no employer accepts a string.
+   * Keeping only the parsed text made scoring possible and submitting
+   * impossible — the binary has to survive the upload. One resume is a few
+   * hundred KB against Mongo's 16MB document limit, so it lives here rather
+   * than adding a storage dependency for a single file per person.
+   */
+  resumeFile: { type: Buffer, default: null },
+  resumeMime: { type: String, maxlength: 120, default: null },
 
   // Parsed structure — regenerated from resumeText whenever the parser improves,
   // which is why the raw text is worth its storage.
