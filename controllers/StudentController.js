@@ -1,12 +1,12 @@
 /**
- * StudentController — server-side half of the DPT study engine.
+ * StudentController — server-side half of the study engine (DPT and GRE).
  *
  * The study app is local-first: the deck, the scheduling state and the review
  * history all live in the browser's IndexedDB and never come here. Only two
  * jobs genuinely require a server, and both are here for the same reason —
  * they need something the browser cannot safely or practically hold.
  *
- *   POST /api/v1/student/generate      the Anthropic API key
+ *   POST /api/v1/student/generate      the LLM key (via services/aiClient)
  *   POST /api/v1/student/import/apkg   a zip reader and a SQLite reader
  *
  * Single-user tool, so no accounts. Access is gated on the admin JWT because
@@ -17,7 +17,7 @@
 const express = require('express');
 const multer = require('multer');
 const zlib = require('zlib');
-const { generateCards } = require('../services/studyGenerator');
+const { generateCards, TRACKS, provider, model } = require('../services/studyGenerator');
 const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -64,21 +64,28 @@ function generationLimit(req, res, next) {
 
 router.post('/generate', verifyToken, requireOwner, generationLimit, async (req, res) => {
   try {
-    const { text, course, domain, topic, count, source } = req.body || {};
+    const { text, course, domain, topic, count, source, track = 'dpt' } = req.body || {};
 
+    if (!TRACKS[track]) return res.status(400).json({ error: `unknown track '${track}'` });
     if (!text) return res.status(400).json({ error: 'text is required' });
-    if (!course) return res.status(400).json({ error: 'course is required — dual-axis tagging' });
-    if (!domain) return res.status(400).json({ error: 'domain is required — dual-axis tagging' });
+    // The DPT track uses dual-axis tagging (course x domain); GRE has no course
+    // axis, so only the domain is required there.
+    if (track === 'dpt' && !course) {
+      return res.status(400).json({ error: 'course is required — dual-axis tagging' });
+    }
+    if (!domain) return res.status(400).json({ error: 'domain is required' });
 
-    const result = await generateCards({ text, course, domain, topic, count, source });
+    const result = await generateCards({ text, course, domain, topic, count, source, track });
 
     console.log(`[study] generated ${result.cards.length} cards ` +
-      `(${result.warnings.length} dropped) domain=${domain} course=${course} model=${result.model}`);
+      `(${result.warnings.length} dropped) track=${track} domain=${domain} ` +
+      `provider=${result.provider} model=${result.model}`);
 
     res.json({
       cards: result.cards,
       warnings: result.warnings,
       model: result.model,
+      provider: result.provider,
       usage: result.usage,
       // Stated in the response so a client that ignores it is still wrong about
       // nothing — the cards themselves all carry verified:false.
@@ -354,8 +361,11 @@ function decodeRecord(rec) {
 router.get('/health', (req, res) => {
   res.json({
     ok: true,
-    generation: Boolean(process.env.ANTHROPIC_API_KEY),
-    model: process.env.STUDY_MODEL || 'claude-opus-5',
+    // Generation rides the app's existing LLM client, so it is configured
+    // wherever the rest of the app's AI features already are.
+    provider,
+    model,
+    tracks: Object.keys(TRACKS),
     note: 'The deck itself is local-first and never reaches this server.',
   });
 });
