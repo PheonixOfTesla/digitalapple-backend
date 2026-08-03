@@ -201,4 +201,112 @@ function versusTarget(job, targetBase) {
   };
 }
 
-module.exports = { offerOdds, observedCallbackRate, versusTarget, hardBlockers, freshnessFactor, BASE_RATE, MAX_COLD };
+
+/**
+ * Hire probability — the gauge, as opposed to the callback rate.
+ *
+ * These are different numbers and conflating them flatters you badly. A
+ * callback is the odds somebody replies. Getting hired means surviving a
+ * screen, an onsite loop and a hiring committee, and most people are
+ * eliminated AFTER the callback, not before it.
+ *
+ *   P(hire) = P(callback) x P(offer | callback)
+ *
+ * The second factor sits around 12-15% for a typical candidate at a typical
+ * company: a callback converts to a screen maybe 40% of the time, a screen to
+ * an onsite loop, and a loop to an offer around 30%. Multiply it through and a
+ * single cold application is a low-single-digit shot even when everything is
+ * right. That is not pessimism, it is the arithmetic of funnels, and a tool
+ * that shows 84% next to a job is lying about it.
+ *
+ * The point of the number is not to be discouraging. It is that P(hire) x
+ * comp is the only figure that ranks two different jobs against each other —
+ * a 2% shot at $300k is worth more than a 6% shot at $150k, and no match
+ * percentage will ever tell you that.
+ */
+
+/** How a callback converts to an offer, given the shape of the fit. */
+function conversionFactor(profile, job, fit) {
+  let c = 0.14;                       // baseline offer-given-callback
+  const notes = [];
+
+  // Interviews test depth, and depth is where a thin skill match shows.
+  if (fit.skillFit >= 0.85) { c *= 1.5; notes.push('deep skill overlap holds up in a technical loop'); }
+  else if (fit.skillFit >= 0.7) { c *= 1.15; }
+  else if (fit.skillFit < 0.5) { c *= 0.55; notes.push('thin overlap tends to surface in the technical rounds'); }
+
+  // Being under-levelled costs far more at the loop than at the screen: the
+  // bar is the level, not the resume.
+  if (fit.levelFit < 1) { c *= fit.levelFit; notes.push('interviewing above your current level raises the bar you are measured against'); }
+  if (fit.yearsFit < 0.7) { c *= 0.75; }
+
+  // Longer loops, more committees, more ways to fall out.
+  if (job.seniority === 'staff') { c *= 0.75; notes.push('staff loops are longer and add a committee'); }
+  if (job.seniority === 'junior') { c *= 1.2; }
+
+  // A company that publishes its range has usually decided what it is buying,
+  // which converts better than one still working it out.
+  if (job.salary && job.salary.midAnnual) { c *= 1.1; notes.push('published pay range — a decided role converts better'); }
+
+  return { conversion: Math.max(0.02, Math.min(0.45, c)), notes };
+}
+
+/**
+ * The gauge: odds this application ends in an offer, and what it is worth.
+ *
+ * `expectedValue` is P(hire) x the pay midpoint. It is the number that makes
+ * two unlike jobs comparable, and the reason both ranking columns exist at
+ * all can finally collapse into one.
+ */
+function hireOdds(profile, job, fit, context = {}) {
+  const cb = offerOdds(profile, job, fit, context);
+  if (cb.blocked) {
+    return { ...cb, callback: 0, hire: 0, hireBand: '0%', conversion: 0,
+             expectedValue: 0, funnel: [], gauge: 'blocked' };
+  }
+
+  const { conversion, notes } = conversionFactor(profile, job, fit);
+  const hire = cb.probability * conversion;
+  const pay = (job.salary && job.salary.midAnnual) || null;
+
+  const pct = n => (n * 100 < 1 ? (n * 100).toFixed(1) : (n * 100).toFixed(n * 100 < 10 ? 1 : 0));
+  const lo = hire * 0.55, hi = hire * 1.7;
+
+  return {
+    ...cb,
+    callback: cb.probability,
+    conversion,
+    hire,
+    hireBand: `${pct(lo)}–${pct(hi)}%`,
+    // Shown as a funnel because one number hides where you actually lose.
+    funnel: [
+      { stage: 'They reply', p: cb.probability },
+      { stage: 'You get an offer', p: hire }
+    ],
+    expectedValue: pay ? Math.round(hire * pay) : null,
+    // The most usable form of the gauge. "3.4%" is abstract; "about 30
+    // applications for one offer" is a plan you can hold a week against.
+    appsPerOffer: hire > 0 ? Math.ceil(1 / hire) : null,
+    conversionNotes: notes,
+    gauge: hire >= 0.02 ? 'strong' : hire >= 0.008 ? 'fair' : 'long',
+    hireSummary: hire >= 0.02
+      ? 'A genuinely good shot for a cold application.'
+      : hire >= 0.008
+        ? 'Normal odds — this is what a real pipeline is made of.'
+        : 'Long. Worth it only if you want this one specifically.'
+  };
+}
+
+/**
+ * Your real offer rate, once there is one — the same idea as the callback
+ * calibration, one stage further down the funnel.
+ */
+function observedOfferRate(applications, { minAgeDays = 45 } = {}) {
+  const cutoff = Date.now() - minAgeDays * 864e5;
+  const settled = applications.filter(a => a.appliedAt && new Date(a.appliedAt).getTime() <= cutoff);
+  if (settled.length < 10) return { offerRate: null, offerN: settled.length };
+  const offers = settled.filter(a => a.status === 'offer').length;
+  return { offerRate: offers / settled.length, offerN: settled.length };
+}
+
+module.exports = { offerOdds, hireOdds, conversionFactor, observedOfferRate, observedCallbackRate, versusTarget, hardBlockers, freshnessFactor, BASE_RATE, MAX_COLD };

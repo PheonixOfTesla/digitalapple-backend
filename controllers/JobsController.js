@@ -21,7 +21,7 @@ const { runIngest } = require('../services/jobs/ingest');
 const { rankArchetypes, rankPostings, scorePosting } = require('../services/jobs/match');
 const { readResume } = require('../services/jobs/resume');
 const { formatSalary } = require('../services/jobs/salary');
-const { offerOdds, observedCallbackRate, versusTarget } = require('../services/jobs/odds');
+const { offerOdds, hireOdds, observedCallbackRate, versusTarget } = require('../services/jobs/odds');
 const { atsTargets } = require('../services/jobs/companies');
 const { SOURCES } = require('../services/jobs/sources');
 const { autofillScript, bookmarklet } = require('../services/jobs/autofill');
@@ -298,8 +298,23 @@ router.get('/archetypes', verifyToken, async (req, res) => {
       return res.json({ success: true, needsResume: true, soonest: [], highest: [] });
     }
     const postings = await corpus();
-    const { soonest, highest } = rankArchetypes(profile, postings);
-    res.json({ success: true, needsResume: false, soonest, highest, analysed: postings.length });
+    const [sizes, myApps] = await Promise.all([
+      companySizes(),
+      JobApplication.find({ userId: req.userId }).select('appliedAt status responses').lean()
+    ]);
+    const { observedRate, observedN } = observedCallbackRate(myApps);
+    const atsScore = profile.ats ? profile.ats.score : null;
+    const oddsFor = (job, fit) => hireOdds(profile, job, fit, {
+      companySize: sizes.get(job.company) || 0, atsScore, observedRate, observedN
+    });
+
+    const { rows, soonest, highest } = rankArchetypes(profile, postings, { odds: oddsFor });
+    // The third ranking, and the one that actually decides: expected value is
+    // hire probability times pay, which is the only way to compare a long shot
+    // at a lot of money with a likely offer at less.
+    const bestBet = [...rows].filter(r => r.evMedian != null)
+      .sort((a, b) => b.evMedian - a.evMedian);
+    res.json({ success: true, needsResume: false, soonest, highest, bestBet, analysed: postings.length });
   } catch (e) { console.error('jobs archetypes:', e.message); res.status(500).json({ error: 'Could not rank roles' }); }
 });
 
@@ -331,7 +346,7 @@ router.get('/matches', verifyToken, async (req, res) => {
     const atsScore = profile.ats ? profile.ats.score : null;
 
     for (const r of ranked) {
-      r.odds = offerOdds(profile, r.job, r, {
+      r.odds = hireOdds(profile, r.job, r, {
         companySize: sizes.get(r.job.company) || 0, atsScore, observedRate, observedN
       });
       r.target = versusTarget(r.job, target);
@@ -339,11 +354,15 @@ router.get('/matches', verifyToken, async (req, res) => {
     // Rank by what the application is WORTH: the chance of it landing, and
     // whether the job clears your number. A 100% skill match on a role that
     // pays under target and has been open six weeks is not the top of a list.
+    // Expected value is the only figure that compares two unlike jobs: a 2%
+    // shot at $300k beats a 6% shot at $150k, and neither a match score nor a
+    // callback rate can say so. Jobs with no stated pay fall back to the hire
+    // probability alone rather than being dropped.
     ranked.sort((a, b) => {
       if (a.odds.blocked !== b.odds.blocked) return a.odds.blocked ? 1 : -1;
-      const at = a.target && a.target.known && !a.target.meetsAtTop ? 0.7 : 1;
-      const bt = b.target && b.target.known && !b.target.meetsAtTop ? 0.7 : 1;
-      return (b.odds.probability * bt) - (a.odds.probability * at);
+      const ev = r => r.odds.expectedValue != null ? r.odds.expectedValue : r.odds.hire * 150000;
+      const t = r => (r.target && r.target.known && !r.target.meetsAtTop) ? 0.7 : 1;
+      return (ev(b) * t(b)) - (ev(a) * t(a));
     });
     ranked.length = Math.min(ranked.length, limit);
 
@@ -367,7 +386,13 @@ router.get('/matches', verifyToken, async (req, res) => {
         score: r.score, matched: r.matched.slice(0, 10), missing: r.missing.slice(0, 8),
         odds: { band: r.odds.band, probability: r.odds.probability, blocked: r.odds.blocked,
                 blockers: r.odds.blockers, confidence: r.odds.confidence,
-                summary: r.odds.summary, factors: r.odds.factors.slice(0, 6) },
+                summary: r.odds.summary, factors: r.odds.factors.slice(0, 6),
+                // The gauge itself, and the funnel underneath it — one number
+                // hides where you actually get eliminated.
+                hire: r.odds.hire, hireBand: r.odds.hireBand, hireSummary: r.odds.hireSummary,
+                callback: r.odds.callback, conversion: r.odds.conversion,
+                gauge: r.odds.gauge, expectedValue: r.odds.expectedValue,
+                conversionNotes: (r.odds.conversionNotes || []).slice(0, 3) },
         target: r.target,
         status: byId.get(String(r.job._id)) || null
       }))

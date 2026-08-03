@@ -75,11 +75,17 @@ function scorePosting(profile, posting) {
   };
 }
 
+/**
+ * No rounding here. It used to round, which is harmless for salaries and
+ * silently destroys a probability — a median hire rate of 0.034 came back as
+ * 0, so every lane reported "0.0%" while its expected value was correct.
+ * Round at the point of display, where you know what the number is.
+ */
 function median(nums) {
   if (!nums.length) return null;
   const s = [...nums].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 /**
@@ -88,7 +94,7 @@ function median(nums) {
  * One row per kind of job, each carrying both answers plus the evidence
  * underneath them, so "highest paid" is never a number with nothing behind it.
  */
-function rankArchetypes(profile, postings, { minPostings = 5 } = {}) {
+function rankArchetypes(profile, postings, { minPostings = 5, odds = null } = {}) {
   const groups = new Map();
   for (const p of postings) {
     if (!p.isEngineering || !p.archetype) continue;
@@ -111,6 +117,21 @@ function rankArchetypes(profile, postings, { minPostings = 5 } = {}) {
     // single lucky posting.
     const typical = median(scores);
     const strong = scored.filter(s => s.score >= 75).length;
+
+    // Hire probability per lane, when the caller supplies the odds model.
+    // Median rather than best: one lucky posting is not a lane.
+    let hireMedian = null, evMedian = null;
+    if (odds) {
+      const hs = [], evs = [];
+      for (const s of scored) {
+        const o = odds(s.job, s);
+        if (!o || o.blocked) continue;
+        hs.push(o.hire);
+        if (o.expectedValue != null) evs.push(o.expectedValue);
+      }
+      hireMedian = median(hs);
+      evMedian = median(evs);
+    }
 
     const pays = jobs.map(j => j.salary && j.salary.midAnnual).filter(Boolean);
     const payMedian = median(pays);
@@ -143,6 +164,9 @@ function rankArchetypes(profile, postings, { minPostings = 5 } = {}) {
       withSalary: pays.length,
       matchTypical: typical,
       strongMatches: strong,
+      hireMedian,
+      evMedian: evMedian == null ? null : Math.round(evMedian),
+      appsPerOffer: hireMedian ? Math.ceil(1 / hireMedian) : null,
       payMedian, payTop,
       commonGaps,
       // The two rankings, before sorting, so the caller can present either.
