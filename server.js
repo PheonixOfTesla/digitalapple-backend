@@ -182,6 +182,9 @@ app.use('/api/v1/directory', require('./controllers/DirectoryController'));
 app.use('/api/v1/hub', require('./controllers/HubController'));
 app.use('/api/v1/messages', require('./controllers/MessageController'));
 app.use('/api/v1/studios', require('./controllers/StudioController'));
+// DPT study engine. The deck is local-first — only card generation (needs the
+// Anthropic key) and .apkg parsing (needs zip + SQLite readers) are server-side.
+app.use('/api/v1/student', require('./controllers/StudentController'));
 
 // Root
 app.get('/', (req, res) => {
