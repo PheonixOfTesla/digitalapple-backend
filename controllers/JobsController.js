@@ -21,7 +21,7 @@ const { runIngest } = require('../services/jobs/ingest');
 const { rankArchetypes, rankPostings, scorePosting } = require('../services/jobs/match');
 const { readResume } = require('../services/jobs/resume');
 const { formatSalary } = require('../services/jobs/salary');
-const { offerOdds, hireOdds, observedCallbackRate, versusTarget } = require('../services/jobs/odds');
+const { offerOdds, hireOdds, campaignOdds, applicationsFor, observedCallbackRate, versusTarget } = require('../services/jobs/odds');
 const { atsTargets } = require('../services/jobs/companies');
 const { SOURCES } = require('../services/jobs/sources');
 const { autofillScript, bookmarklet } = require('../services/jobs/autofill');
@@ -314,7 +314,23 @@ router.get('/archetypes', verifyToken, async (req, res) => {
     // at a lot of money with a likely offer at less.
     const bestBet = [...rows].filter(r => r.evMedian != null)
       .sort((a, b) => b.evMedian - a.evMedian);
-    res.json({ success: true, needsResume: false, soonest, highest, bestBet, analysed: postings.length });
+    // The question under all the others: will I get hired at all? Nobody
+    // applies once, and 1 - (1-p)^N turns a demoralising per-application
+    // number into something you can plan a month around.
+    const top = bestBet[0] || soonest[0];
+    const perApp = top && top.hireMedian ? top.hireMedian : null;
+    const applied = myApps.filter(a => a.appliedAt).length;
+    const campaign = perApp ? {
+      lane: top.archetype,
+      perApp,
+      applied,
+      soFar: campaignOdds(perApp, applied).adjusted,
+      milestones: [20, 40, 60, 100].map(n => ({ n, p: campaignOdds(perApp, n).adjusted })),
+      for80: applicationsFor(perApp, 0.8),
+      for95: applicationsFor(perApp, 0.95)
+    } : null;
+
+    res.json({ success: true, needsResume: false, soonest, highest, bestBet, campaign, analysed: postings.length });
   } catch (e) { console.error('jobs archetypes:', e.message); res.status(500).json({ error: 'Could not rank roles' }); }
 });
 
