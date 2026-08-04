@@ -359,12 +359,31 @@ function decodeRecord(rec) {
 // ─── Health ────────────────────────────────────────────────────────────────
 
 router.get('/health', (req, res) => {
+  // Which keys EXIST, as booleans only — never a value, never a prefix, never a
+  // length. Having a key present and the provider still reading 'openai' is the
+  // exact confusion this reports: services/aiClient picks the provider from
+  // AI_PROVIDER, which defaults to 'openai' no matter which keys are configured.
+  // Without this you cannot tell "no key" from "key ignored" from the outside.
+  const keys = {
+    MOONSHOT_API_KEY: Boolean(process.env.MOONSHOT_API_KEY),
+    OPENAI_API_KEY: Boolean(process.env.OPENAI_API_KEY),
+  };
+  const selector = process.env.AI_PROVIDER || null;
+  const misconfigured = keys.MOONSHOT_API_KEY && provider !== 'moonshot';
+
   res.json({
     ok: true,
     // Generation rides the app's existing LLM client, so it is configured
     // wherever the rest of the app's AI features already are.
     provider,
     model,
+    aiProviderEnv: selector,
+    keysPresent: keys,
+    ...(misconfigured ? {
+      warning: 'A Moonshot key is configured but AI_PROVIDER is not set to ' +
+        '"moonshot", so generation is running on ' + provider + '/' + model + '. ' +
+        'Set AI_PROVIDER=moonshot to use it.',
+    } : {}),
     tracks: Object.keys(TRACKS),
     note: 'The deck itself is local-first and never reaches this server.',
   });
