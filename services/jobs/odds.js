@@ -309,4 +309,39 @@ function observedOfferRate(applications, { minAgeDays = 45 } = {}) {
   return { offerRate: offers / settled.length, offerN: settled.length };
 }
 
-module.exports = { offerOdds, hireOdds, conversionFactor, observedOfferRate, observedCallbackRate, versusTarget, hardBlockers, freshnessFactor, BASE_RATE, MAX_COLD };
+
+/**
+ * The question underneath all the others: will I get hired?
+ *
+ * Per-application odds are demoralising and also not the thing you want to
+ * know. Nobody applies once. Across N independent applications the chance of
+ * at least one offer is 1 - (1 - p)^N, and that turns 3% a shot into something
+ * you can plan a month around.
+ *
+ * WHERE THIS OVERSTATES. The applications are not fully independent. If the
+ * resume has a systematic flaw — parses badly, misses the keywords everyone
+ * screens on, claims a level the evidence does not support — then every
+ * application fails for the same reason and volume does not rescue it. That
+ * is exactly why the ATS readability score gates the whole model, and why
+ * this returns a correlation-adjusted figure alongside the naive one rather
+ * than quietly reporting the flattering number.
+ */
+function campaignOdds(perApp, n, { correlation = 0.25 } = {}) {
+  const p = Math.max(0, Math.min(1, perApp || 0));
+  if (!p || !n) return { naive: 0, adjusted: 0, n: n || 0 };
+  const naive = 1 - Math.pow(1 - p, n);
+  // Correlated failure modes mean the effective number of independent shots is
+  // lower than the number of applications sent.
+  const effective = n * (1 - correlation);
+  const adjusted = 1 - Math.pow(1 - p, effective);
+  return { naive, adjusted, n, effectiveN: Math.round(effective) };
+}
+
+/** How many applications to reach a target confidence of at least one offer. */
+function applicationsFor(perApp, target = 0.8, { correlation = 0.25 } = {}) {
+  const p = Math.max(1e-6, Math.min(0.999, perApp || 0));
+  const n = Math.log(1 - target) / Math.log(1 - p);
+  return Math.ceil(n / (1 - correlation));
+}
+
+module.exports = { offerOdds, hireOdds, campaignOdds, applicationsFor, conversionFactor, observedOfferRate, observedCallbackRate, versusTarget, hardBlockers, freshnessFactor, BASE_RATE, MAX_COLD };

@@ -90,7 +90,19 @@ const SKILLS = {
   payments: ['stripe', 'payments', 'paypal', 'braintree', 'billing'],
   ml: ['machine learning', 'pytorch', 'tensorflow', 'llm', 'openai', 'rag', 'embeddings'],
   mobile: ['ios', 'android', 'flutter', 'expo'],
-  design: ['figma', 'ui/ux', 'accessibility', 'wcag', 'responsive design']
+  design: ['figma', 'ui/ux', 'accessibility', 'wcag', 'responsive design'],
+
+  // Added after a real resume named eleven technologies the taxonomy did not
+  // know. Every miss is a skill the matcher scores you as not having, on a
+  // resume that plainly says you do.
+  webrtc: ['webrtc', 'peer-to-peer video', 'screen share', 'screen-share'],
+  realtime: ['socket.io', 'socketio', 'server-sent events', 'sse', 'pubsub', 'pub/sub', 'presence'],
+  stripe_connect: ['stripe connect', 'connect express', 'destination charge', 'marketplace payments'],
+  deploy: ['railway', 'vercel', 'netlify', 'fly.io', 'heroku', 'render'],
+  llm: ['claude', 'anthropic', 'gpt-4', 'gpt-5', 'prompt engineering', 'vector database', 'pinecone'],
+  media: ['cloudinary', 'ffmpeg', 'imagemagick', 'transcoding'],
+  comms: ['twilio', 'sendgrid', 'nodemailer', 'postmark', 'mailgun'],
+  architecture: ['multi-tenant', 'multitenant', 'rbac', 'event-driven', 'webhooks', 'idempotency']
 };
 
 const GROUPS = {
@@ -99,7 +111,11 @@ const GROUPS = {
   backend: ['node', 'express', 'django', 'flask', 'fastapi', 'rails', 'spring', 'laravel', 'graphql', 'rest', 'grpc', 'websockets', 'microservices'],
   data: ['postgres', 'mysql', 'mongodb', 'redis', 'elasticsearch', 'dynamodb', 'kafka', 'snowflake', 'bigquery', 'spark', 'airflow'],
   infra: ['aws', 'gcp', 'azure', 'docker', 'kubernetes', 'terraform', 'cicd', 'github_actions', 'jenkins', 'nginx', 'serverless', 'linux'],
-  practice: ['git', 'testing', 'agile', 'observability', 'security', 'payments', 'ml', 'mobile', 'design']
+  practice: ['git', 'testing', 'agile', 'observability', 'security', 'payments', 'ml', 'mobile', 'design',
+             'llm', 'media', 'comms'],
+  frontend_rt: ['webrtc', 'realtime'],
+  backend_arch: ['stripe_connect', 'architecture'],
+  infra_deploy: ['deploy']
 };
 
 const _groupIndex = {};
