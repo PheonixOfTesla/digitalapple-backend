@@ -49,6 +49,10 @@ const MAX_LOG_ENTRIES = 160;
 const CHAT_MIN_INTERVAL = 1.1;
 
 // Phase durations in seconds. Tuned so a whole game runs about seven minutes.
+// How long a tapped emote plays for. Long enough to read across a square,
+// short enough that a wave does not become a personality.
+const EMOTE_SECONDS = 4;
+
 const NIGHTFALL_SECONDS = 40;
 const DECREE_SECONDS = 40;
 const GATHERING_SECONDS = 105;
@@ -251,6 +255,7 @@ class Player {
     this.angle = 0;
     this.moving = false;
     this.emote = null;
+    this.emoteUntil = 0;
 
     // Their Islander: a face thumbnail plus the colours pulled from it.
     this.islander = null;
@@ -577,8 +582,35 @@ class Room {
     actor.moving = !!moving;
   }
 
+  /* An emote runs for EMOTE_SECONDS and then stops.
+
+     It used to be set and never cleared, which made it permanent - and worse
+     than permanent. The client animates for a few seconds and then puts the
+     limbs back, but the next position frame still carried the emote name, so
+     it read as a new one and started again. A single tap left a character
+     dancing for the rest of the game.
+
+     The clock owns the expiry rather than the client, because every player
+     has to see the same thing stop at the same moment. */
   actEmote(actor, name) {
-    actor.emote = EMOTES.includes(name) ? name : null;
+    if (!EMOTES.includes(name)) { actor.emote = null; return; }
+    actor.emote = name;
+    actor.emoteUntil = now() + EMOTE_SECONDS;
+  }
+
+  /* Called every tick. Returns true when at least one emote ended, so the
+     transport knows the position frame is worth sending. */
+  expireEmotes() {
+    const t = now();
+    let ended = false;
+    for (const p of this.players.values()) {
+      if (p.emote && t >= (p.emoteUntil || 0)) {
+        p.emote = null;
+        p.emoteUntil = 0;
+        ended = true;
+      }
+    }
+    return ended;
   }
 
   /* The eight emotes on this player's wheel. Whitelisted and length capped,

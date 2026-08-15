@@ -240,8 +240,9 @@ function playLobby(room, player, nowSec) {
   const m = mind(player.pid);
   if (nowSec > m.nextTalk) {
     m.nextTalk = nowSec + 10 + Math.random() * 24;
-    player.emote = pick(EMOTES);
-    setTimeout(() => { if (player) player.emote = null; }, 2600);
+    // Through the same action a tap goes through, so a bot's wave lasts
+    // exactly as long as a player's and the clock clears both.
+    room.actEmote(player, pick(EMOTES));
   }
 }
 

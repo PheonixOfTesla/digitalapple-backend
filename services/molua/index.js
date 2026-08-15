@@ -75,6 +75,7 @@ function startClock(room) {
       // Bots move and act on the same clock as everything else, and before the
       // phase is tested - so a night whose only remaining actor is a bot
       // resolves on this tick instead of waiting out the full forty seconds.
+      room.expireEmotes();
       if (bots.tick(room, TICK_MS / 1000)) broadcast(room);
 
       if (room.phase !== Phase.LOBBY) {
