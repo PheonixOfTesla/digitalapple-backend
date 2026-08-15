@@ -31,7 +31,8 @@
     "rss-parser": "^3.13.0",
     "socket.io": "^4.8.3",
     "stripe": "^14.25.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

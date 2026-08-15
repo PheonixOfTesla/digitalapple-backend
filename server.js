@@ -291,6 +291,16 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ==================== MOLUA (the party game) ====================
+// Before the 404 handler, or every game route is swallowed by it. Wrapped in
+// try/catch in the same spirit as Socket.IO below: the game is an addition to
+// this API, never a reason it fails to boot.
+try {
+  require('./services/molua').mountRoutes(app);
+} catch (e) {
+  console.error('Molua routes disabled — continuing without the game:', e.message);
+}
+
 // 404 handler
 app.use((req, res, next) => {
   res.status(404).json({
@@ -728,6 +738,13 @@ try {
   console.log('Socket.IO: enabled (/admin, /studio namespaces)');
 } catch (e) {
   console.error('Socket.IO disabled — continuing without live features:', e.message);
+}
+
+// The socket half, now that there is a server to attach it to.
+try {
+  require('./services/molua').mountSockets(server);
+} catch (e) {
+  console.error('Molua sockets disabled — continuing without the game:', e.message);
 }
 
 server.listen(PORT, () => {
