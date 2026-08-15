@@ -828,6 +828,10 @@ class Room {
       seat: p.seat,
       alive: p.alive,
       connected: p.connected,
+      // Public on purpose. Knowing which islanders are robots is part of
+      // reading the room - hiding it would make a bot's clumsy vote look like
+      // a person's, which is a worse game, not a cleverer one.
+      bot: !!p.bot,
       host: p.isHost,
       manner: p.manner,
       castOut: p.castOut,

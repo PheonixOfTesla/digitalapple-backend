@@ -23,6 +23,7 @@
 
 const { URL } = require('url');
 const { registry, Phase, cleanName, MAX_PLAYERS } = require('./engine');
+const bots = require('./bots');
 
 const TICK_MS = 250;
 // Movement frames at roughly 7 a second, which is smooth once the client
@@ -71,6 +72,11 @@ function startClock(room) {
   room.timer = setInterval(() => {
     ticks += 1;
     try {
+      // Bots move and act on the same clock as everything else, and before the
+      // phase is tested - so a night whose only remaining actor is a bot
+      // resolves on this tick instead of waiting out the full forty seconds.
+      if (bots.tick(room, TICK_MS / 1000)) broadcast(room);
+
       if (room.phase !== Phase.LOBBY) {
         const expired = Date.now() / 1000 >= room.phaseEndsAt;
         if (expired || room.everyoneActed()) {
@@ -100,6 +106,30 @@ function handle(room, player, message, socket) {
   if (kind === 'ping') {
     send(socket, { t: 'pong' });
     return false;
+  }
+
+  /* Robots.
+
+     A room needs four threads and one person with a phone has one. The host
+     can fill the rest with bots rather than not playing - which is the whole
+     difference between a game you can try right now and a game you have to
+     organise first. Host only, lobby only, and capped by the same MAX_PLAYERS
+     a room of people is. */
+  if (kind === 'bot') {
+    if (!player.isHost || room.phase !== Phase.LOBBY) return false;
+    if (room.players.size >= MAX_PLAYERS) {
+      send(socket, { t: 'error', text: 'The island is full.' });
+      return false;
+    }
+    bots.addBot(room);
+    broadcastIslanders(room);
+    return true;
+  }
+
+  if (kind === 'unbot') {
+    if (!player.isHost || room.phase !== Phase.LOBBY) return false;
+    bots.removeBot(room);
+    return true;
   }
 
   if (kind === 'start') {
