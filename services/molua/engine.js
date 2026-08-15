@@ -347,6 +347,12 @@ class Room {
     );
     this.players.set(pid, player);
     this.order.push(pid);
+    // Stand everyone round the square as they arrive, not only when a game
+    // starts. Players default to the origin, which is exactly where the
+    // monument is, so anyone who walked around the lobby was standing inside
+    // it - and with the camera looking at their own position, they saw the
+    // inside of a stone column instead of themselves.
+    this.spawnPositions();
     this.writeLog('join', `${player.name} takes a thread.`);
     return player;
   }
