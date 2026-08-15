@@ -9,8 +9,8 @@
    Roles
      UNDERTOW   - pulls one islander under each Nightfall. Wins with REEF.
      NAVIGATOR  - measures one player each Nightfall, learns UNDERTOW or not.
-     REEF       - knows the Undertow, cannot pull, wins with the Undertow.
-     VILLAGER   - no power but judgement. Wins by casting every Undertow out.
+     REEF       - knows who holds the notebook, cannot write, wins with them.
+     VILLAGER   - no power but judgement. Wins by finding the notebook.
 
    UNDERTOW is a mantle, not a person - whoever draws it wears the name.
 
@@ -78,7 +78,7 @@ const MANNERS = [
 // Fixed list: nothing a player types can ever reach another player's screen.
 const DECREES = [
   'Stand up and accuse someone.',
-  "Say 'I am not Undertow' three times.",
+  "Say 'I do not have the notebook' three times.",
   'Compliment the person you suspect most.',
   'Laugh out loud at nothing.',
   'Swap seats with someone.',
@@ -166,7 +166,7 @@ const Role = {
 };
 
 const ROLE_TITLES = {
-  undertow: 'UNDERTOW',
+  undertow: 'THE NOTEBOOK',
   navigator: 'NAVIGATOR',
   reef: 'REEF',
   villager: 'VILLAGER'
@@ -174,17 +174,17 @@ const ROLE_TITLES = {
 
 // Flavour first, then the plain-language version an eight-year-old can act on.
 const ROLE_BLURBS = {
-  undertow: 'You are the Undertow.',
+  undertow: 'You have the notebook.',
   navigator: 'You measure what others only guess at.',
   reef: 'You are the dark they work under.',
   villager: 'You have no gift. Only the room.'
 };
 
 const ROLE_HOWTO = {
-  undertow: "Each night, pick one player to cut and an order for them to obey. Don't get caught.",
-  navigator: "Each night, pick one player. You'll be told if they are Undertow. Nobody else finds out.",
-  reef: "You already know who Undertow is. You can't cut anyone. Lie for them and stay alive.",
-  villager: 'You have no night action. Listen, argue out loud, and vote for who you think is Undertow.'
+  undertow: "Each night, write one name in the notebook, and an order for them to obey. Don't get caught holding it.",
+  navigator: "Each night, pick one player. You'll be told whether they have the notebook. Nobody else finds out.",
+  reef: "You already know who has the notebook. You cannot write in it. Lie for them and stay alive.",
+  villager: 'You have no night action. Listen, argue out loud, and find who has the notebook.'
 };
 
 const now = () => Date.now() / 1000;
@@ -512,19 +512,29 @@ class Room {
     if (t - actor.lastSaid < CHAT_MIN_INTERVAL) return;
     actor.lastSaid = t;
 
+    /* The living can talk in any phase.
+
+       Nightfall used to be silent, which is correct at a table where everyone
+       has their eyes shut. It is wrong here. These are children in the same
+       room on their own phones - they are going to talk through Nightfall
+       whatever the software says, and all a disabled text box achieves is
+       that the quiet kid who was typing instead of shouting gets shut out.
+
+       The split that actually matters is still enforced: the dead write to
+       the spirit channel and the living never see it. That one is load
+       bearing, because a Spirit knows every role. */
     if (!actor.alive) {
       this.writeLog('spirit', message, { who: actor.name, seat: actor.seat, pid: actor.pid });
-    } else if ([Phase.LOBBY, Phase.GATHERING, Phase.OVER].includes(this.phase)) {
+    } else {
       this.writeLog('chat', message, { who: actor.name, seat: actor.seat, pid: actor.pid });
     }
-    // During Nightfall and the forty seconds the living stay quiet.
   }
 
   actCall(actor, index) {
     if (!Number.isInteger(index) || index < 0 || index >= CALLS.length) return;
     if (!actor.alive) {
       this.writeLog('spirit', CALLS[index], { who: actor.name, seat: actor.seat, pid: actor.pid });
-    } else if ([Phase.GATHERING, Phase.LOBBY, Phase.OVER].includes(this.phase)) {
+    } else {
       this.writeLog('call', CALLS[index], { who: actor.name, seat: actor.seat, pid: actor.pid });
     }
   }

@@ -133,6 +133,23 @@ function handle(room, player, message, socket) {
     return true;
   }
 
+  /* Set the number of computer players outright.
+
+     A host filling a room is making one decision - "three computers" - not
+     three separate ones, so this takes a target and adds or removes until it
+     matches rather than making them tap a plus button. */
+  if (kind === 'bots') {
+    if (!player.isHost || room.phase !== Phase.LOBBY) return false;
+    const want = Math.max(0, Math.min(9, Number(message.n) || 0));
+    let guard = 32;
+    while (bots.botsIn(room).length < want && room.players.size < MAX_PLAYERS && guard-- > 0) {
+      bots.addBot(room);
+    }
+    while (bots.botsIn(room).length > want && guard-- > 0) bots.removeBot(room);
+    broadcastIslanders(room);
+    return true;
+  }
+
   if (kind === 'start') {
     if (!player.isHost || room.phase !== Phase.LOBBY) return false;
     try {
