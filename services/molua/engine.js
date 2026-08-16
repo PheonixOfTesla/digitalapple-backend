@@ -51,6 +51,19 @@ const CHAT_MIN_INTERVAL = 1.1;
 // Phase durations in seconds. Tuned so a whole game runs about seven minutes.
 // How long a tapped emote plays for. Long enough to read across a square,
 // short enough that a wave does not become a personality.
+/* A match is three rounds, not "until somebody wins".
+
+   Left open-ended a game runs anywhere from two rounds to six, which is
+   unusable for the thing this is actually for: a counsellor with a room of
+   children and forty minutes. Three rounds is about seven minutes, and it is
+   the same seven minutes every time, so an adult can plan around it.
+
+   It also fixes the game. An unbounded hunt has no urgency - the village can
+   always vote nobody out and try again next round. A clock means the notebook
+   only has to survive, which gives the village a reason to commit to a guess
+   while they still can. */
+const MAX_ROUNDS = 3;
+
 const EMOTE_SECONDS = 4;
 
 const NIGHTFALL_SECONDS = 40;
@@ -463,6 +476,19 @@ class Room {
     this.phase = Phase.OVER;
     this.winner = winner;
     this.phaseEndsAt = now() + OVER_SECONDS;
+    /* Who won, by name.
+
+       A result that only names the winning side leaves everybody working out
+       from memory who was on it - and the whole pleasure of the ending is
+       finding out that the person you defended all game was holding it. */
+    this.results = this.seated.map((p) => ({
+      pid: p.pid,
+      name: p.name,
+      role: p.role,
+      title: ROLE_TITLES[p.role],
+      won: winner === 'undertow' ? !!p.withUndertow : !p.withUndertow,
+      survived: p.alive
+    }));
     if (winner === 'undertow') {
       this.writeLog('system', 'The island is quiet. The water keeps its own.');
     } else {
@@ -815,7 +841,11 @@ class Room {
     else if (this.phase === Phase.DECREE) this.resolveDecree();
     else if (this.phase === Phase.GATHERING) this.resolveGathering();
     else if (this.phase === Phase.VERDICT) {
-      if (!this.checkWinner()) this.beginNightfall();
+      if (this.checkWinner()) return;
+      // Out of rounds. Whoever held the notebook was never found, which is a
+      // win for them and a clearer ending than a draw.
+      if (this.round >= MAX_ROUNDS){ this.finish('undertow'); return; }
+      this.beginNightfall();
     } else if (this.phase === Phase.OVER) this.resetToLobby();
   }
 
@@ -823,6 +853,7 @@ class Room {
     this.phase = Phase.LOBBY;
     this.round = 0;
     this.winner = null;
+    this.results = null;
     this.cut = null;
     this.lastCut = null;
     this.lastVerdict = null;
@@ -919,6 +950,8 @@ class Room {
       duration: this.phaseDuration(),
       players: this.publicPlayers(),
       winner: this.winner,
+      results: this.phase === Phase.OVER ? this.results : null,
+      maxRounds: MAX_ROUNDS,
       minPlayers: MIN_PLAYERS,
       maxPlayers: MAX_PLAYERS,
       public: this.public,

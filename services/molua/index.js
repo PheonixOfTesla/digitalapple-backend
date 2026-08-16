@@ -150,6 +150,24 @@ function handle(room, player, message, socket) {
     return true;
   }
 
+  /* New game, and reset.
+
+     A finished match used to sit there until an idle timer swept it up, so a
+     counsellor who wanted a second round had to get everybody to rejoin. Two
+     controls instead: New game, offered when a match is over, and Reset,
+     which abandons one mid-way - because the real failure at a summer camp is
+     not a lost game, it is a game that will not end so the group can move on.
+
+     Both keep the room, the players and their Islanders. Only the match is
+     thrown away. */
+  if (kind === 'newgame' || kind === 'reset') {
+    if (!player.isHost) return false;
+    if (kind === 'newgame' && room.phase !== Phase.OVER) return false;
+    if (room.phase === Phase.LOBBY) return false;
+    room.resetToLobby();
+    return true;
+  }
+
   if (kind === 'start') {
     if (!player.isHost || room.phase !== Phase.LOBBY) return false;
     try {
