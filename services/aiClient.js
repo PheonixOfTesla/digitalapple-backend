@@ -19,6 +19,18 @@ const providers = {
     key: process.env.OPENAI_API_KEY,
     baseURL: undefined,
     defaultModel: 'gpt-4o-mini'
+  },
+  // OpenRouter speaks the OpenAI wire format, so it needs no client of its own —
+  // only a base URL and a key. Its free tier is the point: `:free` models cost
+  // nothing and are rate-limited rather than billed, which suits a grader that runs
+  // only on answers the offline scorer already failed.
+  //
+  // The default is pinned rather than left to OpenRouter's routing so a deploy
+  // cannot silently change what grades a student. Override with AI_MODEL.
+  openrouter: {
+    key: process.env.OPENROUTER_API_KEY,
+    baseURL: 'https://openrouter.ai/api/v1',
+    defaultModel: 'meta-llama/llama-3.3-70b-instruct:free'
   }
 };
 
@@ -72,5 +84,9 @@ try {
 module.exports = {
   client,
   model,
-  provider: providerName
+  provider: providerName,
+  // Whether a key was actually configured for the selected provider. Callers that
+  // must fail closed rather than fire a doomed request check this first — the boot
+  // log already reports it, and there is no reason each caller should re-derive it.
+  hasKey: !!providerConfig.key
 };
