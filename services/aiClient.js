@@ -47,6 +47,33 @@ const client = new OpenAI({
   baseURL: providerConfig.baseURL
 });
 
+/**
+ * A client for ONE provider, independent of the global AI_PROVIDER.
+ *
+ * WHY. `AI_PROVIDER` is global: ten call sites share this module — Blueprint, the
+ * nebula, reels, scoping, rescoping, study generation. Flipping it to reach a free
+ * tier would move all of them onto a rate-limited model to serve one feature, and
+ * the first thing to break would be Blueprint generation, which is a product.
+ *
+ * So a service that wants a specific provider asks for it here and leaves everyone
+ * else alone. Returns null when that provider has no key configured, which is the
+ * caller's signal to fall back or to stay switched off.
+ *
+ * @param {string} name a key of `providers`
+ * @param {string} [modelOverride]
+ * @returns {{client: OpenAI, model: string, provider: string, hasKey: true}|null}
+ */
+function forProvider(name, modelOverride) {
+  const cfg = providers[name];
+  if (!cfg || !cfg.key) return null;
+  return {
+    client: new OpenAI({ apiKey: cfg.key, baseURL: cfg.baseURL }),
+    model: modelOverride || cfg.defaultModel,
+    provider: name,
+    hasKey: true
+  };
+}
+
 // Boot log - exactly one line with provider, model, and key presence
 console.log(
   `[AI] provider=${providerName} model=${model || '(not set)'} ` +
@@ -88,5 +115,6 @@ module.exports = {
   // Whether a key was actually configured for the selected provider. Callers that
   // must fail closed rather than fire a doomed request check this first — the boot
   // log already reports it, and there is no reason each caller should re-derive it.
-  hasKey: !!providerConfig.key
+  hasKey: !!providerConfig.key,
+  forProvider
 };

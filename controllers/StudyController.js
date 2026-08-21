@@ -14,8 +14,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { verifyToken } = require('../middleware/auth');
-const { gradeAnswer } = require('../services/studyGrader');
-const ai = require('../services/aiClient');
+const { gradeAnswer, graderInfo } = require('../services/studyGrader');
 
 const router = express.Router();
 
@@ -45,7 +44,8 @@ const gradeLimiter = rateLimit({
  * that is only knowable by spending a request.
  */
 router.get('/grade/status', verifyToken, (req, res) => {
-  res.json({ ok: true, available: !!ai.hasKey, provider: ai.provider, model: ai.model });
+  const g = graderInfo();
+  res.json({ ok: true, available: g.hasKey, provider: g.provider, model: g.model });
 });
 
 /**
@@ -66,7 +66,7 @@ router.post('/grade', verifyToken, gradeLimiter, async (req, res) => {
   if (typeof expected !== 'string' || typeof answer !== 'string') {
     return res.status(400).json({ ok: false, reason: 'expected and answer must be strings' });
   }
-  if (!ai.hasKey) return res.json({ ok: false, reason: 'not-configured' });
+  if (!graderInfo().hasKey) return res.json({ ok: false, reason: 'not-configured' });
 
   try {
     const grade = await gradeAnswer({ question, expected, answer });

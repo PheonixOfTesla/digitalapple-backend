@@ -21,7 +21,33 @@
  * mean something.
  */
 
-const ai = require('./aiClient');
+const aiClient = require('./aiClient');
+
+/**
+ * The client this grader uses, chosen WITHOUT touching the global AI_PROVIDER.
+ *
+ * Setting AI_PROVIDER=openrouter would move Blueprint, the nebula, reels, scoping
+ * and study generation onto a free rate-limited model as a side effect of turning
+ * grading on. Grading is the one job here that genuinely suits a free tier — it
+ * fires only on answers already failed, and a null result costs nothing — so it
+ * reaches for OpenRouter directly and leaves the other nine call sites alone.
+ *
+ * Order: an explicit STUDY_AI_PROVIDER wins, then OpenRouter if its key exists,
+ * then whatever the rest of the app is already using. So the only variable needed
+ * to switch grading on is OPENROUTER_API_KEY.
+ */
+const ai = (() => {
+  const explicit = process.env.STUDY_AI_PROVIDER;
+  if (explicit) {
+    const c = aiClient.forProvider(explicit, process.env.STUDY_AI_MODEL);
+    if (c) return c;
+  }
+  const free = aiClient.forProvider('openrouter', process.env.STUDY_AI_MODEL);
+  if (free) return free;
+  return aiClient;
+})();
+
+console.log(`[study/grade] provider=${ai.provider} model=${ai.model} key_present=${!!ai.hasKey}`);
 
 /** Hard ceiling on a call. The UI shows the offline grade immediately and upgrades
  *  in place, so a slow model costs nothing but a late correction — but an unbounded
@@ -118,4 +144,7 @@ async function gradeAnswer({ question, expected, answer }) {
   }
 }
 
-module.exports = { gradeAnswer, TIMEOUT_MS, VERDICTS };
+/** Which provider and model grading will actually use, for the status route. */
+const graderInfo = () => ({ provider: ai.provider, model: ai.model, hasKey: !!ai.hasKey });
+
+module.exports = { gradeAnswer, graderInfo, TIMEOUT_MS, VERDICTS };
