@@ -288,6 +288,19 @@ app.get('/health', (req, res) => {
     cloudinary: isCloudinaryConfigured,
     google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
     ai: !!(process.env.OPENAI_API_KEY || process.env.MOONSHOT_API_KEY),
+    // Study grading picks its own provider, so the `ai` flag above does not answer
+    // "is semantic grading on". Reports the provider NAME and a boolean only —
+    // never the key, and never whether the key is valid, which costs a request to
+    // learn. Public because it is the one thing you need to check a deploy from
+    // outside, and it discloses nothing an attacker gains from.
+    studyGrading: (() => {
+      try {
+        const g = require('./services/studyGrader').graderInfo();
+        return { configured: g.hasKey, provider: g.provider, model: g.model };
+      } catch (e) {
+        return { configured: false, error: 'unavailable' };
+      }
+    })(),
     environment: process.env.NODE_ENV || 'production'
   });
 });
