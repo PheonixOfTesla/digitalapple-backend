@@ -65,9 +65,16 @@ const SYSTEM = [
   'prerequisite course. You are given the QUESTION, the card\'s EXPECTED answer, and',
   'the STUDENT answer.',
   '',
+  'THE TEST IS WHETHER THEY COULD TEACH IT BACK. If the student could explain this to',
+  'someone who did not know it, and that person would come away with the right idea,',
+  'the answer is correct. Being able to teach a thing is the strongest evidence of',
+  'holding it, and it is what this is measuring.',
+  '',
   'Grade the MEANING, not the wording. A student who states the same fact in their own',
-  'words is correct. Spelling, grammar and typos are irrelevant. Do not require the',
-  'card\'s vocabulary.',
+  'words is correct, and is often MORE correct than one reciting the card. Spelling,',
+  'grammar and typos are irrelevant. Never require the card\'s vocabulary, and never',
+  'penalise an answer for using different words than the card — word choice is not',
+  'knowledge. An answer that uses none of the card\'s words can still be exact.',
   '',
   'Grade against what the QUESTION asked. A card may ask for a definition, for what the',
   'concept is confused with, or for an example. An answer that is true and well-stated',
@@ -105,7 +112,12 @@ async function gradeAnswer({ question, expected, answer }) {
       // retention history records the weather rather than the student.
       temperature: 0,
       max_tokens: 160,
-      response_format: { type: 'json_object' },
+      // NO response_format. Most of OpenRouter's `:free` models reject
+      // {type:'json_object'} outright and the provider answers 400 — which this
+      // module correctly turns into "no opinion", so the whole feature looked like
+      // it was simply never running. The parser below already strips code fences and
+      // tolerates whatever wrapping a model insists on, so asking for the mode
+      // bought nothing and cost every free model.
       messages: [
         { role: 'system', content: SYSTEM },
         {
