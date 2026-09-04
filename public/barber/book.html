@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Book — Crispin Cuts</title>
+<!-- Where the API lives. Empty = same origin (served by the backend itself).
+     The copy published to the marketing site fills this in with the API host. -->
+<meta name="barber-api" content="">
 <meta name="description" content="Classic cuts, by appointment. Book online.">
 <meta name="theme-color" content="#2b2f34">
 <style>
@@ -226,7 +229,10 @@ footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);color:v
 <script>
 (function(){
   'use strict';
-  var API = '/api/v1/barber';
+  // Same origin when the backend serves this page; an absolute host when the
+  // marketing site does. One file, one line of difference between the copies.
+  var API = ((document.querySelector('meta[name="barber-api"]') || {}).content || '')
+    .replace(/\/+$/, '') + '/api/v1/barber';
 
   // The handle IS the address: /@crispincuts. ?h= is the fallback for anywhere
   // the pretty route is not in play.

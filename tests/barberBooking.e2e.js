@@ -13,6 +13,7 @@ process.env.BARBER_PASSCODE = 'clippers-2026';
 process.env.PLATFORM_PASSCODE = 'owner-passcode-9';
 process.env.BARBER_PLATFORM_FEE_BPS = '500';
 process.env.PUBLIC_API_URL = 'http://127.0.0.1:4599';
+process.env.BOOKING_SITE_URL = 'http://127.0.0.1:4599';
 
 const path = require('path');
 const express = require('express');

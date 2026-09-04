@@ -13,6 +13,7 @@ process.env.JWT_SECRET = 'test-secret';
 process.env.BARBER_PASSCODE = 'clippers-2026';
 process.env.STRIPE_SECRET_KEY = 'sk_test_stub';
 process.env.PUBLIC_API_URL = 'http://127.0.0.1:4601';
+process.env.BOOKING_SITE_URL = 'http://127.0.0.1:4601';
 
 const Module = require('module');
 const created = [];

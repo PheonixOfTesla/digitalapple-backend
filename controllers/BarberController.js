@@ -34,6 +34,7 @@ const Booking = require('../models/Booking');
 const sched = require('../services/barberSchedule');
 const mail = require('../services/barberEmails');
 const { humanRequirement } = require('../services/payouts');
+const { siteUrl } = require('../services/siteUrl');
 
 const router = express.Router();
 
@@ -47,12 +48,30 @@ function stripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
 }
 
-/** Where these pages actually live — the same convention the rest of the API uses. */
+/** This API's own host — the same convention the rest of the backend uses. */
 function base() {
   return (process.env.PUBLIC_API_URL || 'https://digitalapple-backend-production.up.railway.app')
     .replace(/\/+$/, '');
 }
-function shopUrl(handle) { return `${base()}/@${handle}`; }
+
+/**
+ * Where the booking page is READ, which is not always where the API is served.
+ *
+ * The backend serves /@handle itself, but the copy people are given lives on
+ * the marketing site — and the link in a confirmation email, the address a
+ * client bookmarks, and the page Stripe returns them to all have to be the one
+ * the barber puts in their bio. Set BOOKING_SITE_URL when those differ.
+ */
+function bookingSite() {
+  return String(process.env.BOOKING_SITE_URL || siteUrl()).replace(/\/+$/, '');
+}
+
+/** Where the barber's panel lives, for Stripe to hand them back to. */
+function adminUrl() {
+  return String(process.env.BOOKING_ADMIN_URL || (base() + '/book/')).replace(/\/+$/, '');
+}
+
+function shopUrl(handle) { return `${bookingSite()}/@${handle}`; }
 function manageUrl(booking) { return `${shopUrl(booking.shopHandle)}?b=${booking._id}&t=${booking.manageToken}`; }
 
 function clean(v, max = 200) { return String(v == null ? '' : v).trim().slice(0, max); }
@@ -904,8 +923,8 @@ router.post('/admin/connect', barberAuth, async (req, res) => {
     }
     const link = await s.accountLinks.create({
       account: shop.stripeAccountId,
-      refresh_url: `${base()}/book/?connect=retry`,
-      return_url: `${base()}/book/?connect=done`,
+      refresh_url: `${adminUrl()}?connect=retry`,
+      return_url: `${adminUrl()}?connect=done`,
       type: 'account_onboarding'
     });
     res.json({ success: true, url: link.url });
