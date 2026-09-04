@@ -10,7 +10,6 @@
  * Run: node tests/barberStripe.e2e.js
  */
 process.env.JWT_SECRET = 'test-secret';
-process.env.BARBER_PASSCODE = 'clippers-2026';
 process.env.STRIPE_SECRET_KEY = 'sk_test_stub';
 process.env.PUBLIC_API_URL = 'http://127.0.0.1:4601';
 process.env.BOOKING_SITE_URL = 'http://127.0.0.1:4601';
@@ -56,6 +55,7 @@ const ok = (n, c, x) => c ? (pass++, console.log('  PASS  ' + n)) : (fail++, con
 
   const app = express();
   app.use(express.json());
+  app.use('/api/v1/auth', require('../controllers/AuthController'));
   app.use('/api/v1/barber', BarberController);
   const server = app.listen(4601);
   const B = 'http://127.0.0.1:4601';
@@ -84,7 +84,12 @@ const ok = (n, c, x) => c ? (pass++, console.log('  PASS  ' + n)) : (fail++, con
   ok('success returns to the client\'s own booking link', /\/@crispincuts\?b=.*&t=.*&paid=1$/.test(s1.success_url), s1.success_url);
 
   console.log('\n— connect, then bill —');
-  r = await req('POST', '/api/v1/barber/login', { handle: 'crispincuts', passcode: 'clippers-2026' });
+  const bcrypt = require('bcryptjs');
+  const User = require('../models/User');
+  const barberUser = await User.create({ email: 'crispin@admin.com', passwordHash: await bcrypt.hash('Barber2026!', 10), role: 'barber', firstName: 'Crispin' });
+  const shopDoc = await BarberShop.findOne({ handle: 'crispincuts' });
+  shopDoc.ownerUserId = barberUser._id; await shopDoc.save();
+  r = await req('POST', '/api/v1/auth/login', { email: 'crispin@admin.com', password: 'Barber2026!' });
   const bt = r.json.token;
   r = await req('GET', '/api/v1/barber/admin/connect', null, bt);
   ok('no account yet reads as none', r.json.state === 'none', r.json);
@@ -126,8 +131,8 @@ const ok = (n, c, x) => c ? (pass++, console.log('  PASS  ' + n)) : (fail++, con
   r = await req('GET', '/api/v1/barber/admin/earnings?days=30', null, bt);
   ok('the barber sees gross, fee and net', r.json.grossCents === 6000 && r.json.platformFeeCents === 300 && r.json.netCents === 5700, r.json);
 
-  process.env.PLATFORM_PASSCODE = 'owner-9';
-  r = await req('POST', '/api/v1/barber/platform/login', { passcode: 'owner-9' });
+  await User.create({ email: 'owner@example.com', passwordHash: await bcrypt.hash('owner-pass-9', 10), role: 'admin', firstName: 'Owner' });
+  r = await req('POST', '/api/v1/auth/login', { email: 'owner@example.com', password: 'owner-pass-9' });
   const pt = r.json.token;
   r = await req('GET', '/api/v1/barber/platform/shops?days=30', null, pt);
   ok('the owner sees the same money', r.json.totals.grossCents === 6000 && r.json.totals.platformFeeCents === 300, r.json.totals);

@@ -46,8 +46,11 @@ const barberShopSchema = new mongoose.Schema({
   address: { type: String, default: '' },
   phone: { type: String, default: '' },
   barberEmail: { type: String, default: '' },              // where the day sheet lands
-  passcodeHash: { type: String, default: '' },             // bcrypt; how the barber signs in
-  ownerUserId: { type: mongoose.Schema.Types.ObjectId, default: null },
+
+  // Who runs this shop. A normal account on this platform with role 'barber' —
+  // the shop has no login of its own, because a second password store is a
+  // second thing to reset, leak and forget.
+  ownerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
 
   // Connect + the platform's cut. bps so 5% is 500 and nobody stores 0.05 as a
   // float. Capped on write, not just in the UI — a 100% take rate is a bug
@@ -96,15 +99,12 @@ barberShopSchema.statics.load = async function (handle) {
   let shop = await this.findOne({ handle: h });
   if (shop) return shop;
   try {
-    // A seed passcode is only honoured while the shop has none. Once the barber
-    // has set their own, changing the environment variable cannot take the
-    // account back off them.
-    const seedPass = String(process.env.BARBER_PASSCODE || '').trim();
+    // Seeded with no owner: an admin assigns one from the platform panel. A
+    // shop nobody owns still shows its menu and still takes bookings.
     shop = await this.create({
       handle: h,
       barberEmail: process.env.BARBER_EMAIL || process.env.FROM_EMAIL || '',
       timezone: process.env.BARBER_TZ || 'America/New_York',
-      passcodeHash: seedPass ? require('bcryptjs').hashSync(seedPass, 10) : '',
       services: DEFAULT_SERVICES,
       hours: DEFAULT_HOURS
     });
@@ -122,7 +122,7 @@ barberShopSchema.methods.feeOn = function (amountCents) {
   return Math.min(amt, Math.round(amt * bps / 10000));
 };
 
-/** What the page and the panel are allowed to know. Never the passcode hash. */
+/** What the page and the panel are allowed to know. */
 barberShopSchema.methods.toPublic = function () {
   return {
     handle: this.handle,

@@ -9,8 +9,6 @@
  * Run: node tests/barberBooking.e2e.js
  */
 process.env.JWT_SECRET = 'test-secret';
-process.env.BARBER_PASSCODE = 'clippers-2026';
-process.env.PLATFORM_PASSCODE = 'owner-passcode-9';
 process.env.BARBER_PLATFORM_FEE_BPS = '500';
 process.env.PUBLIC_API_URL = 'http://127.0.0.1:4599';
 process.env.BOOKING_SITE_URL = 'http://127.0.0.1:4599';
@@ -34,6 +32,7 @@ function ok(name, cond, extra) {
 
   const app = express();
   app.use(express.json());
+  app.use('/api/v1/auth', require(ROOT + '/controllers/AuthController'));
   app.use('/api/v1/barber', require(ROOT + '/controllers/BarberController'));
   app.use('/book', express.static(path.join(ROOT, 'public/barber'), { extensions: ['html'] }));
   app.get(/^\/@([A-Za-z0-9_.-]{2,30})$/, (req, res) => res.sendFile(path.join(ROOT, 'public/barber/book.html')));
@@ -50,6 +49,18 @@ function ok(name, cond, extra) {
     let json = null; try { json = JSON.parse(text); } catch (e) {}
     return { status: r.status, json, text };
   }
+
+  // The two accounts this platform actually has: a barber and an admin.
+  const bcrypt = require('bcryptjs');
+  const User = require(ROOT + '/models/User');
+  const BarberShop = require(ROOT + '/models/BarberShop');
+  const barberUser = await User.create({ email: 'crispin@admin.com', passwordHash: await bcrypt.hash('Barber2026!', 10), role: 'barber', firstName: 'Crispin' });
+  await User.create({ email: 'owner@example.com', passwordHash: await bcrypt.hash('owner-passcode-9', 10), role: 'admin', firstName: 'Owner' });
+  const strangerTok = await (async () => {
+    await User.create({ email: 'stranger@example.com', passwordHash: await bcrypt.hash('stranger-pass-1', 10), role: 'user', firstName: 'Stranger' });
+    const r = await fetch(B + '/api/v1/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email:'stranger@example.com', password:'stranger-pass-1' }) });
+    return (await r.json()).token;
+  })();
 
   console.log('— public booking —');
   let r = await req('GET', '/api/v1/barber/health');
@@ -105,24 +116,40 @@ function ok(name, cond, extra) {
   ok('a wrong token reads nothing', r.status === 404);
 
   console.log('\n— the barber —');
-  r = await req('POST', '/api/v1/barber/login', { handle: 'crispincuts', passcode: 'wrong' });
-  ok('a wrong passcode is refused', r.status === 401);
-  r = await req('POST', '/api/v1/barber/login', { handle: 'crispincuts', passcode: 'clippers-2026' });
-  ok('the seed passcode signs the barber in', r.status === 200 && !!r.json.token, r.json);
-  const bt = r.json.token;
+  r = await req('POST', '/api/v1/auth/login', { email: 'crispin@admin.com', password: 'wrong' });
+  ok('a wrong password is refused', r.status === 401);
+  r = await req('POST', '/api/v1/auth/login', { email: 'crispin@admin.com', password: 'Barber2026!' });
+  ok('the barber signs in with their ordinary account', r.status === 200 && !!r.json.token, r.json);
+  let bt = r.json.token;
+
+  r = await req('GET', '/api/v1/barber/admin/me', null, bt);
+  ok('an account with no shop attached gets nothing', r.status === 403, r.json);
+
+  // Attach the shop, the way the platform panel does.
+  const shopDoc = await BarberShop.findOne({ handle: 'crispincuts' });
+  shopDoc.ownerUserId = barberUser._id; await shopDoc.save();
+
+  r = await req('GET', '/api/v1/barber/admin/me', null, strangerTok);
+  ok('an ordinary member cannot open the panel', r.status === 403, r.json);
 
   r = await req('GET', '/api/v1/barber/admin/me', null, bt);
   ok('the panel loads the shop', r.status === 200 && r.json.shop.handle === 'crispincuts' && r.json.isPlatform === false);
+  ok('the panel knows which account is signed in', r.json.account && r.json.account.email === 'crispin@admin.com', r.json.account);
   ok('the panel is told the booking link', r.json.bookingUrl === 'http://127.0.0.1:4599/@crispincuts', r.json.bookingUrl);
 
   r = await req('GET', '/api/v1/barber/admin/me');
-  ok('no token, no panel', r.status === 401);
+  // verifyToken answers 403 for a missing header and 401 for a bad one; both
+  // are refusals, and the panel treats either as "sign in again".
+  ok('no token, no panel', r.status === 401 || r.status === 403, r.status);
+  r = await req('GET', '/api/v1/barber/admin/me', null, 'not-a-real-token');
+  ok('a forged token, no panel', r.status === 401, r.status);
 
   r = await req('GET', '/api/v1/barber/admin/bookings?days=14', null, bt);
   ok('the diary shows the booking with a readable time', r.json.bookings.length === 1 && /AM|PM/.test(r.json.bookings[0].time), r.json.bookings && r.json.bookings[0]);
 
   // 3am Tuesday — deliberately outside opening hours.
   const sched = require(ROOT + '/services/barberSchedule');
+  const oddTime2 = sched.zonedToUtc(sched.addDays(openDay.date, 3), 4 * 60, shop.timezone).toISOString();
   const oddTime = sched.zonedToUtc(sched.addDays(openDay.date, 1), 3 * 60, shop.timezone).toISOString();
   r = await req('POST', '/api/v1/barber/admin/bookings', {
     name: 'Marcus Bell', email: 'marcus@example.com', serviceId: svc.id, start: oddTime, notes: 'Early one'
@@ -157,20 +184,31 @@ function ok(name, cond, extra) {
   ok('earnings start at zero and show the rate', r.json.grossCents === 0 && r.json.feeBps === 500, r.json);
 
   console.log('\n— the platform owner —');
-  r = await req('POST', '/api/v1/barber/platform/login', { passcode: 'owner-passcode-9' });
-  ok('the owner signs in', r.status === 200 && !!r.json.token);
+  r = await req('POST', '/api/v1/auth/login', { email: 'owner@example.com', password: 'owner-passcode-9' });
+  ok('the owner signs in as an admin', r.status === 200 && !!r.json.token);
   const pt = r.json.token;
 
-  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'tonysfades', name: "Tony's Fades", barberEmail: 'tony@example.com', passcode: 'tony-passcode-1', platformFeeBps: 700 }, pt);
-  ok('the owner can add a barber', r.status === 200 && r.json.bookingUrl.endsWith('/@tonysfades'), r.json);
+  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'tonysfades', name: "Tony's Fades", barberEmail: 'tony@example.com', password: 'tony-passcode-1', platformFeeBps: 700 }, pt);
+  ok('adding a barber creates their account too', r.status === 200 && r.json.accountCreated === true && r.json.bookingUrl.endsWith('/@tonysfades'), r.json);
 
-  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'tonysfades', passcode: 'another-one-8' }, pt);
+  r = await req('POST', '/api/v1/auth/login', { email: 'tony@example.com', password: 'tony-passcode-1' });
+  ok('the new barber can sign in immediately', r.status === 200 && !!r.json.token, r.json);
+  const tonyTok = r.json.token;
+  r = await req('GET', '/api/v1/barber/admin/me', null, tonyTok);
+  ok('and lands in their own shop', r.status === 200 && r.json.shop.handle === 'tonysfades', r.json.shop && r.json.shop.handle);
+
+  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'tonysfades', barberEmail: 'x@example.com', password: 'another-one-8' }, pt);
   ok('a taken handle is refused', r.status === 409);
-  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'a b!', passcode: 'another-one-8' }, pt);
+  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'a b!', barberEmail: 'x@example.com', password: 'another-one-8' }, pt);
   ok('a malformed handle is refused', r.status === 400);
+  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'noemail', password: 'another-one-8' }, pt);
+  ok('a shop without an owner email is refused', r.status === 400, r.json);
+  r = await req('POST', '/api/v1/barber/platform/shops', { handle: 'secondshop', barberEmail: 'tony@example.com', password: 'x' }, pt);
+  ok('one account cannot run two shops', r.status === 409, r.json);
 
   r = await req('GET', '/api/v1/barber/platform/shops?days=30', null, pt);
   ok('the owner sees every shop and the totals', r.status === 200 && r.json.shops.length === 2 && r.json.totals, r.json && r.json.error);
+  ok('and who runs each one', r.json.shops.every(x => !!x.ownerEmail), r.json.shops.map(x => x.ownerEmail));
 
   r = await req('PUT', '/api/v1/barber/platform/shops/crispincuts', { platformFeeBps: 850 }, pt);
   ok('the take rate is adjustable', r.status === 200 && r.json.platformFeeBps === 850, r.json);
@@ -182,10 +220,14 @@ function ok(name, cond, extra) {
 
   r = await req('GET', '/api/v1/barber/platform/shops', null, bt);
   ok('a barber cannot see the platform', r.status === 403);
+  r = await req('PUT', '/api/v1/barber/platform/shops/tonysfades', { platformFeeBps: 0 }, bt);
+  ok('nor set their own take rate', r.status === 403);
 
   console.log('\n— tenant isolation —');
   r = await req('GET', '/api/v1/barber/admin/me?handle=tonysfades', null, bt);
   ok("a barber's token ignores another shop's handle", r.status === 200 && r.json.shop.handle === 'crispincuts', r.json.shop && r.json.shop.handle);
+  r = await req('POST', '/api/v1/barber/admin/bookings?handle=tonysfades', { name:'X', email:'x@example.com', serviceId: svc.id, start: oddTime2 }, bt);
+  ok("nor can a barber write into another shop's diary", r.status !== 200 || r.json.booking, r.json);
   r = await req('GET', '/api/v1/barber/admin/me?handle=tonysfades', null, pt);
   ok('the owner may act on a named shop', r.status === 200 && r.json.shop.handle === 'tonysfades' && r.json.isPlatform === true);
   r = await req('POST', `/api/v1/barber/admin/bookings/${booking.id}/cancel`, { handle: 'tonysfades' }, pt);

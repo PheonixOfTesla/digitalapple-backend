@@ -160,21 +160,17 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
     </div>
     <div class="stripes"></div>
     <form id="loginForm">
-      <div class="tabsmall" role="tablist">
-        <button type="button" id="tabBarber" role="tab" aria-selected="true">Barber</button>
-        <button type="button" id="tabPlatform" role="tab" aria-selected="false">Platform owner</button>
-      </div>
       <div id="loginErr" class="err hide"></div>
-      <div class="field" id="handleField">
-        <label for="l_handle">Your @ handle</label>
-        <input id="l_handle" value="crispincuts" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="field">
+        <label for="l_email">Email</label>
+        <input id="l_email" type="email" autocomplete="username" required autocapitalize="off" spellcheck="false">
       </div>
       <div class="field">
-        <label for="l_pass">Passcode</label>
+        <label for="l_pass">Password</label>
         <input id="l_pass" type="password" autocomplete="current-password" required>
       </div>
       <button class="go full" id="loginBtn" type="submit">Sign in</button>
-      <p class="muted" style="margin:16px 0 0">Your booking page stays open to the public at <code id="pubHint">/@crispincuts</code>. This panel is only for you.</p>
+      <p class="muted" style="margin:16px 0 0">The same account you use everywhere else here. Your booking page stays open to the public at <code id="pubHint">/@crispincuts</code> — this panel is only for you.</p>
     </form>
   </section>
 
@@ -277,6 +273,28 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
         <div id="hoursBox"></div>
       </div>
       <div class="card">
+        <h2>Your account</h2>
+        <p class="sub">How you sign in. This is the platform account, separate from the address your booking alerts go to — though they can be the same.</p>
+        <div id="acctMsg"></div>
+        <form id="emailForm">
+          <div class="two">
+            <div class="field">
+              <label for="a_current">Signed in as</label>
+              <input id="a_current" disabled>
+            </div>
+            <div class="field">
+              <label for="a_newemail">Change it to</label>
+              <input id="a_newemail" type="email" maxlength="160" placeholder="you@yourshop.com" autocomplete="email">
+            </div>
+          </div>
+          <div class="rowacts">
+            <button class="go" type="submit">Change my sign-in email</button>
+            <button class="ghost" type="button" id="resetPass">Email me a password reset</button>
+          </div>
+          <p class="muted" style="margin:14px 0 0">Changing your email sends a confirmation to the new address — the change only takes effect once you click it, so a typo cannot lock you out.</p>
+        </form>
+      </div>
+      <div class="card">
         <h2>Shop details</h2>
         <form id="shopForm">
           <div class="two">
@@ -305,16 +323,6 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
             <div class="field"><label for="p_deposit">Deposit to hold a slot ($, 0 = none)</label><input id="p_deposit" type="number" min="0" step="1"></div>
           </div>
           <button class="go" type="submit">Save the shop</button>
-        </form>
-      </div>
-      <div class="card">
-        <h2>Passcode</h2>
-        <form id="passForm">
-          <div class="two">
-            <div class="field" id="curPassField"><label for="c_cur">Current passcode</label><input id="c_cur" type="password" autocomplete="current-password"></div>
-            <div class="field"><label for="c_new">New passcode (8+ characters)</label><input id="c_new" type="password" autocomplete="new-password" required minlength="8"></div>
-          </div>
-          <button class="go" type="submit">Change it</button>
         </form>
       </div>
     </div>
@@ -351,10 +359,11 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
             <div class="field"><label for="a_name">Shop name</label><input id="a_name" maxlength="80" placeholder="Tony's Fades"></div>
           </div>
           <div class="three">
-            <div class="field"><label for="a_email">Barber email</label><input id="a_email" type="email" maxlength="160"></div>
-            <div class="field"><label for="a_pass">Their passcode (8+)</label><input id="a_pass" required minlength="8"></div>
+            <div class="field"><label for="a_email">Their email — this is their sign-in</label><input id="a_email" type="email" required maxlength="160"></div>
+            <div class="field"><label for="a_password">Password (new accounts only)</label><input id="a_password" type="password" minlength="8" autocomplete="new-password"></div>
             <div class="field"><label for="a_fee">Your cut (bps)</label><input id="a_fee" type="number" min="0" max="3000" step="25" value="500"></div>
           </div>
+          <p class="muted" style="margin:0 0 16px">If that email already has an account here it is promoted to a barber and the password is ignored. Otherwise an account is created with the password you set, and they can change it the normal way.</p>
           <button class="go" type="submit">Create the shop</button>
         </form>
       </div>
@@ -368,7 +377,10 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
   // Same origin when the backend serves this page; an absolute host when the
   // marketing site does. One file, one line of difference between the copies.
   var API = ((document.querySelector('meta[name="barber-api"]') || {}).content || '')
-    .replace(/\/+$/, '') + '/api/v1/barber';
+    .replace(/\/+$/, '');
+  var AUTH = API + '/api/v1/auth';
+  var USER = API + '/api/v1/user';
+  API = API + '/api/v1/barber';
   var KEY = 'crispin.admin.token';
   var token = null, mode = 'barber', me = null, shop = null, platformShops = [];
 
@@ -411,31 +423,22 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
   }
 
   /* ── Sign in ───────────────────────────────────────────────────────── */
-  $('tabBarber').addEventListener('click', function(){ setMode('barber'); });
-  $('tabPlatform').addEventListener('click', function(){ setMode('platform'); });
-  function setMode(m){
-    mode = m;
-    $('tabBarber').setAttribute('aria-selected', m==='barber');
-    $('tabPlatform').setAttribute('aria-selected', m==='platform');
-    show($('handleField'), m === 'barber');
-  }
-  $('l_handle').addEventListener('input', function(){
-    $('pubHint').textContent = '/@' + this.value.replace(/^@/,'').toLowerCase();
-  });
-
+  // Ordinary accounts, ordinary login. The role in the token decides what this
+  // panel shows: a barber gets their shop, an admin gets the platform too.
   $('loginForm').addEventListener('submit', function(ev){
     ev.preventDefault();
     var btn = $('loginBtn'); btn.disabled = true; btn.textContent = 'Signing in…';
     show($('loginErr'), false);
-    var path = mode === 'platform' ? '/platform/login' : '/login';
-    var body = mode === 'platform'
-      ? { passcode: $('l_pass').value }
-      : { handle: $('l_handle').value, passcode: $('l_pass').value };
-    api(path, { method:'POST', body: JSON.stringify(body) })
+    fetch(AUTH + '/login', {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ email: $('l_email').value, password: $('l_pass').value })
+    }).then(function(r){ return r.json().then(function(j){ if (!r.ok) throw new Error(j.error || 'Could not sign in'); return j; }); })
       .then(function(j){
         token = j.token;
         try { sessionStorage.setItem(KEY, token); } catch(e){}
-        start(mode === 'platform' ? ($('l_handle').value || 'crispincuts') : j.handle);
+        // An admin has to say which shop; a barber's own shop is found for them.
+        var isAdmin = j.user && (j.user.isAdmin || j.user.role === 'admin');
+        start(isAdmin ? (new URLSearchParams(location.search).get('handle') || 'crispincuts') : null);
       })
       .catch(function(e){
         btn.disabled = false; btn.textContent = 'Sign in';
@@ -451,17 +454,19 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
   $('signout').addEventListener('click', signOut);
 
   /* ── Boot the panel ────────────────────────────────────────────────── */
-  var scopeHandle = 'crispincuts';
+  var scopeHandle = null;
   function q(path){
-    // A platform token has to name the shop it is acting on; a barber token
-    // carries its own and ignores this.
+    // An admin has to name the shop they are acting on. A barber's shop is
+    // found from their account, so there is nothing to append — and nothing
+    // they could append that would reach somebody else's diary.
+    if (!scopeHandle) return path;
     return path + (path.indexOf('?') === -1 ? '?' : '&') + 'handle=' + encodeURIComponent(scopeHandle);
   }
 
   function start(handle){
-    scopeHandle = String(handle || 'crispincuts').replace(/^@/,'').toLowerCase();
+    scopeHandle = handle ? String(handle).replace(/^@/,'').toLowerCase() : null;
     api(q('/admin/me')).then(function(j){
-      me = j; shop = j.shop;
+      me = j; shop = j.shop; scopeHandle = j.isPlatform ? shop.handle : null;
       show($('signin'), false); show($('panel'), true);
       $('shopTitle').textContent = shop.name;
       $('railName').textContent = shop.name;
@@ -480,7 +485,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
           $('p_email').scrollIntoView({ behavior:'smooth', block:'center' });
         });
       }
-      fillShopForm(); fillHours(); fillMenu(); fillServiceSelect();
+      fillAccount(); fillShopForm(); fillHours(); fillMenu(); fillServiceSelect();
       loadDiary(); loadEarnings(); loadConnect();
       if (j.isPlatform) loadPlatform();
     }).catch(function(e){
@@ -542,7 +547,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
           if (act === 'bill') return bill(id, btn);
           if (act === 'cancel' && !confirm('Cancel this appointment and email the client?')) return;
           btn.disabled = true;
-          api(q('/admin/bookings/'+id+'/'+(act==='done'?'complete':'cancel')), { method:'POST', body: JSON.stringify({ handle: scopeHandle }) })
+          api(q('/admin/bookings/'+id+'/'+(act==='done'?'complete':'cancel')), { method:'POST', body: JSON.stringify(scopeHandle ? { handle: scopeHandle } : {}) })
             .then(function(){ loadDiary(); loadEarnings(); })
             .catch(function(e){ btn.disabled = false; flash(e.message, true); });
         });
@@ -557,7 +562,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
     var amountCents = Math.round(parseFloat(v) * 100);
     if (!(amountCents >= 50)) return flash('Bill at least $0.50', true);
     btn.disabled = true; btn.textContent = 'Sending…';
-    api(q('/admin/bookings/'+id+'/bill'), { method:'POST', body: JSON.stringify({ handle: scopeHandle, amountCents: amountCents }) })
+    api(q('/admin/bookings/'+id+'/bill'), { method:'POST', body: JSON.stringify({ handle: scopeHandle || undefined, amountCents: amountCents }) })
       .then(function(j){
         flash('Bill for ' + usd(j.amountCents) + ' emailed to ' + j.emailedTo + ' — you keep ' + usd(j.barberGetsCents) + ' after the ' + usd(j.platformFeeCents) + ' platform fee.');
         loadDiary();
@@ -601,7 +606,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
       var cb = $('connectBtn');
       if (cb) cb.addEventListener('click', function(){
         cb.disabled = true; cb.textContent = 'Opening Stripe…';
-        api(q('/admin/connect'), { method:'POST', body: JSON.stringify({ handle: scopeHandle }) })
+        api(q('/admin/connect'), { method:'POST', body: JSON.stringify(scopeHandle ? { handle: scopeHandle } : {}) })
           .then(function(j){ location.href = j.url; })
           .catch(function(e){ cb.disabled = false; cb.textContent = 'Try again'; flash(e.message, true); });
       });
@@ -623,7 +628,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
     ev.preventDefault();
     var btn = $('newBtn'); btn.disabled = true; btn.textContent = 'Booking…';
     var body = {
-      handle: scopeHandle,
+      handle: scopeHandle || undefined,
       name: $('n_name').value, email: $('n_email').value, phone: $('n_phone').value,
       serviceId: $('n_service').value,
       serviceName: $('n_svcname').value,
@@ -662,7 +667,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
         var tr = btn.closest('tr');
         btn.disabled = true; btn.textContent = 'Saving…';
         api(q('/admin/services/' + tr.dataset.id), { method:'PUT', body: JSON.stringify({
-          handle: scopeHandle,
+          handle: scopeHandle || undefined,
           name: tr.querySelector('.m_name').value,
           description: tr.querySelector('.m_desc').value,
           durationMin: tr.querySelector('.m_dur').value,
@@ -678,7 +683,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
   $('svcForm').addEventListener('submit', function(ev){
     ev.preventDefault();
     api(q('/admin/services'), { method:'POST', body: JSON.stringify({
-      handle: scopeHandle,
+      handle: scopeHandle || undefined,
       name: $('s_name').value, description: $('s_desc').value,
       durationMin: $('s_dur').value, priceCents: Math.round((parseFloat($('s_price').value)||0)*100)
     })}).then(function(){ $('svcForm').reset(); return api(q('/admin/me')); })
@@ -711,7 +716,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
         return { day: +r.dataset.day, open: mins(r.querySelector('.h_open').value),
                  close: mins(r.querySelector('.h_close').value), closed: r.querySelector('.h_closed').checked };
       });
-      api(q('/admin/shop'), { method:'PUT', body: JSON.stringify({ handle: scopeHandle, hours: rows }) })
+      api(q('/admin/shop'), { method:'PUT', body: JSON.stringify({ handle: scopeHandle || undefined, hours: rows }) })
         .then(function(){ flash('Hours saved.'); return refreshShop(); })
         .catch(function(e){ flash(e.message, true); });
     });
@@ -725,24 +730,50 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
     $('p_horizon').value = shop.horizonDays; $('p_deposit').value = (shop.depositCents||0)/100;
   }
 
+  function fillAccount(){
+    if (!me.account) return;
+    $('a_current').value = me.account.email;
+  }
+
+  $('emailForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var next = $('a_newemail').value.trim();
+    if (!next) return;
+    fetch(USER + '/profile/email', {
+      method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer ' + token },
+      body: JSON.stringify({ newEmail: next })
+    }).then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'Could not change it'); return j; }); })
+      .then(function(){
+        $('a_newemail').value = '';
+        $('acctMsg').innerHTML = '<div class="ok">Confirmation sent to ' + esc(next) + '. Click the link in it and that becomes your sign-in.</div>';
+      })
+      .catch(function(e){ $('acctMsg').innerHTML = '<div class="err">'+esc(e.message)+'</div>'; });
+  });
+
+  $('resetPass').addEventListener('click', function(){
+    var btn = $('resetPass'); btn.disabled = true; btn.textContent = 'Sending…';
+    fetch(AUTH + '/forgot-password', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ email: me.account ? me.account.email : '' })
+    }).then(function(){
+      btn.disabled = false; btn.textContent = 'Email me a password reset';
+      $('acctMsg').innerHTML = '<div class="ok">Reset link sent to ' + esc(me.account ? me.account.email : 'your inbox') + '. It expires in an hour.</div>';
+    }).catch(function(){
+      btn.disabled = false; btn.textContent = 'Email me a password reset';
+      $('acctMsg').innerHTML = '<div class="err">Could not send that just now.</div>';
+    });
+  });
+
   $('shopForm').addEventListener('submit', function(ev){
     ev.preventDefault();
     api(q('/admin/shop'), { method:'PUT', body: JSON.stringify({
-      handle: scopeHandle,
+      handle: scopeHandle || undefined,
       name: $('p_name').value, tagline: $('p_tagline').value, address: $('p_address').value,
       phone: $('p_phone').value, barberEmail: $('p_email').value, timezone: $('p_tz').value,
       slotStepMin: $('p_step').value, leadMinutes: $('p_lead').value, horizonDays: $('p_horizon').value,
       depositCents: Math.round((parseFloat($('p_deposit').value)||0)*100)
     })}).then(function(){ flash('Saved.'); return refreshShop(); })
       .then(function(){ $('shopTitle').textContent = shop.name; $('railName').textContent = shop.name; })
-      .catch(function(e){ flash(e.message, true); });
-  });
-
-  $('passForm').addEventListener('submit', function(ev){
-    ev.preventDefault();
-    api(q('/admin/passcode'), { method:'POST', body: JSON.stringify({
-      handle: scopeHandle, current: $('c_cur').value, next: $('c_new').value
-    })}).then(function(){ $('passForm').reset(); flash('Passcode changed.'); })
       .catch(function(e){ flash(e.message, true); });
   });
 
@@ -758,11 +789,13 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
         j.shops.map(function(s){
           return '<tr data-handle="'+esc(s.handle)+'">' +
             '<td><b>'+esc(s.name)+'</b><br><a href="'+esc(s.bookingUrl)+'" target="_blank" rel="noopener">@'+esc(s.handle)+'</a>' +
+              '<br><span class="muted">'+(s.ownerEmail?esc(s.ownerEmail):'<b style="color:var(--red)">no owner — nobody can sign in</b>')+'</span>' +
               '<br><span class="muted">'+(s.stripeConnected?'bank connected':'no bank yet')+(s.active?'':' &middot; paused')+'</span></td>' +
             '<td>'+usd(s.grossCents)+'<br><span class="muted">'+s.count+' paid</span></td>' +
             '<td>'+usd(s.platformFeeCents)+'</td>' +
             '<td><div class="feeinput"><input type="number" class="p_fee" min="0" max="3000" step="25" value="'+s.platformFeeBps+'"><span class="muted p_pct">'+pct(s.platformFeeBps)+'</span></div></td>' +
             '<td><div class="rowacts"><button class="ghost p_save">Save rate</button>' +
+              '<button class="ghost p_owner">'+(s.ownerEmail?'Change owner':'Assign owner')+'</button>' +
               '<button class="ghost p_open">Open shop</button>' +
               '<button class="ghost '+(s.active?'danger':'')+' p_toggle">'+(s.active?'Pause':'Resume')+'</button></div></td></tr>';
         }).join('') + '</tbody></table>';
@@ -781,6 +814,13 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
           api('/platform/shops/'+encodeURIComponent(h), { method:'PUT', body: JSON.stringify({ active: !row.active }) })
             .then(function(){ loadPlatform(); }).catch(function(e){ flash(e.message, true); });
         });
+        tr.querySelector('.p_owner').addEventListener('click', function(){
+          var email = prompt('Which account should run @' + h + '? (their email)');
+          if (!email) return;
+          api('/platform/shops/'+encodeURIComponent(h)+'/owner', { method:'PUT', body: JSON.stringify({ email: email }) })
+            .then(function(j){ flash('@'+h+' is now run by '+j.ownerEmail+'.'); loadPlatform(); })
+            .catch(function(e){ flash(e.message, true); });
+        });
         // "Open shop" re-scopes the whole panel onto that barber's diary.
         tr.querySelector('.p_open').addEventListener('click', function(){ start(h); });
       });
@@ -791,10 +831,11 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
     ev.preventDefault();
     api('/platform/shops', { method:'POST', body: JSON.stringify({
       handle: $('a_handle').value, name: $('a_name').value, barberEmail: $('a_email').value,
-      passcode: $('a_pass').value, platformFeeBps: $('a_fee').value
+      password: $('a_password').value, platformFeeBps: $('a_fee').value
     })}).then(function(j){
       $('shopAddForm').reset(); $('a_fee').value = 500;
-      flash('Created. Their booking page is ' + j.bookingUrl);
+      flash('Created. They sign in as ' + j.signInEmail + (j.accountCreated ? ' with the password you set' : ' with their existing password') +
+            '. Their booking page is ' + j.bookingUrl);
       loadPlatform();
     }).catch(function(e){ flash(e.message, true); });
   });

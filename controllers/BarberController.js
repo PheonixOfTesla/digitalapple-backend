@@ -6,12 +6,16 @@
  *   the public      knows a handle. Can see the menu, see free times, book one,
  *                   and manage the booking it made with the unguessable token
  *                   emailed to it. Nothing else.
- *   a barber        signs in with a passcode against their own shop. Owns their
- *                   diary, their menu, their hours, and can bill a client.
- *                   Scoped to one handle by the token itself, so there is no
- *                   request they can shape that reaches another shop's diary.
- *   the platform    sets the take rate and can see every shop. Either the
- *                   platform passcode or an existing admin JWT.
+ *   a barber        an ordinary account on this platform with role 'barber',
+ *                   signed in through /api/v1/auth/login like everyone else.
+ *                   The shop is found FROM their user id, never from anything
+ *                   they send, so there is no request they can shape that
+ *                   reaches another shop's diary.
+ *   the platform    an existing admin account. Sets the take rate, sees every
+ *                   shop, and can act on any one of them by naming it.
+ *
+ * There is deliberately no login of its own here. A second password store is a
+ * second thing to reset, leak and forget, and the accounts already exist.
  *
  * Money: one Stripe Checkout per bill. Where the barber has connected a Stripe
  * account, the charge is a destination charge — the barber is paid directly and
@@ -25,10 +29,10 @@
  * The client's browser is never believed about money.
  */
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const rateLimit = require('express-rate-limit');
 
+const { verifyToken } = require('../middleware/auth');
+const User = require('../models/User');
 const BarberShop = require('../models/BarberShop');
 const Booking = require('../models/Booking');
 const sched = require('../services/barberSchedule');
@@ -89,57 +93,46 @@ async function loadShop(req, res) {
 }
 
 /* ------------------------------------------------------------------ *
- * Auth
+ * Auth — the platform's own accounts, nothing new
  * ------------------------------------------------------------------ */
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 10,
-  message: { error: 'Too many attempts. Wait fifteen minutes.' },
-  standardHeaders: true, legacyHeaders: false
-});
-
-function sign(payload) { return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }); }
-
-function readToken(req) {
-  const h = req.headers['authorization'] || '';
-  const raw = h.startsWith('Bearer ') ? h.slice(7) : h;
-  if (!raw) return null;
-  try { return jwt.verify(raw, process.env.JWT_SECRET); } catch (e) { return null; }
-}
 
 /**
  * A signed-in barber, on their own shop and no other.
  *
- * The handle comes from the token, never from the request, which is what stops
- * `?handle=someoneelse` from being an attack. The platform owner and any
- * existing site admin may act on a named shop — that is the whole point of
- * running the platform — but they have to name it.
+ * The shop is looked up FROM the user id in the verified token. Nothing in the
+ * request chooses it, which is what makes `?handle=someoneelse` a no-op rather
+ * than an attack. An admin runs the platform and may act on a shop, but has to
+ * name it.
  */
-function barberAuth(req, res, next) {
-  const t = readToken(req);
-  if (!t) return res.status(401).json({ error: 'Sign in again' });
-
-  if (t.kind === 'barber' && t.handle) {
-    req.shopHandle = normHandle(t.handle);
-    req.isPlatform = false;
-    return next();
-  }
-  if (t.kind === 'platform' || t.role === 'admin') {
-    const asked = normHandle(req.query.handle || (req.body && req.body.handle) || req.params.handle);
-    if (!asked) return res.status(400).json({ error: 'Name a shop' });
-    req.shopHandle = asked;
-    req.isPlatform = true;
-    return next();
-  }
-  return res.status(403).json({ error: 'Not allowed' });
+async function barberAuth(req, res, next) {
+  verifyToken(req, res, async () => {
+    try {
+      if (req.userRole === 'admin') {
+        const asked = normHandle(req.query.handle || (req.body && req.body.handle) || req.params.handle);
+        if (!asked) return res.status(400).json({ error: 'Name a shop' });
+        req.shopHandle = asked;
+        req.isPlatform = true;
+        return next();
+      }
+      const shop = await BarberShop.findOne({ ownerUserId: req.userId }).select('handle').lean();
+      if (!shop) return res.status(403).json({ error: 'No shop is attached to this account' });
+      req.shopHandle = shop.handle;
+      req.isPlatform = false;
+      return next();
+    } catch (e) {
+      console.error('[barber] auth:', e.message);
+      return res.status(500).json({ error: 'Could not check your account' });
+    }
+  });
 }
 
 /** The platform owner: the take rate, and the list of every shop. */
 function platformAuth(req, res, next) {
-  const t = readToken(req);
-  if (!t) return res.status(401).json({ error: 'Sign in again' });
-  if (t.kind === 'platform' || t.role === 'admin') { req.isPlatform = true; return next(); }
-  return res.status(403).json({ error: 'Platform owner only' });
+  verifyToken(req, res, () => {
+    if (req.userRole !== 'admin') return res.status(403).json({ error: 'Platform owner only' });
+    req.isPlatform = true;
+    next();
+  });
 }
 
 /** The shop this request is scoped to, already authorised. */
@@ -148,51 +141,6 @@ async function authedShop(req, res) {
   if (!shop) { res.status(404).json({ error: 'Shop not found' }); return null; }
   return shop;
 }
-
-/**
- * POST /barber/login { handle, passcode }
- *
- * A shop with no passcode set yet accepts the seed one from the environment and
- * adopts it, so a fresh deploy is reachable without a console. After that the
- * stored hash is the only key.
- */
-router.post('/login', loginLimiter, async (req, res) => {
-  try {
-    const handle = normHandle(req.body.handle) || BarberShop.HANDLE;
-    const passcode = String(req.body.passcode || '');
-    if (!passcode) return res.status(400).json({ error: 'Passcode required' });
-
-    const shop = await BarberShop.load(handle);
-    if (!shop) return res.status(404).json({ error: 'No shop at @' + handle });
-
-    let ok = false;
-    if (shop.passcodeHash) {
-      ok = await bcrypt.compare(passcode, shop.passcodeHash);
-    } else {
-      const seed = String(process.env.BARBER_PASSCODE || '').trim();
-      if (seed && passcode === seed) {
-        shop.passcodeHash = await bcrypt.hash(passcode, 10);
-        shop.updatedAt = new Date();
-        await shop.save();
-        ok = true;
-      }
-    }
-    if (!ok) return res.status(401).json({ error: 'Wrong passcode' });
-
-    res.json({ success: true, token: sign({ kind: 'barber', handle: shop.handle }), handle: shop.handle, name: shop.name });
-  } catch (e) {
-    console.error('[barber] login:', e.message);
-    res.status(500).json({ error: 'Could not sign in' });
-  }
-});
-
-/** POST /barber/platform/login { passcode } — the owner's way in. */
-router.post('/platform/login', loginLimiter, async (req, res) => {
-  const expected = String(process.env.PLATFORM_PASSCODE || '').trim();
-  if (!expected) return res.status(503).json({ error: 'Platform login is not configured' });
-  if (String(req.body.passcode || '') !== expected) return res.status(401).json({ error: 'Wrong passcode' });
-  res.json({ success: true, token: sign({ kind: 'platform' }), platform: true });
-});
 
 /* ------------------------------------------------------------------ *
  * Public — the @handle booking page
@@ -540,14 +488,19 @@ async function fulfillPayment(session, stripeEventId) {
 router.get('/admin/me', barberAuth, async (req, res) => {
   try {
     const shop = await authedShop(req, res); if (!shop) return;
+    // The account behind the session, so the panel can show what address the
+    // sign-in and the reset emails actually go to.
+    const account = await User.findById(req.userId).select('email role firstName').lean();
     res.json({
       success: true,
       isPlatform: !!req.isPlatform,
+      account: account ? { email: account.email, role: account.role, firstName: account.firstName || '' } : null,
       shop: Object.assign(shop.toPublic(), {
         barberEmail: shop.barberEmail,
         closures: shop.closures,
         platformFeeBps: shop.platformFeeBps,
         stripeConnected: !!shop.stripeAccountId,
+        hasOwner: !!shop.ownerUserId,
         // Inactive services are hidden from clients but the barber has to see
         // them to turn one back on.
         allServices: (shop.services || []).map(s => ({
@@ -829,27 +782,6 @@ router.post('/admin/bookings/:id/complete', barberAuth, async (req, res) => {
   }
 });
 
-/** POST /barber/admin/passcode { current, next } */
-router.post('/admin/passcode', barberAuth, async (req, res) => {
-  try {
-    const shop = await authedShop(req, res); if (!shop) return;
-    const next = String(req.body.next || '');
-    if (next.length < 8) return res.status(400).json({ error: 'Use at least eight characters' });
-    // The platform owner can reset a locked-out barber; the barber has to know
-    // the current one.
-    if (!req.isPlatform && shop.passcodeHash) {
-      const ok = await bcrypt.compare(String(req.body.current || ''), shop.passcodeHash);
-      if (!ok) return res.status(401).json({ error: 'Current passcode is wrong' });
-    }
-    shop.passcodeHash = await bcrypt.hash(next, 10);
-    shop.updatedAt = new Date();
-    await shop.save();
-    res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: 'Could not change the passcode' });
-  }
-});
-
 /**
  * Money in, by day, with the platform's cut broken out — the same numbers the
  * platform sees, shown to the barber, because a take rate nobody can see is a
@@ -943,6 +875,11 @@ router.get('/platform/shops', platformAuth, async (req, res) => {
   try {
     const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 30));
     const shops = await BarberShop.find().sort({ createdAt: 1 });
+    const owners = await User.find({ _id: { $in: shops.map(s => s.ownerUserId).filter(Boolean) } })
+      .select('email').lean();
+    const ownerById = {};
+    for (const o of owners) ownerById[String(o._id)] = o.email;
+
     const out = [];
     let grossAll = 0, feesAll = 0;
     for (const shop of shops) {
@@ -950,9 +887,13 @@ router.get('/platform/shops', platformAuth, async (req, res) => {
       grossAll += e.grossCents; feesAll += e.platformFeeCents;
       out.push({
         handle: shop.handle, name: shop.name, active: shop.active,
+        // A shop with no owner cannot be signed into — the panel says so, and
+        // says it where the fix is.
+        ownerEmail: ownerById[String(shop.ownerUserId)] || null,
         barberEmail: shop.barberEmail, timezone: shop.timezone,
         platformFeeBps: shop.platformFeeBps,
         stripeConnected: !!shop.stripeAccountId,
+        hasOwner: !!shop.ownerUserId,
         bookingUrl: shopUrl(shop.handle),
         ...e
       });
@@ -988,7 +929,15 @@ router.put('/platform/shops/:handle', platformAuth, async (req, res) => {
   }
 });
 
-/** POST /barber/platform/shops — put another barber on the platform. */
+/**
+ * POST /barber/platform/shops — put another barber on the platform.
+ *
+ * The shop needs an owner, and an owner is an account. Given an email that
+ * already has one, that account is promoted to 'barber' and linked; given a new
+ * one, an account is created with the password the owner sets. Either way the
+ * barber signs in at the same place as everybody else, and there is no
+ * shop-shaped credential anywhere in the system.
+ */
 router.post('/platform/shops', platformAuth, async (req, res) => {
   try {
     const b = req.body || {};
@@ -997,27 +946,83 @@ router.post('/platform/shops', platformAuth, async (req, res) => {
       return res.status(400).json({ error: 'Handles are 3–30 characters: letters, numbers, dot, dash, underscore' });
     }
     if (await BarberShop.findOne({ handle })) return res.status(409).json({ error: '@' + handle + ' is taken' });
-    const passcode = String(b.passcode || '');
-    if (passcode.length < 8) return res.status(400).json({ error: 'Give them a passcode of at least eight characters' });
+
     const email = clean(b.barberEmail, 160).toLowerCase();
-    if (email && !isEmail(email)) return res.status(400).json({ error: 'That email address is not valid' });
+    if (!isEmail(email)) return res.status(400).json({ error: 'The barber needs an email address to sign in with' });
+
+    let user = await User.findOne({ email });
+    let created = false;
+    if (user) {
+      // An existing member becomes a barber. An admin is left alone: demoting
+      // the person running the platform because they also cut hair would lock
+      // them out of the platform panel.
+      if (user.role === 'user') { user.role = 'barber'; await user.save(); }
+    } else {
+      const password = String(b.password || '');
+      if (password.length < 8) return res.status(400).json({ error: 'Set them a password of at least eight characters' });
+      user = await User.create({
+        email,
+        passwordHash: await bcrypt.hash(password, 10),
+        role: 'barber',
+        firstName: clean(b.name, 50) || 'Barber'
+      });
+      created = true;
+    }
+
+    if (await BarberShop.findOne({ ownerUserId: user._id })) {
+      return res.status(409).json({ error: 'That account already runs a shop' });
+    }
 
     const shop = await BarberShop.create({
       handle,
       name: clean(b.name, 80) || ('@' + handle),
       barberEmail: email,
+      ownerUserId: user._id,
       timezone: clean(b.timezone, 60) || 'America/New_York',
-      passcodeHash: await bcrypt.hash(passcode, 10),
       platformFeeBps: b.platformFeeBps != null
         ? Math.min(3000, Math.max(0, parseInt(b.platformFeeBps, 10) || 0))
         : Number(process.env.BARBER_PLATFORM_FEE_BPS || 500),
       services: BarberShop.DEFAULT_SERVICES,
       hours: BarberShop.DEFAULT_HOURS
     });
-    res.json({ success: true, handle: shop.handle, bookingUrl: shopUrl(shop.handle) });
+    res.json({
+      success: true, handle: shop.handle, bookingUrl: shopUrl(shop.handle),
+      accountCreated: created, signInEmail: email
+    });
   } catch (e) {
+    if (e.code === 11000) return res.status(409).json({ error: 'That handle or email is already taken' });
     console.error('[barber] create shop:', e.message);
     res.status(500).json({ error: 'Could not create that shop' });
+  }
+});
+
+/**
+ * PUT /barber/platform/shops/:handle/owner { email }
+ * Hand a shop to an account — how the seeded shop gets its barber, and how a
+ * shop changes hands without anybody editing the database by hand.
+ */
+router.put('/platform/shops/:handle/owner', platformAuth, async (req, res) => {
+  try {
+    const shop = await BarberShop.findOne({ handle: normHandle(req.params.handle) });
+    if (!shop) return res.status(404).json({ error: 'No such shop' });
+    const email = clean(req.body.email, 160).toLowerCase();
+    if (!isEmail(email)) return res.status(400).json({ error: 'That email address is not valid' });
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: 'No account with that email — create the shop with a password instead' });
+
+    const other = await BarberShop.findOne({ ownerUserId: user._id, handle: { $ne: shop.handle } });
+    if (other) return res.status(409).json({ error: 'That account already runs @' + other.handle });
+
+    if (user.role === 'user') { user.role = 'barber'; await user.save(); }
+    shop.ownerUserId = user._id;
+    if (!shop.barberEmail) shop.barberEmail = email;
+    shop.updatedAt = new Date();
+    await shop.save();
+    res.json({ success: true, handle: shop.handle, ownerEmail: email });
+  } catch (e) {
+    console.error('[barber] set owner:', e.message);
+    res.status(500).json({ error: 'Could not hand over that shop' });
   }
 });
 
@@ -1030,8 +1035,6 @@ router.get('/health', async (req, res) => {
     stripe: !!process.env.STRIPE_SECRET_KEY,
     stripeWebhook: !!process.env.STRIPE_WEBHOOK_SECRET,
     email: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS),
-    platformLogin: !!process.env.PLATFORM_PASSCODE,
-    seedPasscode: !!process.env.BARBER_PASSCODE,
     defaultHandle: BarberShop.HANDLE,
     feeBps: Number(process.env.BARBER_PLATFORM_FEE_BPS || 500),
     shops

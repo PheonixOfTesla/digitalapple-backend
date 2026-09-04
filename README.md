@@ -15,5 +15,11 @@ receives the payment and the platform keeps `platformFeeBps` as an application
 fee. The rate is per shop and adjustable by the platform owner. Payment state is
 written only by the verified Stripe webhook (`/api/v1/tokens/webhook`).
 
+Barbers and the platform owner sign in with ordinary accounts on this platform
+— roles `barber` and `admin` — through `/api/v1/auth/login`. There is no
+shop-specific credential: a barber resets their password and changes their
+sign-in email the same way every other member does. `scripts/seedBarber.js`
+attaches the first shop to an account; after that the platform panel does it.
+
 Environment: see the barber block in `.env.example`.
 Tests: `npm run test:barber` (unit + two end-to-end suites, 92 checks).
