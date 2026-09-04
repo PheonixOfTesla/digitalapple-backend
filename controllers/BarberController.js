@@ -970,8 +970,25 @@ router.post('/admin/connect', barberAuth, async (req, res) => {
     });
     res.json({ success: true, url: link.url });
   } catch (e) {
-    console.error('[barber] connect:', e.message);
-    res.status(500).json({ error: 'Could not start payout setup' });
+    // "Could not start payout setup" with nothing after it is a dead end: the
+    // barber cannot act on it and nobody outside the server logs can diagnose
+    // it. Stripe's own message is safe to pass on here — it describes the
+    // PLATFORM's configuration, contains no key material and no customer data,
+    // and it is the difference between a support ticket and a fix.
+    console.error('[barber] connect:', e.type || '', e.code || '', e.message);
+    const msg = String(e.message || '');
+    const reason =
+      /Connect/i.test(msg) && /sign up|enable|platform/i.test(msg) ? 'connect_not_enabled'
+      : e.type === 'StripeAuthenticationError' ? 'stripe_key'
+      : e.type === 'StripePermissionError' ? 'stripe_permission'
+      : e.type === 'StripeInvalidRequestError' ? 'stripe_request'
+      : 'unknown';
+    res.status(500).json({
+      error: 'Could not start payout setup',
+      reason,
+      detail: msg.slice(0, 300),
+      param: e.param || null
+    });
   }
 });
 
@@ -1097,7 +1114,7 @@ router.post('/platform/shops', platformAuth, async (req, res) => {
       timezone: clean(b.timezone, 60) || 'America/New_York',
       platformFeeBps: b.platformFeeBps != null
         ? Math.min(3000, Math.max(0, parseInt(b.platformFeeBps, 10) || 0))
-        : Number(process.env.BARBER_PLATFORM_FEE_BPS || 500),
+        : Number(process.env.BARBER_PLATFORM_FEE_BPS || 300),
       services: BarberShop.DEFAULT_SERVICES,
       hours: BarberShop.DEFAULT_HOURS
     });
@@ -1180,7 +1197,7 @@ router.get('/health', async (req, res) => {
     emailFrom: provider === 'none' ? null : fromAddress(),
     seedConfigured: !!process.env.BARBER_SEED_PASSWORD,
     defaultHandle: BarberShop.HANDLE,
-    feeBps: Number(process.env.BARBER_PLATFORM_FEE_BPS || 500),
+    feeBps: Number(process.env.BARBER_PLATFORM_FEE_BPS || 300),
     shops,
     // A shop nobody owns cannot be signed into — the number that says whether
     // the seed actually ran.

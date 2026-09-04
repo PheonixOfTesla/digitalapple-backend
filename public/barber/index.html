@@ -391,7 +391,13 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
     return fetch(API + path, Object.assign({}, opts, { headers: h }))
       .then(function(r){ return r.json().then(function(j){
         if (r.status === 401) { signOut(); throw new Error(j.error || 'Sign in again'); }
-        if (!r.ok) throw new Error(j.error || 'Something went wrong');
+        if (!r.ok) {
+          // Carry the server's diagnosis through to the screen. A message with
+          // a cause in it is the difference between a fix and a support call.
+          var e = new Error((j.error || 'Something went wrong') + (j.detail ? ' — ' + j.detail : ''));
+          e.reason = j.reason || null;
+          throw e;
+        }
         return j;
       }); });
   }
