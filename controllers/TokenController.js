@@ -258,6 +258,19 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
+    // Barber appointments share this verified webhook; the booking is marked
+    // paid — and the client's receipt sent — only from here, never from a
+    // browser that says it paid.
+    if (session.metadata && session.metadata.type === 'barber_booking') {
+      try {
+        await require('./BarberController').fulfillPayment(session, event.id);
+        return res.json({ received: true, barber: true });
+      } catch (err) {
+        console.error('[barber] payment fulfillment error:', err.message);
+        return res.status(500).json({ error: 'Barber payment failed' });
+      }
+    }
+
     // Shop orders share this verified webhook; fulfillment lives in ShopController.
     if (session.metadata && session.metadata.type === 'shop_order') {
       try {

@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crispin Cuts — Shop Admin</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#2b2f34">
+<style>
+:root{
+  --ink:#22262b; --ink-2:#3a4047; --grey:#6f7780; --line:#d3d7db;
+  --canvas:#dcdfe2; --panel:#f7f8f9; --card:#fff;
+  --red:#b8202e; --blue:#1e4b8f; --gold:#a8873f; --green:#2e6b34;
+  --shadow:0 1px 2px rgba(24,28,32,.08), 0 8px 28px rgba(24,28,32,.10);
+  --serif:Georgia,'Times New Roman',Times,serif;
+  --sans:'Helvetica Neue',Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font:400 15px/1.6 var(--sans);
+  -webkit-font-smoothing:antialiased;background-image:radial-gradient(circle at 15% -10%,#e7eaec 0,transparent 55%)}
+h1,h2,h3{font-family:var(--serif);font-weight:700;margin:0}
+a{color:var(--ink)}
+.hide{display:none!important}
+
+/* ── The pole, same as the shopfront ──────────────────────────────────── */
+.rail{position:fixed;left:0;top:0;bottom:0;width:120px;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:26px;background:linear-gradient(180deg,#31363c,#22262b);border-right:1px solid #14171a;z-index:20}
+.railname{font-family:var(--serif);font-weight:700;font-size:20px;letter-spacing:.34em;text-transform:uppercase;color:#f2f4f5;
+  writing-mode:vertical-rl;transform:rotate(180deg);text-shadow:0 0 18px rgba(255,255,255,.35),0 0 40px rgba(184,32,46,.35)}
+.railsub{writing-mode:vertical-rl;transform:rotate(180deg);color:#8d959d;font:500 10px/1 var(--sans);letter-spacing:.4em;text-transform:uppercase}
+.pole{width:42px;position:relative;filter:drop-shadow(0 0 15px rgba(255,255,255,.22))}
+.cap{height:14px;border-radius:3px;background:linear-gradient(180deg,#f0f2f3,#b9bfc5 45%,#7d848b 55%,#e3e7ea);border:1px solid #5f666d;box-shadow:0 1px 3px rgba(0,0,0,.5)}
+.finial{width:24px;height:24px;margin:0 auto 4px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff,#c6ccd1 45%,#767d84 78%,#3d4349);box-shadow:0 0 15px rgba(255,255,255,.5)}
+.foot{width:24px;height:20px;margin:4px auto 0;border-radius:0 0 12px 12px;background:radial-gradient(circle at 34% 20%,#fff,#c6ccd1 45%,#767d84 78%,#3d4349)}
+.tube{height:150px;overflow:hidden;position:relative;border-left:1px solid #6b7178;border-right:1px solid #6b7178;
+  background:repeating-linear-gradient(-58deg,var(--red) 0 13px,#fff 13px 26px,var(--blue) 26px 39px,#fff 39px 52px);
+  background-size:auto 52px;animation:climb 2.6s linear infinite;box-shadow:0 0 24px rgba(232,236,239,.45)}
+.tube::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.42),rgba(0,0,0,.05) 22%,rgba(255,255,255,.55) 34%,rgba(255,255,255,.05) 46%,rgba(0,0,0,.10) 72%,rgba(0,0,0,.45))}
+@keyframes climb{from{background-position:0 0}to{background-position:0 -52px}}
+.glass{position:absolute;inset:-8px;border-radius:22px;background:radial-gradient(ellipse at 50% 50%,rgba(255,255,255,.20),transparent 70%);animation:pulse 3.4s ease-in-out infinite;pointer-events:none}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.tube,.glass{animation:none}}
+
+.wrap{margin-left:120px;padding:0 24px 90px}
+.inner{max-width:1000px;margin:0 auto}
+
+/* ── Sign in ─────────────────────────────────────────────────────────── */
+.signin{max-width:400px;margin:11vh auto 0;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+.signin .head{background:var(--ink);padding:26px 28px}
+.signin .head h1{color:#fff;font-size:23px;letter-spacing:.14em;text-transform:uppercase}
+.signin .head p{margin:6px 0 0;color:#9aa3ac;font:500 11px/1.6 var(--sans);letter-spacing:.2em;text-transform:uppercase}
+.stripes{height:4px;background:linear-gradient(90deg,var(--red) 0 33.3%,#fff 33.3% 66.6%,var(--blue) 66.6% 100%)}
+.signin form{padding:26px 28px 30px}
+.tabsmall{display:flex;gap:0;margin-bottom:22px;border:1px solid var(--line)}
+.tabsmall button{flex:1;padding:10px;background:#eef0f1;border:0;cursor:pointer;font:600 11px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--grey)}
+.tabsmall button[aria-selected="true"]{background:var(--ink);color:#fff}
+
+label{display:block;font:600 11px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--grey);margin:0 0 7px}
+input,select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);background:#fcfcfd;font:400 15px var(--sans);color:var(--ink);border-radius:0}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--ink);outline-offset:-1px}
+.field{margin-bottom:15px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+button.go{padding:13px 22px;background:var(--ink);color:#fff;border:0;cursor:pointer;font:600 12px var(--sans);letter-spacing:.18em;text-transform:uppercase}
+button.go:hover{background:#000}
+button.go[disabled]{opacity:.45;cursor:not-allowed}
+button.go.full{width:100%}
+.ghost{display:inline-block;text-decoration:none;background:none;border:1px solid var(--line);color:var(--ink-2);padding:9px 14px;cursor:pointer;font:600 11px var(--sans);letter-spacing:.12em;text-transform:uppercase}
+.ghost:hover{border-color:var(--ink)}
+.danger{border-color:#e0b5ba;color:var(--red)}
+
+/* ── Panel ───────────────────────────────────────────────────────────── */
+.top{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;flex-wrap:wrap;padding:38px 0 18px;border-bottom:2px solid var(--ink)}
+.top h1{font-size:34px;letter-spacing:.04em;text-transform:uppercase}
+.top .kick{font:500 11px/1 var(--sans);letter-spacing:.3em;text-transform:uppercase;color:var(--grey);margin-bottom:10px}
+.handlebar{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+.handletag{font-family:var(--serif);font-size:19px;background:var(--ink);color:#fff;padding:5px 13px}
+.barberrule{height:5px;background:linear-gradient(90deg,var(--red) 0 33.3%,#fff 33.3% 66.6%,var(--blue) 66.6% 100%);border-bottom:1px solid var(--line);margin-bottom:26px}
+
+.tabs{display:flex;gap:2px;flex-wrap:wrap;margin-bottom:26px}
+.tabs button{padding:11px 17px;background:#e6e9eb;border:1px solid var(--line);border-bottom:0;cursor:pointer;
+  font:600 11px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--grey)}
+.tabs button[aria-selected="true"]{background:var(--card);color:var(--ink);box-shadow:inset 0 3px 0 var(--red)}
+
+.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);padding:22px;margin-bottom:18px}
+.card h2{font-size:19px;margin-bottom:4px}
+.card .sub{color:var(--grey);font-size:13px;margin:0 0 18px}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:18px}
+.stat{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--ink);padding:16px 18px;box-shadow:var(--shadow)}
+.stat b{display:block;font-family:var(--serif);font-size:27px;line-height:1.2;margin-top:4px}
+.stat small{font:600 10px/1 var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--grey)}
+.stat.fee{border-top-color:var(--gold)}
+.stat.net{border-top-color:var(--green)}
+
+table.grid{width:100%;border-collapse:collapse}
+table.grid th{text-align:left;font:600 10px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--grey);padding:0 10px 10px 0;border-bottom:1px solid var(--line)}
+table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);vertical-align:top;font-size:14px}
+.daybreak td{background:var(--panel);font:600 11px var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--ink-2)}
+.pill{display:inline-block;padding:3px 9px;font:600 10px/1.6 var(--sans);letter-spacing:.1em;text-transform:uppercase;border:1px solid var(--line)}
+.pill.paid{background:#eef5ef;border-color:#bcd4bc;color:var(--green)}
+.pill.booked{background:#f4f6f8;color:var(--ink-2)}
+.pill.cancelled{background:#fdf2f3;border-color:#e6b8bd;color:var(--red)}
+.pill.completed{background:#f6f2e9;border-color:#ddcb9f;color:#7a6220}
+.rowacts{display:flex;gap:6px;flex-wrap:wrap}
+.err{background:#fdf2f3;border:1px solid #e6b8bd;border-left:4px solid var(--red);color:#8c1620;padding:11px 13px;margin-bottom:14px;font-size:14px}
+.ok{background:#f2f7f2;border:1px solid #bcd4bc;border-left:4px solid var(--green);color:#1f4a24;padding:11px 13px;margin-bottom:14px;font-size:14px}
+.muted{color:var(--grey);font-size:13px}
+.hours-row{display:grid;grid-template-columns:110px 1fr 1fr 110px;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}
+.hours-row b{font:600 12px var(--sans);letter-spacing:.12em;text-transform:uppercase}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--grey)}
+.chk input{width:auto}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.feeinput{display:flex;align-items:center;gap:6px}
+.feeinput input{width:80px;text-align:right}
+
+@media (max-width:860px){
+  .rail{position:static;width:auto;height:auto;flex-direction:row;align-items:center;gap:14px;justify-content:flex-start;padding:11px 16px}
+  .railname{writing-mode:horizontal-tb;transform:none;font-size:17px;letter-spacing:.24em}
+  .railsub{display:none}
+  .pole{width:22px;filter:drop-shadow(0 0 10px rgba(255,255,255,.25))}
+  .pole .tube{height:46px;box-shadow:0 0 14px rgba(232,236,239,.4)}
+  .pole .finial{width:13px;height:13px;margin-bottom:2px;box-shadow:0 0 9px rgba(255,255,255,.5)}
+  .pole .cap{height:7px}
+  .pole .foot{width:13px;height:10px;margin-top:2px}
+  .glass{inset:-5px}
+  .wrap{margin-left:0;padding:0 16px 70px}
+  .two,.three{grid-template-columns:1fr}
+  .hours-row{grid-template-columns:1fr 1fr;gap:8px}
+  .top h1{font-size:26px}
+  table.grid thead{display:none}
+  table.grid td{display:block;border:0;padding:3px 0}
+  table.grid tr{display:block;border-bottom:1px solid var(--line);padding:12px 0}
+  .daybreak td{padding:8px}
+}
+</style>
+</head>
+<body>
+
+<div class="rail" aria-hidden="true">
+  <div class="pole">
+    <div class="glass"></div><div class="finial"></div><div class="cap"></div>
+    <div class="tube"></div><div class="cap"></div><div class="foot"></div>
+  </div>
+  <div class="railname" id="railName">Crispin Cuts</div>
+  <div class="railsub">Shop Admin</div>
+</div>
+
+<div class="wrap"><div class="inner">
+
+  <!-- ── Sign in ──────────────────────────────────────────────────────── -->
+  <section id="signin" class="signin">
+    <div class="head">
+      <h1>Crispin Cuts</h1>
+      <p>Shop Admin</p>
+    </div>
+    <div class="stripes"></div>
+    <form id="loginForm">
+      <div class="tabsmall" role="tablist">
+        <button type="button" id="tabBarber" role="tab" aria-selected="true">Barber</button>
+        <button type="button" id="tabPlatform" role="tab" aria-selected="false">Platform owner</button>
+      </div>
+      <div id="loginErr" class="err hide"></div>
+      <div class="field" id="handleField">
+        <label for="l_handle">Your @ handle</label>
+        <input id="l_handle" value="crispincuts" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="l_pass">Passcode</label>
+        <input id="l_pass" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="go full" id="loginBtn" type="submit">Sign in</button>
+      <p class="muted" style="margin:16px 0 0">Your booking page stays open to the public at <code id="pubHint">/@crispincuts</code>. This panel is only for you.</p>
+    </form>
+  </section>
+
+  <!-- ── Panel ────────────────────────────────────────────────────────── -->
+  <section id="panel" class="hide">
+    <div class="top">
+      <div>
+        <div class="kick" id="whoami">Shop admin</div>
+        <h1 id="shopTitle">Crispin Cuts</h1>
+        <div class="handlebar">
+          <span class="handletag" id="handleTag">@crispincuts</span>
+          <button class="ghost" id="copyHandle">Copy link for your bio</button>
+          <a class="ghost" id="viewPage" href="#" target="_blank" rel="noopener" style="text-decoration:none">View booking page</a>
+          <button class="ghost" id="signout">Sign out</button>
+        </div>
+      </div>
+    </div>
+    <div class="barberrule"></div>
+
+    <div class="tabs" role="tablist">
+      <button data-tab="diary" role="tab" aria-selected="true">Diary</button>
+      <button data-tab="new" role="tab" aria-selected="false">New booking</button>
+      <button data-tab="menu" role="tab" aria-selected="false">Menu</button>
+      <button data-tab="hours" role="tab" aria-selected="false">Hours &amp; shop</button>
+      <button data-tab="money" role="tab" aria-selected="false">Payouts</button>
+      <button data-tab="platform" role="tab" aria-selected="false" class="hide" id="tabPlatformBtn">Platform</button>
+    </div>
+
+    <div id="flash"></div>
+
+    <!-- Diary -->
+    <div class="tabpane" data-pane="diary">
+      <div class="stats" id="stats"></div>
+      <div class="card">
+        <h2>The book</h2>
+        <p class="sub">Everything on the books, next two weeks. Bill a client, mark them done, or cancel.</p>
+        <div id="diary"><span class="spin"></span> Loading…</div>
+      </div>
+    </div>
+
+    <!-- New booking -->
+    <div class="tabpane hide" data-pane="new">
+      <div class="card">
+        <h2>Write someone in</h2>
+        <p class="sub">Sets the appointment and emails them the time straight away. You can take any time you like — the grid is for clients, not for you.</p>
+        <form id="newForm">
+          <div id="newMsg"></div>
+          <div class="two">
+            <div class="field"><label for="n_name">Client name</label><input id="n_name" required maxlength="80"></div>
+            <div class="field"><label for="n_email">Client email</label><input id="n_email" type="email" required maxlength="160"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label for="n_phone">Phone (optional)</label><input id="n_phone" maxlength="40"></div>
+            <div class="field"><label for="n_service">Service</label><select id="n_service"></select></div>
+          </div>
+          <div id="customSvc" class="three hide">
+            <div class="field"><label for="n_svcname">Description</label><input id="n_svcname" maxlength="80" placeholder="Appointment"></div>
+            <div class="field"><label for="n_dur">Minutes</label><input id="n_dur" type="number" min="5" max="480" step="5" value="30"></div>
+            <div class="field"><label for="n_price">Price ($)</label><input id="n_price" type="number" min="0" step="1" value="45"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label for="n_date">Date</label><input id="n_date" type="date" required></div>
+            <div class="field"><label for="n_time">Time <span id="tzHint" class="muted"></span></label><input id="n_time" type="time" step="300" required></div>
+          </div>
+          <div class="field"><label for="n_notes">Notes (optional)</label><input id="n_notes" maxlength="500"></div>
+          <label class="chk" style="margin-bottom:18px"><input type="checkbox" id="n_bill"> Email them a bill for it too</label>
+          <button class="go" id="newBtn" type="submit">Book &amp; email the client</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Menu -->
+    <div class="tabpane hide" data-pane="menu">
+      <div class="card">
+        <h2>The menu</h2>
+        <p class="sub">What you cut, how long it takes, what it costs. Turning one off hides it from clients without touching appointments already booked.</p>
+        <div id="menuList"></div>
+      </div>
+      <div class="card">
+        <h2>Add a service</h2>
+        <form id="svcForm">
+          <div class="two">
+            <div class="field"><label for="s_name">Name</label><input id="s_name" required maxlength="80" placeholder="Hot Towel Shave"></div>
+            <div class="field"><label for="s_desc">Description</label><input id="s_desc" maxlength="200"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label for="s_dur">Minutes</label><input id="s_dur" type="number" min="5" max="480" step="5" value="30"></div>
+            <div class="field"><label for="s_price">Price ($)</label><input id="s_price" type="number" min="0" step="1" value="40"></div>
+          </div>
+          <button class="go" type="submit">Add to the menu</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Hours & shop -->
+    <div class="tabpane hide" data-pane="hours">
+      <div class="card">
+        <h2>Opening hours</h2>
+        <p class="sub">Wall-clock time in your shop's timezone. Daylight saving handles itself.</p>
+        <div id="hoursBox"></div>
+      </div>
+      <div class="card">
+        <h2>Shop details</h2>
+        <form id="shopForm">
+          <div class="two">
+            <div class="field"><label for="p_name">Shop name</label><input id="p_name" maxlength="80"></div>
+            <div class="field"><label for="p_email">Your email — every booking, cancellation and payment lands here</label><input id="p_email" type="email" maxlength="160"></div>
+          </div>
+          <div class="field"><label for="p_tagline">Tagline</label><input id="p_tagline" maxlength="160"></div>
+          <div class="two">
+            <div class="field"><label for="p_address">Address</label><input id="p_address" maxlength="200"></div>
+            <div class="field"><label for="p_phone">Phone</label><input id="p_phone" maxlength="40"></div>
+          </div>
+          <div class="three">
+            <div class="field"><label for="p_tz">Timezone</label>
+              <select id="p_tz">
+                <option value="America/New_York">New York (Eastern)</option>
+                <option value="America/Chicago">Chicago (Central)</option>
+                <option value="America/Denver">Denver (Mountain)</option>
+                <option value="America/Phoenix">Phoenix (no DST)</option>
+                <option value="America/Los_Angeles">Los Angeles (Pacific)</option>
+              </select></div>
+            <div class="field"><label for="p_step">Slot spacing (min)</label><input id="p_step" type="number" min="5" max="60" step="5"></div>
+            <div class="field"><label for="p_lead">Notice needed (min)</label><input id="p_lead" type="number" min="0" max="10080" step="15"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label for="p_horizon">Book how far ahead (days)</label><input id="p_horizon" type="number" min="1" max="180"></div>
+            <div class="field"><label for="p_deposit">Deposit to hold a slot ($, 0 = none)</label><input id="p_deposit" type="number" min="0" step="1"></div>
+          </div>
+          <button class="go" type="submit">Save the shop</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Passcode</h2>
+        <form id="passForm">
+          <div class="two">
+            <div class="field" id="curPassField"><label for="c_cur">Current passcode</label><input id="c_cur" type="password" autocomplete="current-password"></div>
+            <div class="field"><label for="c_new">New passcode (8+ characters)</label><input id="c_new" type="password" autocomplete="new-password" required minlength="8"></div>
+          </div>
+          <button class="go" type="submit">Change it</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Payouts -->
+    <div class="tabpane hide" data-pane="money">
+      <div class="card">
+        <h2>Getting paid</h2>
+        <p class="sub">Clients pay by card, Apple Pay or Google Pay through Stripe. Connect your bank and the money goes straight to you — the platform's percentage comes off automatically.</p>
+        <div id="connectBox"><span class="spin"></span> Checking Stripe…</div>
+      </div>
+      <div class="card">
+        <h2>Your split</h2>
+        <p class="sub" id="splitSub"></p>
+        <div class="stats" id="splitStats"></div>
+        <p class="muted">The platform rate is set by whoever runs the platform. Every bill you send records the rate it was written at, so a rate change never rewrites old money.</p>
+      </div>
+    </div>
+
+    <!-- Platform -->
+    <div class="tabpane hide" data-pane="platform">
+      <div class="stats" id="platStats"></div>
+      <div class="card">
+        <h2>Every shop</h2>
+        <p class="sub">Adjust what the platform takes, per shop. 500 = 5%. Capped at 30%.</p>
+        <div id="platList"><span class="spin"></span> Loading…</div>
+      </div>
+      <div class="card">
+        <h2>Add a barber</h2>
+        <p class="sub">Their @ handle becomes their booking page — the link they put in their bio.</p>
+        <form id="shopAddForm">
+          <div class="two">
+            <div class="field"><label for="a_handle">@ handle</label><input id="a_handle" required maxlength="30" placeholder="tonysfades" autocapitalize="off" spellcheck="false"></div>
+            <div class="field"><label for="a_name">Shop name</label><input id="a_name" maxlength="80" placeholder="Tony's Fades"></div>
+          </div>
+          <div class="three">
+            <div class="field"><label for="a_email">Barber email</label><input id="a_email" type="email" maxlength="160"></div>
+            <div class="field"><label for="a_pass">Their passcode (8+)</label><input id="a_pass" required minlength="8"></div>
+            <div class="field"><label for="a_fee">Your cut (bps)</label><input id="a_fee" type="number" min="0" max="3000" step="25" value="500"></div>
+          </div>
+          <button class="go" type="submit">Create the shop</button>
+        </form>
+      </div>
+    </div>
+  </section>
+</div></div>
+
+<script>
+(function(){
+  'use strict';
+  var API = '/api/v1/barber';
+  var KEY = 'crispin.admin.token';
+  var token = null, mode = 'barber', me = null, shop = null, platformShops = [];
+
+  var $ = function(id){ return document.getElementById(id); };
+  function show(el,on){ if(el) el.classList[on?'remove':'add']('hide'); }
+  function usd(c){ return '$' + (Math.max(0,Math.round(c||0))/100).toFixed(2).replace(/\.00$/,''); }
+  function esc(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s); return d.innerHTML; }
+  function pct(bps){ return (Math.round((bps||0)/100*100)/100) + '%'; }
+
+  function api(path, opts){
+    opts = opts || {};
+    var h = { 'Content-Type':'application/json' };
+    if (token) h.Authorization = 'Bearer ' + token;
+    return fetch(API + path, Object.assign({}, opts, { headers: h }))
+      .then(function(r){ return r.json().then(function(j){
+        if (r.status === 401) { signOut(); throw new Error(j.error || 'Sign in again'); }
+        if (!r.ok) throw new Error(j.error || 'Something went wrong');
+        return j;
+      }); });
+  }
+  function flash(msg, bad){
+    $('flash').innerHTML = '<div class="'+(bad?'err':'ok')+'">'+esc(msg)+'</div>';
+    window.scrollTo({ top:0, behavior:'smooth' });
+    setTimeout(function(){ $('flash').innerHTML=''; }, 6000);
+  }
+
+  /* ── Timezone: a wall clock in the shop's zone → a real instant ─────── */
+  function tzOffsetMs(date, tz){
+    var dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12:false,
+      year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    var p = {}; dtf.formatToParts(date).forEach(function(x){ p[x.type] = x.value; });
+    return Date.UTC(+p.year, +p.month-1, +p.day, (+p.hour)%24, +p.minute, +p.second) - date.getTime();
+  }
+  function zonedToUtcISO(dateStr, timeStr, tz){
+    var d = dateStr.split('-').map(Number), t = timeStr.split(':').map(Number);
+    var naive = Date.UTC(d[0], d[1]-1, d[2], t[0], t[1] || 0);
+    var ts = naive - tzOffsetMs(new Date(naive), tz);
+    ts = naive - tzOffsetMs(new Date(ts), tz);
+    return new Date(ts).toISOString();
+  }
+
+  /* ── Sign in ───────────────────────────────────────────────────────── */
+  $('tabBarber').addEventListener('click', function(){ setMode('barber'); });
+  $('tabPlatform').addEventListener('click', function(){ setMode('platform'); });
+  function setMode(m){
+    mode = m;
+    $('tabBarber').setAttribute('aria-selected', m==='barber');
+    $('tabPlatform').setAttribute('aria-selected', m==='platform');
+    show($('handleField'), m === 'barber');
+  }
+  $('l_handle').addEventListener('input', function(){
+    $('pubHint').textContent = '/@' + this.value.replace(/^@/,'').toLowerCase();
+  });
+
+  $('loginForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var btn = $('loginBtn'); btn.disabled = true; btn.textContent = 'Signing in…';
+    show($('loginErr'), false);
+    var path = mode === 'platform' ? '/platform/login' : '/login';
+    var body = mode === 'platform'
+      ? { passcode: $('l_pass').value }
+      : { handle: $('l_handle').value, passcode: $('l_pass').value };
+    api(path, { method:'POST', body: JSON.stringify(body) })
+      .then(function(j){
+        token = j.token;
+        try { sessionStorage.setItem(KEY, token); } catch(e){}
+        start(mode === 'platform' ? ($('l_handle').value || 'crispincuts') : j.handle);
+      })
+      .catch(function(e){
+        btn.disabled = false; btn.textContent = 'Sign in';
+        $('loginErr').textContent = e.message; show($('loginErr'), true);
+      });
+  });
+
+  function signOut(){
+    token = null; try { sessionStorage.removeItem(KEY); } catch(e){}
+    show($('panel'), false); show($('signin'), true);
+    var b = $('loginBtn'); b.disabled = false; b.textContent = 'Sign in';
+  }
+  $('signout').addEventListener('click', signOut);
+
+  /* ── Boot the panel ────────────────────────────────────────────────── */
+  var scopeHandle = 'crispincuts';
+  function q(path){
+    // A platform token has to name the shop it is acting on; a barber token
+    // carries its own and ignores this.
+    return path + (path.indexOf('?') === -1 ? '?' : '&') + 'handle=' + encodeURIComponent(scopeHandle);
+  }
+
+  function start(handle){
+    scopeHandle = String(handle || 'crispincuts').replace(/^@/,'').toLowerCase();
+    api(q('/admin/me')).then(function(j){
+      me = j; shop = j.shop;
+      show($('signin'), false); show($('panel'), true);
+      $('shopTitle').textContent = shop.name;
+      $('railName').textContent = shop.name;
+      $('handleTag').textContent = '@' + shop.handle;
+      $('viewPage').href = j.bookingUrl;
+      $('whoami').textContent = j.isPlatform ? 'Platform owner — viewing @' + shop.handle : 'Shop admin';
+      show($('tabPlatformBtn'), !!j.isPlatform);
+      if (!shop.barberEmail) {
+        // Silence is the failure mode here: bookings land, nothing arrives, and
+        // there is nothing on screen to explain it. Say so, on every load.
+        $('flash').innerHTML = '<div class="err">No email address set — booking alerts have nowhere to go. ' +
+          '<button class="ghost" id="fixEmail" style="margin-left:8px">Add it now</button></div>';
+        $('fixEmail').addEventListener('click', function(){
+          document.querySelector('.tabs button[data-tab="hours"]').click();
+          $('p_email').focus();
+          $('p_email').scrollIntoView({ behavior:'smooth', block:'center' });
+        });
+      }
+      fillShopForm(); fillHours(); fillMenu(); fillServiceSelect();
+      loadDiary(); loadEarnings(); loadConnect();
+      if (j.isPlatform) loadPlatform();
+    }).catch(function(e){
+      // A platform token pointed at a shop that does not exist lands here.
+      $('loginErr').textContent = e.message; show($('loginErr'), true);
+      var b = $('loginBtn'); b.disabled = false; b.textContent = 'Sign in';
+    });
+  }
+
+  // Survive a refresh without asking for the passcode again.
+  try {
+    var saved = sessionStorage.getItem(KEY);
+    if (saved) { token = saved; start(new URLSearchParams(location.search).get('handle') || 'crispincuts'); }
+  } catch(e){}
+
+  $('copyHandle').addEventListener('click', function(){
+    var url = me.bookingUrl;
+    var done = function(){ $('copyHandle').textContent = 'Copied — paste it in your bio'; setTimeout(function(){ $('copyHandle').textContent = 'Copy link for your bio'; }, 2500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, function(){ prompt('Your booking link:', url); });
+    else prompt('Your booking link:', url);
+  });
+
+  /* ── Tabs ──────────────────────────────────────────────────────────── */
+  Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function(b){
+    b.addEventListener('click', function(){
+      Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function(x){ x.setAttribute('aria-selected', x===b); });
+      Array.prototype.forEach.call(document.querySelectorAll('.tabpane'), function(p){ show(p, p.dataset.pane === b.dataset.tab); });
+    });
+  });
+
+  /* ── Diary ─────────────────────────────────────────────────────────── */
+  function loadDiary(){
+    api(q('/admin/bookings?days=14')).then(function(j){
+      var rows = j.bookings;
+      if (!rows.length){ $('diary').innerHTML = '<p class="muted">Nothing booked in the next two weeks.</p>'; return; }
+      var html = '<table class="grid"><thead><tr><th>Time</th><th>Client</th><th>Service</th><th>Status</th><th></th></tr></thead><tbody>';
+      var lastDay = null;
+      rows.forEach(function(b){
+        if (b.day !== lastDay){
+          lastDay = b.day;
+          html += '<tr class="daybreak"><td colspan="5">' + esc(b.when.split(' at ')[0]) + '</td></tr>';
+        }
+        html += '<tr data-id="'+b.id+'">' +
+          '<td><b>'+esc(b.time)+'</b><br><span class="muted">'+b.durationMin+' min</span></td>' +
+          '<td>'+esc(b.clientName)+'<br><span class="muted">'+esc(b.clientEmail)+(b.clientPhone?' &middot; '+esc(b.clientPhone):'')+'</span>'+(b.notes?'<br><span class="muted">“'+esc(b.notes)+'”</span>':'')+'</td>' +
+          '<td>'+esc(b.serviceName)+'<br><span class="muted">'+usd(b.priceCents)+'</span></td>' +
+          '<td><span class="pill '+b.status+'">'+b.status+'</span>'+(b.status==='paid'?'<br><span class="muted">'+usd(b.amountPaidCents)+' &middot; fee '+usd(b.platformFeeCents)+'</span>':'')+'</td>' +
+          '<td><div class="rowacts">' +
+            (b.status==='booked' || b.status==='completed' ? '<button class="ghost act" data-act="bill" data-amt="'+b.priceCents+'">Bill '+usd(b.priceCents)+'</button>' : '') +
+            (b.status==='booked' ? '<button class="ghost act" data-act="done">Done</button>' : '') +
+            (b.status!=='cancelled' ? '<button class="ghost danger act" data-act="cancel">Cancel</button>' : '') +
+          '</div></td></tr>';
+      });
+      $('diary').innerHTML = html + '</tbody></table>';
+      Array.prototype.forEach.call($('diary').querySelectorAll('.act'), function(btn){
+        btn.addEventListener('click', function(){
+          var id = btn.closest('tr').dataset.id;
+          var act = btn.dataset.act;
+          if (act === 'bill') return bill(id, btn);
+          if (act === 'cancel' && !confirm('Cancel this appointment and email the client?')) return;
+          btn.disabled = true;
+          api(q('/admin/bookings/'+id+'/'+(act==='done'?'complete':'cancel')), { method:'POST', body: JSON.stringify({ handle: scopeHandle }) })
+            .then(function(){ loadDiary(); loadEarnings(); })
+            .catch(function(e){ btn.disabled = false; flash(e.message, true); });
+        });
+      });
+    }).catch(function(e){ $('diary').innerHTML = '<div class="err">'+esc(e.message)+'</div>'; });
+  }
+
+  function bill(id, btn){
+    var suggested = (Number(btn.dataset.amt)||0)/100;
+    var v = prompt('Bill the client how much? (dollars)', suggested.toFixed(2));
+    if (v === null) return;
+    var amountCents = Math.round(parseFloat(v) * 100);
+    if (!(amountCents >= 50)) return flash('Bill at least $0.50', true);
+    btn.disabled = true; btn.textContent = 'Sending…';
+    api(q('/admin/bookings/'+id+'/bill'), { method:'POST', body: JSON.stringify({ handle: scopeHandle, amountCents: amountCents }) })
+      .then(function(j){
+        flash('Bill for ' + usd(j.amountCents) + ' emailed to ' + j.emailedTo + ' — you keep ' + usd(j.barberGetsCents) + ' after the ' + usd(j.platformFeeCents) + ' platform fee.');
+        loadDiary();
+      })
+      .catch(function(e){ btn.disabled = false; btn.textContent = 'Bill'; flash(e.message, true); });
+  }
+
+  /* ── Money ─────────────────────────────────────────────────────────── */
+  function loadEarnings(){
+    api(q('/admin/earnings?days=30')).then(function(j){
+      var cards = [
+        ['Paid, last 30 days', usd(j.grossCents), ''],
+        ['Platform fee ('+pct(j.feeBps)+')', usd(j.platformFeeCents), 'fee'],
+        ['Yours', usd(j.netCents), 'net'],
+        ['Appointments paid', String(j.count), '']
+      ];
+      var html = cards.map(function(c){ return '<div class="stat '+c[2]+'"><small>'+esc(c[0])+'</small><b>'+esc(c[1])+'</b></div>'; }).join('');
+      $('stats').innerHTML = html;
+      $('splitStats').innerHTML = html;
+      $('splitSub').textContent = 'The platform takes ' + pct(j.feeBps) + ' of every card payment. Last 30 days:';
+    }).catch(function(){});
+  }
+
+  function loadConnect(){
+    api(q('/admin/connect')).then(function(j){
+      var box = $('connectBox');
+      if (j.state === 'ready'){
+        box.innerHTML = '<div class="ok">Bank connected. Card payments land in your account, minus the platform fee.</div>' +
+          '<button class="ghost" id="connectBtn">Update your Stripe details</button>';
+      } else if (j.state === 'incomplete'){
+        box.innerHTML = '<div class="err">Stripe still needs: ' + esc(j.needs.join(', ')) + '</div>' +
+          '<button class="go" id="connectBtn">Finish setting up payouts</button>';
+      } else if (j.state === 'pending'){
+        box.innerHTML = '<div class="ok">Everything is in — Stripe is checking your details. Nothing for you to do.</div>';
+      } else if (j.state === 'unknown'){
+        box.innerHTML = '<p class="muted">Could not reach Stripe just now. Your setup has not changed.</p>';
+      } else {
+        box.innerHTML = '<p class="muted" style="margin-top:0">You can still take bookings and send bills — the money sits with the platform until you connect a bank.</p>' +
+          '<button class="go" id="connectBtn">Connect your bank with Stripe</button>';
+      }
+      var cb = $('connectBtn');
+      if (cb) cb.addEventListener('click', function(){
+        cb.disabled = true; cb.textContent = 'Opening Stripe…';
+        api(q('/admin/connect'), { method:'POST', body: JSON.stringify({ handle: scopeHandle }) })
+          .then(function(j){ location.href = j.url; })
+          .catch(function(e){ cb.disabled = false; cb.textContent = 'Try again'; flash(e.message, true); });
+      });
+    }).catch(function(e){ $('connectBox').innerHTML = '<p class="muted">'+esc(e.message)+'</p>'; });
+  }
+
+  /* ── New booking ───────────────────────────────────────────────────── */
+  function fillServiceSelect(){
+    $('n_service').innerHTML = shop.allServices.filter(function(s){ return s.active; })
+      .map(function(s){ return '<option value="'+s.id+'">'+esc(s.name)+' — '+usd(s.priceCents)+' / '+s.durationMin+'m</option>'; })
+      .join('') + '<option value="">Something else…</option>';
+    $('n_service').addEventListener('change', function(){ show($('customSvc'), this.value === ''); });
+    $('tzHint').textContent = '(' + shop.timezone.split('/')[1].replace('_',' ') + ' time)';
+    var t = new Date(Date.now() + 864e5);
+    $('n_date').value = t.toISOString().slice(0,10);
+  }
+
+  $('newForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var btn = $('newBtn'); btn.disabled = true; btn.textContent = 'Booking…';
+    var body = {
+      handle: scopeHandle,
+      name: $('n_name').value, email: $('n_email').value, phone: $('n_phone').value,
+      serviceId: $('n_service').value,
+      serviceName: $('n_svcname').value,
+      durationMin: $('n_dur').value,
+      priceCents: Math.round((parseFloat($('n_price').value)||0) * 100),
+      start: zonedToUtcISO($('n_date').value, $('n_time').value, shop.timezone),
+      notes: $('n_notes').value,
+      sendBill: $('n_bill').checked
+    };
+    api(q('/admin/bookings'), { method:'POST', body: JSON.stringify(body) })
+      .then(function(j){
+        btn.disabled = false; btn.textContent = 'Book & email the client';
+        $('newForm').reset(); show($('customSvc'), false);
+        flash('Booked — the time has been emailed to ' + j.emailedTo + '.');
+        loadDiary();
+      })
+      .catch(function(e){
+        btn.disabled = false; btn.textContent = 'Book & email the client';
+        $('newMsg').innerHTML = '<div class="err">'+esc(e.message)+'</div>';
+      });
+  });
+
+  /* ── Menu ──────────────────────────────────────────────────────────── */
+  function fillMenu(){
+    $('menuList').innerHTML = '<table class="grid"><thead><tr><th>Service</th><th>Minutes</th><th>Price</th><th>Shown</th><th></th></tr></thead><tbody>' +
+      shop.allServices.map(function(s){
+        return '<tr data-id="'+s.id+'">' +
+          '<td><input class="m_name" value="'+esc(s.name)+'" maxlength="80"><br><input class="m_desc" value="'+esc(s.description||'')+'" maxlength="200" placeholder="Description" style="margin-top:6px"></td>' +
+          '<td><input class="m_dur" type="number" min="5" max="480" step="5" value="'+s.durationMin+'"></td>' +
+          '<td><input class="m_price" type="number" min="0" step="1" value="'+(s.priceCents/100)+'"></td>' +
+          '<td><label class="chk"><input type="checkbox" class="m_active"'+(s.active?' checked':'')+'> on the page</label></td>' +
+          '<td><button class="ghost m_save">Save</button></td></tr>';
+      }).join('') + '</tbody></table>';
+    Array.prototype.forEach.call($('menuList').querySelectorAll('.m_save'), function(btn){
+      btn.addEventListener('click', function(){
+        var tr = btn.closest('tr');
+        btn.disabled = true; btn.textContent = 'Saving…';
+        api(q('/admin/services/' + tr.dataset.id), { method:'PUT', body: JSON.stringify({
+          handle: scopeHandle,
+          name: tr.querySelector('.m_name').value,
+          description: tr.querySelector('.m_desc').value,
+          durationMin: tr.querySelector('.m_dur').value,
+          priceCents: Math.round((parseFloat(tr.querySelector('.m_price').value)||0)*100),
+          active: tr.querySelector('.m_active').checked
+        })}).then(function(j){ refreshShop(j.shop); flash('Menu updated.'); })
+          .catch(function(e){ flash(e.message, true); })
+          .then(function(){ btn.disabled = false; btn.textContent = 'Save'; });
+      });
+    });
+  }
+
+  $('svcForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    api(q('/admin/services'), { method:'POST', body: JSON.stringify({
+      handle: scopeHandle,
+      name: $('s_name').value, description: $('s_desc').value,
+      durationMin: $('s_dur').value, priceCents: Math.round((parseFloat($('s_price').value)||0)*100)
+    })}).then(function(){ $('svcForm').reset(); return api(q('/admin/me')); })
+      .then(function(j){ shop = j.shop; fillMenu(); fillServiceSelect(); flash('Added to the menu.'); })
+      .catch(function(e){ flash(e.message, true); });
+  });
+
+  function refreshShop(){
+    return api(q('/admin/me')).then(function(j){ me = j; shop = j.shop; return shop; });
+  }
+
+  /* ── Hours & shop ──────────────────────────────────────────────────── */
+  var DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  function hhmm(mins){ var h=Math.floor(mins/60), m=mins%60; return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
+  function mins(hhmmStr){ var p=String(hhmmStr||'0:0').split(':'); return (+p[0])*60 + (+p[1]||0); }
+
+  function fillHours(){
+    var byDay = {}; (shop.hours||[]).forEach(function(h){ byDay[h.day] = h; });
+    $('hoursBox').innerHTML = DAYS.map(function(name, i){
+      var h = byDay[i] || { day:i, open:540, close:1080, closed:true };
+      return '<div class="hours-row" data-day="'+i+'">' +
+        '<b>'+name+'</b>' +
+        '<div><label>Open</label><input type="time" step="900" class="h_open" value="'+hhmm(h.open)+'"></div>' +
+        '<div><label>Close</label><input type="time" step="900" class="h_close" value="'+hhmm(h.close)+'"></div>' +
+        '<label class="chk"><input type="checkbox" class="h_closed"'+(h.closed?' checked':'')+'> closed</label>' +
+      '</div>';
+    }).join('') + '<button class="go" id="saveHours" style="margin-top:18px">Save hours</button>';
+    $('saveHours').addEventListener('click', function(){
+      var rows = Array.prototype.map.call($('hoursBox').querySelectorAll('.hours-row'), function(r){
+        return { day: +r.dataset.day, open: mins(r.querySelector('.h_open').value),
+                 close: mins(r.querySelector('.h_close').value), closed: r.querySelector('.h_closed').checked };
+      });
+      api(q('/admin/shop'), { method:'PUT', body: JSON.stringify({ handle: scopeHandle, hours: rows }) })
+        .then(function(){ flash('Hours saved.'); return refreshShop(); })
+        .catch(function(e){ flash(e.message, true); });
+    });
+  }
+
+  function fillShopForm(){
+    $('p_name').value = shop.name; $('p_tagline').value = shop.tagline || '';
+    $('p_address').value = shop.address || ''; $('p_phone').value = shop.phone || '';
+    $('p_email').value = shop.barberEmail || ''; $('p_tz').value = shop.timezone;
+    $('p_step').value = shop.slotStepMin; $('p_lead').value = shop.leadMinutes;
+    $('p_horizon').value = shop.horizonDays; $('p_deposit').value = (shop.depositCents||0)/100;
+  }
+
+  $('shopForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    api(q('/admin/shop'), { method:'PUT', body: JSON.stringify({
+      handle: scopeHandle,
+      name: $('p_name').value, tagline: $('p_tagline').value, address: $('p_address').value,
+      phone: $('p_phone').value, barberEmail: $('p_email').value, timezone: $('p_tz').value,
+      slotStepMin: $('p_step').value, leadMinutes: $('p_lead').value, horizonDays: $('p_horizon').value,
+      depositCents: Math.round((parseFloat($('p_deposit').value)||0)*100)
+    })}).then(function(){ flash('Saved.'); return refreshShop(); })
+      .then(function(){ $('shopTitle').textContent = shop.name; $('railName').textContent = shop.name; })
+      .catch(function(e){ flash(e.message, true); });
+  });
+
+  $('passForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    api(q('/admin/passcode'), { method:'POST', body: JSON.stringify({
+      handle: scopeHandle, current: $('c_cur').value, next: $('c_new').value
+    })}).then(function(){ $('passForm').reset(); flash('Passcode changed.'); })
+      .catch(function(e){ flash(e.message, true); });
+  });
+
+  /* ── Platform ──────────────────────────────────────────────────────── */
+  function loadPlatform(){
+    api('/platform/shops?days=30').then(function(j){
+      platformShops = j.shops;
+      $('platStats').innerHTML =
+        '<div class="stat"><small>Processed, 30 days</small><b>'+usd(j.totals.grossCents)+'</b></div>' +
+        '<div class="stat fee"><small>Your platform revenue</small><b>'+usd(j.totals.platformFeeCents)+'</b></div>' +
+        '<div class="stat"><small>Shops</small><b>'+j.shops.length+'</b></div>';
+      $('platList').innerHTML = '<table class="grid"><thead><tr><th>Shop</th><th>Paid (30d)</th><th>Your cut</th><th>Rate</th><th></th></tr></thead><tbody>' +
+        j.shops.map(function(s){
+          return '<tr data-handle="'+esc(s.handle)+'">' +
+            '<td><b>'+esc(s.name)+'</b><br><a href="'+esc(s.bookingUrl)+'" target="_blank" rel="noopener">@'+esc(s.handle)+'</a>' +
+              '<br><span class="muted">'+(s.stripeConnected?'bank connected':'no bank yet')+(s.active?'':' &middot; paused')+'</span></td>' +
+            '<td>'+usd(s.grossCents)+'<br><span class="muted">'+s.count+' paid</span></td>' +
+            '<td>'+usd(s.platformFeeCents)+'</td>' +
+            '<td><div class="feeinput"><input type="number" class="p_fee" min="0" max="3000" step="25" value="'+s.platformFeeBps+'"><span class="muted p_pct">'+pct(s.platformFeeBps)+'</span></div></td>' +
+            '<td><div class="rowacts"><button class="ghost p_save">Save rate</button>' +
+              '<button class="ghost p_open">Open shop</button>' +
+              '<button class="ghost '+(s.active?'danger':'')+' p_toggle">'+(s.active?'Pause':'Resume')+'</button></div></td></tr>';
+        }).join('') + '</tbody></table>';
+
+      Array.prototype.forEach.call($('platList').querySelectorAll('tr[data-handle]'), function(tr){
+        var h = tr.dataset.handle;
+        var fee = tr.querySelector('.p_fee');
+        fee.addEventListener('input', function(){ tr.querySelector('.p_pct').textContent = pct(+fee.value); });
+        tr.querySelector('.p_save').addEventListener('click', function(){
+          api('/platform/shops/'+encodeURIComponent(h), { method:'PUT', body: JSON.stringify({ platformFeeBps: +fee.value }) })
+            .then(function(j){ flash('@'+h+' is now on '+pct(j.platformFeeBps)+'.'); loadPlatform(); if (h===scopeHandle) loadEarnings(); })
+            .catch(function(e){ flash(e.message, true); });
+        });
+        tr.querySelector('.p_toggle').addEventListener('click', function(){
+          var row = platformShops.filter(function(s){ return s.handle===h; })[0];
+          api('/platform/shops/'+encodeURIComponent(h), { method:'PUT', body: JSON.stringify({ active: !row.active }) })
+            .then(function(){ loadPlatform(); }).catch(function(e){ flash(e.message, true); });
+        });
+        // "Open shop" re-scopes the whole panel onto that barber's diary.
+        tr.querySelector('.p_open').addEventListener('click', function(){ start(h); });
+      });
+    }).catch(function(e){ $('platList').innerHTML = '<div class="err">'+esc(e.message)+'</div>'; });
+  }
+
+  $('shopAddForm').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    api('/platform/shops', { method:'POST', body: JSON.stringify({
+      handle: $('a_handle').value, name: $('a_name').value, barberEmail: $('a_email').value,
+      passcode: $('a_pass').value, platformFeeBps: $('a_fee').value
+    })}).then(function(j){
+      $('shopAddForm').reset(); $('a_fee').value = 500;
+      flash('Created. Their booking page is ' + j.bookingUrl);
+      loadPlatform();
+    }).catch(function(e){ flash(e.message, true); });
+  });
+})();
+</script>
+</body>
+</html>
