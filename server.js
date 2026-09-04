@@ -50,6 +50,17 @@ try {
 // Connect to MongoDB
 connectDB();
 
+/**
+ * Setting BARBER_SEED_PASSWORD in the deploy's variables IS the barber setup
+ * step — no console, no command to remember. It runs once the connection is
+ * open, never resets an existing password, and only ever logs on failure, so
+ * leaving the variable in place forever is harmless and a bad one cannot stop
+ * the site from starting.
+ */
+require('mongoose').connection.once('open', () => {
+  require('./services/barberSeed').seedFromEnv();
+});
+
 // CORS Configuration
 const allowedOrigins = [
   'http://localhost:3000',
