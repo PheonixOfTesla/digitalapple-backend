@@ -16,6 +16,7 @@ process.env.BOOKING_SITE_URL = 'http://127.0.0.1:4601';
 
 const Module = require('module');
 const created = [];
+const accountArgs = [];
 let transfersActive = false;
 
 // Stand-in Stripe. Records what the controller asks for, which is the thing
@@ -24,7 +25,7 @@ const stubStripe = function () {
   return {
     checkout: { sessions: { create: async (args) => { created.push(args); return { id: 'cs_test_' + created.length, url: 'https://checkout.stripe.com/c/pay/cs_test_' + created.length }; } } },
     accounts: {
-      create: async () => ({ id: 'acct_stub_1' }),
+      create: async (args) => { accountArgs.push(args); return { id: 'acct_stub_1' }; },
       retrieve: async () => ({ id: 'acct_stub_1', capabilities: { transfers: transfersActive ? 'active' : 'inactive' }, details_submitted: transfersActive, requirements: { currently_due: transfersActive ? [] : ['external_account'] }, payouts_enabled: transfersActive })
     },
     accountLinks: { create: async () => ({ url: 'https://connect.stripe.com/setup/stub' }) },
@@ -95,6 +96,15 @@ const ok = (n, c, x) => c ? (pass++, console.log('  PASS  ' + n)) : (fail++, con
   ok('no account yet reads as none', r.json.state === 'none', r.json);
   r = await req('POST', '/api/v1/barber/admin/connect', null, bt);
   ok('onboarding hands back a Stripe link', /connect.stripe.com/.test(r.json.url || ''), r.json);
+
+  // A barber who has not registered a business must not be asked to onboard as
+  // one, and must not be underwritten as a merchant for a capability these
+  // charges never use.
+  const acct = accountArgs[0] || {};
+  ok('the connected account is Express', acct.type === 'express', acct.type);
+  ok('and an individual, not a company', acct.business_type === 'individual', acct.business_type);
+  ok('only transfers is requested', !!(acct.capabilities || {}).transfers && !(acct.capabilities || {}).card_payments, acct.capabilities);
+  ok('Stripe is told it is a barbershop', (acct.business_profile || {}).mcc === '7230', acct.business_profile);
   r = await req('GET', '/api/v1/barber/admin/connect', null, bt);
   ok('an unfinished account says what Stripe still wants', r.json.state === 'incomplete' && r.json.needs.includes('your bank account details'), r.json);
   transfersActive = true;

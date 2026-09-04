@@ -843,11 +843,31 @@ router.post('/admin/connect', barberAuth, async (req, res) => {
     const shop = await authedShop(req, res); if (!shop) return;
     const s = stripe();
     if (!shop.stripeAccountId) {
+      // Express, and deliberately as light as Stripe allows.
+      //
+      // A barber who has not registered a business is an INDIVIDUAL. Saying so
+      // up front means onboarding asks for a person — name, date of birth,
+      // address, the last four of an SSN, a bank account — instead of opening
+      // with an EIN and company details he does not have and cannot invent.
+      //
+      // Only `transfers` is requested. The charge is created on the PLATFORM
+      // account and transferred to him (payment_intent_data.transfer_data), so
+      // the platform is the merchant of record and his account only has to be
+      // able to receive money. Asking for `card_payments` as well would make
+      // Stripe underwrite him as a merchant in his own right and demand a
+      // correspondingly heavier set of documents — for a capability that these
+      // charges never use.
       const acct = await s.accounts.create({
         type: 'express',
         email: shop.barberEmail || undefined,
-        business_profile: { name: shop.name, url: shopUrl(shop.handle) },
-        capabilities: { transfers: { requested: true }, card_payments: { requested: true } }
+        business_type: 'individual',
+        business_profile: {
+          name: shop.name,
+          url: shopUrl(shop.handle),
+          mcc: '7230',                       // Stripe's code for barber and beauty shops
+          product_description: 'Haircuts and grooming services booked by appointment'
+        },
+        capabilities: { transfers: { requested: true } }
       });
       shop.stripeAccountId = acct.id;
       shop.updatedAt = new Date();

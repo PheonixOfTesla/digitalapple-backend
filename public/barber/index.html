@@ -323,6 +323,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
       <div class="card">
         <h2>Getting paid</h2>
         <p class="sub">Clients pay by card, Apple Pay or Google Pay through Stripe. Connect your bank and the money goes straight to you — the platform's percentage comes off automatically.</p>
+        <p class="sub">You do not need a registered business. Stripe sets you up as an individual and asks for your name, date of birth, address, the last four digits of your SSN, and the bank account you want paying — about five minutes.</p>
         <div id="connectBox"><span class="spin"></span> Checking Stripe…</div>
       </div>
       <div class="card">
@@ -591,7 +592,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
       } else if (j.state === 'unknown'){
         box.innerHTML = '<p class="muted">Could not reach Stripe just now. Your setup has not changed.</p>';
       } else {
-        box.innerHTML = '<p class="muted" style="margin-top:0">You can still take bookings and send bills — the money sits with the platform until you connect a bank.</p>' +
+        box.innerHTML = '<p class="muted" style="margin-top:0">You can still take bookings and send bills — the money sits with the platform until you connect a bank. No business registration needed: Stripe sets you up as an individual.</p>' +
           '<button class="go" id="connectBtn">Connect your bank with Stripe</button>';
       }
       var cb = $('connectBtn');
