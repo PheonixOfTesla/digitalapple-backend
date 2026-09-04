@@ -34,7 +34,7 @@ const bookingSchema = new mongoose.Schema({
   startsAt: { type: Date, required: true, index: true },
   endsAt: { type: Date, required: true },
 
-  status: { type: String, enum: ['booked', 'paid', 'cancelled', 'completed'], default: 'booked', index: true },
+  status: { type: String, enum: ['booked', 'paid', 'cancelled', 'completed', 'disputed'], default: 'booked', index: true },
   source: { type: String, enum: ['client', 'barber'], default: 'client' },
 
   // Payment. `billed` is a bill the barber sent that has not been settled;
@@ -44,9 +44,20 @@ const bookingSchema = new mongoose.Schema({
   // What the platform keeps out of this transaction, decided when the payment
   // link is made and frozen there. Changing a shop's rate must never rewrite
   // the split on money that has already moved.
-  platformFeeCents: { type: Number, default: 0 },
+  platformFeeCents: { type: Number, default: 0 },      // the platform's own cut
+  processingFeeCents: { type: Number, default: 0 },    // what Stripe took to run the card
   platformFeeBps: { type: Number, default: 0 },
   payoutAccountId: { type: String, default: null },
+
+  // Chargebacks. The platform's balance is debited first — Stripe's rule for
+  // Express accounts, whatever the charge type — so recovery is a transfer
+  // reversal against the barber, recorded here so nobody has to reconstruct it
+  // from a Stripe dashboard weeks later.
+  disputedAt: { type: Date, default: null },
+  disputeId: { type: String, default: null },
+  recoveredCents: { type: Number, default: 0 },
+  recoveryError: { type: String, default: null },
+  paymentIntentId: { type: String, default: null, index: true },
 
   stripeSessionId: { type: String, default: null, index: true },
   stripeEventId: { type: String, default: null },
@@ -94,6 +105,9 @@ bookingSchema.methods.toPublic = function () {
     amountDueCents: this.amountDueCents,
     amountPaidCents: this.amountPaidCents,
     platformFeeCents: this.platformFeeCents,
+    processingFeeCents: this.processingFeeCents,
+    recoveredCents: this.recoveredCents,
+    disputedAt: this.disputedAt,
     paidAt: this.paidAt,
     paymentUrl: this.status === 'cancelled' ? null : this.paymentUrl,
     createdAt: this.createdAt

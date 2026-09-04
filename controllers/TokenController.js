@@ -181,6 +181,18 @@ router.post('/webhook', async (req, res) => {
     return res.status(400).json({ error: 'Invalid signature' });
   }
 
+  // A chargeback on a barber appointment. Stripe has already taken the money
+  // back out of the platform's balance by the time this arrives; the handler
+  // recovers it from the barber it was transferred to.
+  if (event.type === 'charge.dispute.created') {
+    try {
+      await require('./BarberController').handleDispute(event.data.object);
+    } catch (err) {
+      console.error('[barber] dispute handling error:', err.message);
+    }
+    return res.json({ received: true, dispute: true });
+  }
+
   // Handle checkout.session.completed
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;

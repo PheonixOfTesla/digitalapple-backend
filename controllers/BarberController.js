@@ -408,7 +408,7 @@ async function billingLink({ shop, booking, amountCents, description }) {
   if (amount < 50) throw new Error('Stripe will not take less than fifty cents');
 
   const dest = await payoutDestFor(shop);
-  const fee = shop.feeOn(amount);
+  const split = shop.splitOn(amount);
   const s = stripe();
 
   const session = await s.checkout.sessions.create({
@@ -428,12 +428,13 @@ async function billingLink({ shop, booking, amountCents, description }) {
     // Destination charge: the barber is paid, the platform keeps its percentage.
     // Without a connected account the money lands on the platform and the
     // booking records what is owed — payable once onboarding finishes.
-    ...(dest ? { payment_intent_data: { application_fee_amount: fee, transfer_data: { destination: dest } } } : {}),
+    ...(dest ? { payment_intent_data: { application_fee_amount: split.applicationFeeCents, transfer_data: { destination: dest } } } : {}),
     metadata: {
       type: 'barber_booking',
       bookingId: String(booking._id),
       shopHandle: shop.handle,
-      feeCents: String(fee)
+      feeCents: String(split.platformCents),
+      processingCents: String(split.processingCents)
     },
     success_url: `${manageUrl(booking)}&paid=1`,
     cancel_url: manageUrl(booking)
@@ -441,7 +442,8 @@ async function billingLink({ shop, booking, amountCents, description }) {
 
   booking.stripeSessionId = session.id;
   booking.amountDueCents = amount;
-  booking.platformFeeCents = fee;
+  booking.platformFeeCents = split.platformCents;
+  booking.processingFeeCents = split.processingCents;
   booking.platformFeeBps = shop.platformFeeBps;
   booking.payoutAccountId = dest || null;
   booking.paymentUrl = session.url;
@@ -469,6 +471,8 @@ async function fulfillPayment(session, stripeEventId) {
   booking.stripeSessionId = session.id;
   booking.paymentUrl = null;
   if (m.feeCents) booking.platformFeeCents = cents(m.feeCents);
+  if (m.processingCents) booking.processingFeeCents = cents(m.processingCents);
+  if (session.payment_intent) booking.paymentIntentId = String(session.payment_intent);
   booking.updatedAt = new Date();
   await booking.save();
 
@@ -477,6 +481,72 @@ async function fulfillPayment(session, stripeEventId) {
     await mail.paymentReceipt({ shop, booking, amountCents: paid });
     await mail.barberAlert({ shop, booking, kind: 'paid', to: shop.barberEmail });
   }
+  return booking;
+}
+
+/**
+ * A chargeback, handled the only way Stripe permits for an Express account.
+ *
+ * The instruction was that chargebacks come out of the barber's account. They
+ * cannot, not directly: with destination charges — and with Express accounts
+ * whatever the charge type — Stripe debits the PLATFORM's balance for the
+ * disputed amount and the dispute fee, immediately and automatically. There is
+ * no setting that changes this.
+ *
+ * What there is, is a transfer reversal: the platform claws the money back out
+ * of the barber's balance. So the platform is out of pocket for as long as it
+ * takes this webhook to fire, and then it is not. The economics land where they
+ * were asked to land; the mechanism is just the other way round.
+ *
+ * Reversal is best-effort by nature: a barber whose balance is already empty
+ * leaves the platform holding it, which is why the failure is written to the
+ * booking rather than swallowed — somebody has to know it is owed.
+ */
+async function handleDispute(dispute) {
+  const Booking = require('../models/Booking');
+  const intent = String(dispute.payment_intent || '');
+  const booking = intent ? await Booking.findOne({ paymentIntentId: intent }) : null;
+  if (!booking) { console.error('[barber] dispute for an unknown booking:', dispute.id, intent); return null; }
+  if (booking.disputeId === dispute.id) return booking;   // replayed webhook
+
+  booking.status = 'disputed';
+  booking.disputedAt = new Date();
+  booking.disputeId = String(dispute.id);
+
+  try {
+    const s = stripe();
+    // The charge carries the transfer that paid the barber. No transfer means
+    // the money never left the platform, so there is nothing to claw back.
+    const charge = await s.charges.retrieve(String(dispute.charge));
+    if (charge && charge.transfer) {
+      const transferId = typeof charge.transfer === 'string' ? charge.transfer : charge.transfer.id;
+      const reversal = await s.transfers.createReversal(transferId, {
+        description: `Chargeback ${dispute.id} on booking ${booking._id}`
+      });
+      booking.recoveredCents = cents(reversal.amount);
+      booking.recoveryError = null;
+      console.log(`[barber] dispute ${dispute.id}: recovered ${reversal.amount} from ${booking.shopHandle}`);
+    } else {
+      booking.recoveryError = 'no transfer to reverse — the platform still held this money';
+    }
+  } catch (e) {
+    // Most often: the barber's balance cannot cover it. Recorded, not hidden.
+    booking.recoveryError = e.message;
+    console.error('[barber] dispute recovery failed:', dispute.id, e.message);
+  }
+
+  booking.updatedAt = new Date();
+  await booking.save();
+
+  // The barber finds out from us, now, rather than from a payout that is
+  // smaller than he expected three days from now.
+  try {
+    const shop = await BarberShop.findOne({ handle: booking.shopHandle });
+    if (shop && shop.barberEmail) {
+      await mail.barberAlert({ shop, booking, kind: 'cancelled', to: shop.barberEmail });
+    }
+  } catch (e) { /* non-fatal */ }
+
   return booking;
 }
 
@@ -733,8 +803,10 @@ router.post('/admin/bookings/:id/bill', barberAuth, async (req, res) => {
 
     res.json({
       success: true, payUrl, emailedTo: booking.clientEmail,
-      amountCents: amount, platformFeeCents: booking.platformFeeCents,
-      barberGetsCents: amount - booking.platformFeeCents
+      amountCents: amount,
+      platformFeeCents: booking.platformFeeCents,
+      processingFeeCents: booking.processingFeeCents,
+      barberGetsCents: amount - booking.platformFeeCents - booking.processingFeeCents
     });
   } catch (e) {
     console.error('[barber] bill:', e.type || '', e.message);
@@ -791,22 +863,26 @@ async function earnings(handle, days) {
   const since = new Date(Date.now() - days * sched.DAY_MS);
   const rows = await Booking.find({
     shopHandle: handle, status: 'paid', paidAt: { $gte: since }
-  }).select('paidAt amountPaidCents platformFeeCents payoutAccountId').lean();
+  }).select('paidAt amountPaidCents platformFeeCents processingFeeCents payoutAccountId').lean();
 
-  let gross = 0, fees = 0, held = 0;
+  let gross = 0, fees = 0, held = 0, processing = 0;
   for (const r of rows) {
     gross += r.amountPaidCents || 0;
     fees += r.platformFeeCents || 0;
+    processing += r.processingFeeCents || 0;
     // Paid before the barber connected a bank: Stripe had nowhere to send his
     // share, so the whole charge landed in the platform's balance and the
     // platform is now holding money that is not its own. It is real, it
     // accumulates silently, and somebody has to pay it out by hand — so it is
     // counted and shown rather than left to be discovered.
-    if (!r.payoutAccountId) held += (r.amountPaidCents || 0) - (r.platformFeeCents || 0);
+    if (!r.payoutAccountId) held += (r.amountPaidCents || 0) - (r.platformFeeCents || 0) - (r.processingFeeCents || 0);
   }
   return {
     days, count: rows.length,
-    grossCents: gross, platformFeeCents: fees, netCents: gross - fees,
+    grossCents: gross,
+    platformFeeCents: fees,
+    processingFeeCents: processing,
+    netCents: gross - fees - processing,
     heldForBarberCents: held
   };
 }
@@ -914,10 +990,11 @@ router.get('/platform/shops', platformAuth, async (req, res) => {
     for (const o of owners) ownerById[String(o._id)] = o.email;
 
     const out = [];
-    let grossAll = 0, feesAll = 0, heldAll = 0;
+    let grossAll = 0, feesAll = 0, heldAll = 0, procAll = 0;
     for (const shop of shops) {
       const e = await earnings(shop.handle, days);
       grossAll += e.grossCents; feesAll += e.platformFeeCents; heldAll += e.heldForBarberCents;
+      procAll += e.processingFeeCents;
       out.push({
         handle: shop.handle, name: shop.name, active: shop.active,
         // A shop with no owner cannot be signed into — the panel says so, and
@@ -933,7 +1010,10 @@ router.get('/platform/shops', platformAuth, async (req, res) => {
     }
     res.json({
       success: true, days, shops: out,
-      totals: { grossCents: grossAll, platformFeeCents: feesAll, heldForBarbersCents: heldAll }
+      totals: {
+        grossCents: grossAll, platformFeeCents: feesAll,
+        processingFeeCents: procAll, heldForBarbersCents: heldAll
+      }
     });
   } catch (e) {
     console.error('[barber] platform shops:', e.message);
@@ -1111,3 +1191,4 @@ router.get('/health', async (req, res) => {
 
 module.exports = router;
 module.exports.fulfillPayment = fulfillPayment;
+module.exports.handleDispute = handleDispute;

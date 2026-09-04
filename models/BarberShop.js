@@ -56,7 +56,7 @@ const barberShopSchema = new mongoose.Schema({
   // float. Capped on write, not just in the UI — a 100% take rate is a bug
   // that empties a barber's till.
   stripeAccountId: { type: String, default: null },
-  platformFeeBps: { type: Number, default: Number(process.env.BARBER_PLATFORM_FEE_BPS || 500), min: 0, max: 3000 },
+  platformFeeBps: { type: Number, default: Number(process.env.BARBER_PLATFORM_FEE_BPS || 300), min: 0, max: 3000 },
   timezone: { type: String, default: 'America/New_York' },
   services: { type: [serviceSchema], default: undefined },
   hours: { type: [hoursSchema], default: undefined },
@@ -115,11 +115,53 @@ barberShopSchema.statics.load = async function (handle) {
   }
 };
 
+/**
+ * What Stripe charges to process a card, so the split can account for it.
+ *
+ * These are Stripe's published US card rates, not something we control, and
+ * they are env-overridable because a platform on different pricing should not
+ * have to redeploy code to tell the truth about its own numbers.
+ */
+const STRIPE_PCT_BPS = Number(process.env.STRIPE_PCT_BPS || 290);     // 2.9%
+const STRIPE_FIXED_CENTS = Number(process.env.STRIPE_FIXED_CENTS || 30);
+
 /** The platform's cut of an amount, in cents. Never more than the amount. */
 barberShopSchema.methods.feeOn = function (amountCents) {
   const amt = Math.max(0, Math.round(Number(amountCents) || 0));
   const bps = Math.min(3000, Math.max(0, Number(this.platformFeeBps) || 0));
   return Math.min(amt, Math.round(amt * bps / 10000));
+};
+
+/**
+ * Where every cent of a charge goes.
+ *
+ * The charge is created on the PLATFORM account, which means Stripe's
+ * processing fee comes out of the platform's balance — so if the application
+ * fee were only the platform's percentage, the platform would be paying
+ * Stripe out of it. At 3% that is a loss on every realistic haircut: a $45 cut
+ * costs $1.61 to process and earns $1.35, so the platform is 26 cents down for
+ * the privilege. Break-even would need a $300 haircut.
+ *
+ * So the application fee is the platform's percentage PLUS what Stripe takes,
+ * and the platform nets its rate cleanly. The barber's payout carries the
+ * processing cost, which is the normal arrangement everywhere cards are taken,
+ * and both numbers are shown to him separately rather than blended into one
+ * figure he cannot check.
+ */
+barberShopSchema.methods.splitOn = function (amountCents) {
+  const amount = Math.max(0, Math.round(Number(amountCents) || 0));
+  const platform = this.feeOn(amount);
+  const processing = Math.min(amount, Math.round(amount * STRIPE_PCT_BPS / 10000) + STRIPE_FIXED_CENTS);
+  // Never let the two together exceed the charge: a tiny amount would other-
+  // wise produce a transfer of less than nothing, which Stripe rejects.
+  const applicationFee = Math.min(amount, platform + processing);
+  return {
+    amountCents: amount,
+    platformCents: platform,
+    processingCents: Math.min(processing, applicationFee),
+    applicationFeeCents: applicationFee,
+    barberCents: amount - applicationFee
+  };
 };
 
 /** What the page and the panel are allowed to know. */
