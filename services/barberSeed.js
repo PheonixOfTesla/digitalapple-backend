@@ -78,6 +78,17 @@ async function seedBarber(opts) {
   const wasOwned = !!shop.ownerUserId;
   if (name) shop.name = name.slice(0, 80);
 
+  // Bring an existing shop in line with the configured default rate, unless a
+  // human has set that shop's rate in the panel. Model defaults only apply to
+  // documents being created, so without this a rate change reaches new shops
+  // and quietly misses every shop already open.
+  let feeNote = null;
+  const wantFee = o.feeBps == null ? null : Math.min(3000, Math.max(0, parseInt(o.feeBps, 10)));
+  if (wantFee != null && !shop.feeSetManually && shop.platformFeeBps !== wantFee) {
+    feeNote = `rate ${(shop.platformFeeBps / 100).toFixed(2)}% → ${(wantFee / 100).toFixed(2)}%`;
+    shop.platformFeeBps = wantFee;
+  }
+
   const { user, note } = await ensureAccount(User, email, password, name.split(' ')[0] || 'Barber');
 
   const elsewhere = await BarberShop.findOne({ ownerUserId: user._id, handle: { $ne: shop.handle } });
@@ -107,6 +118,7 @@ async function seedBarber(opts) {
     wasOwned,
     accountNote: note,
     adminNote,
+    feeNote,
     quotesStripped: unquote(o.password) !== String(o.password || '').trim()
   };
 }
@@ -126,12 +138,14 @@ async function seedFromEnv() {
       password: raw,
       handle: process.env.BARBER_HANDLE || 'crispincuts',
       name: process.env.BARBER_SHOP_NAME || 'Crispin Cuts',
-      adminEmail: process.env.PLATFORM_ADMIN_EMAIL || ''
+      adminEmail: process.env.PLATFORM_ADMIN_EMAIL || '',
+      feeBps: Number(process.env.BARBER_PLATFORM_FEE_BPS || 300)
     });
     if (r.quotesStripped) {
       console.log('[barber] BARBER_SEED_PASSWORD was wrapped in quotes — stripped them. The password is what is INSIDE the quotes.');
     }
     console.log(`[barber] @${r.handle} → ${r.shopName}, ${r.accountNote}: ${r.email}` + (r.wasOwned ? '' : ' (shop had no owner)'));
+    if (r.feeNote) console.log('[barber] ' + r.feeNote);
     if (r.adminNote) console.log('[barber] ' + r.adminNote);
     return r;
   } catch (e) {

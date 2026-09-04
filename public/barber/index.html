@@ -613,7 +613,21 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
         cb.disabled = true; cb.textContent = 'Opening Stripe…';
         api(q('/admin/connect'), { method:'POST', body: JSON.stringify(scopeHandle ? { handle: scopeHandle } : {}) })
           .then(function(j){ location.href = j.url; })
-          .catch(function(e){ cb.disabled = false; cb.textContent = 'Try again'; flash(e.message, true); });
+          .catch(function(e){
+            cb.disabled = false; cb.textContent = 'Try again';
+            // This one is not the barber's problem and he must not be left
+            // thinking it is: Connect is a switch on the platform's own Stripe
+            // account, and only the platform owner can throw it.
+            if (e.reason === 'connect_not_enabled') {
+              box.innerHTML = '<div class="err"><b>Payouts are not switched on yet.</b><br>' +
+                'This is a setting on the shop platform\'s Stripe account, not on yours — ' +
+                'nothing for you to fix. Whoever runs the platform needs to enable Stripe Connect at ' +
+                '<a href="https://dashboard.stripe.com/connect" target="_blank" rel="noopener">dashboard.stripe.com/connect</a>, ' +
+                'then this button will work.</div>';
+            } else {
+              flash(e.message, true);
+            }
+          });
       });
     }).catch(function(e){ $('connectBox').innerHTML = '<p class="muted">'+esc(e.message)+'</p>'; });
   }

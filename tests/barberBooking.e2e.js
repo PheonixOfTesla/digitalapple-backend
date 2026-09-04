@@ -212,6 +212,19 @@ function ok(name, cond, extra) {
 
   r = await req('PUT', '/api/v1/barber/platform/shops/crispincuts', { platformFeeBps: 850 }, pt);
   ok('the take rate is adjustable', r.status === 200 && r.json.platformFeeBps === 850, r.json);
+
+  // A rate the deploy configures should reach shops that already exist — but
+  // a rate a human set in the panel must survive every future boot.
+  const { seedBarber } = require(ROOT + '/services/barberSeed');
+  await seedBarber({ email: 'crispin@admin.com', handle: 'crispincuts', name: 'Crispin Cuts', feeBps: 300 });
+  let after = await BarberShop.findOne({ handle: 'crispincuts' }).lean();
+  ok('a rate set in the panel is never overwritten by boot', after.platformFeeBps === 850, after.platformFeeBps);
+
+  const untouched = await BarberShop.create({ handle: 'freshcut', name: 'Fresh Cut', platformFeeBps: 500, services: BarberShop.DEFAULT_SERVICES, hours: BarberShop.DEFAULT_HOURS });
+  await seedBarber({ email: 'fresh@example.com', password: 'fresh-pass-12', handle: 'freshcut', name: 'Fresh Cut', feeBps: 300 });
+  after = await BarberShop.findOne({ handle: 'freshcut' }).lean();
+  ok('but a shop nobody has touched follows the configured rate', after.platformFeeBps === 300, after.platformFeeBps);
+  await BarberShop.deleteOne({ _id: untouched._id });
   r = await req('PUT', '/api/v1/barber/platform/shops/crispincuts', { platformFeeBps: 5000 }, pt);
   ok('an absurd take rate is refused', r.status === 400, r.json);
 

@@ -978,7 +978,7 @@ router.post('/admin/connect', barberAuth, async (req, res) => {
     console.error('[barber] connect:', e.type || '', e.code || '', e.message);
     const msg = String(e.message || '');
     const reason =
-      /Connect/i.test(msg) && /sign up|enable|platform/i.test(msg) ? 'connect_not_enabled'
+      /dashboard\.stripe\.com\/connect|sign(ed)? up for Connect/i.test(msg) ? 'connect_not_enabled'
       : e.type === 'StripeAuthenticationError' ? 'stripe_key'
       : e.type === 'StripePermissionError' ? 'stripe_permission'
       : e.type === 'StripeInvalidRequestError' ? 'stripe_request'
@@ -1051,6 +1051,7 @@ router.put('/platform/shops/:handle', platformAuth, async (req, res) => {
       const bps = parseInt(req.body.platformFeeBps, 10);
       if (!(bps >= 0 && bps <= 3000)) return res.status(400).json({ error: 'Rate must be between 0% and 30%' });
       shop.platformFeeBps = bps;
+      shop.feeSetManually = true;
     }
     if (req.body.active != null) shop.active = !!req.body.active;
     shop.updatedAt = new Date();

@@ -57,6 +57,12 @@ const barberShopSchema = new mongoose.Schema({
   // that empties a barber's till.
   stripeAccountId: { type: String, default: null },
   platformFeeBps: { type: Number, default: Number(process.env.BARBER_PLATFORM_FEE_BPS || 300), min: 0, max: 3000 },
+  // Whether a human has set this shop's rate in the panel. Until they have,
+  // the deploy's default rate is the intended rate and boot keeps the shop in
+  // step with it — a rate changed in code or configuration should not silently
+  // fail to reach shops that already exist. Once somebody sets it deliberately,
+  // the product wins and nothing overwrites it again.
+  feeSetManually: { type: Boolean, default: false },
   timezone: { type: String, default: 'America/New_York' },
   services: { type: [serviceSchema], default: undefined },
   hours: { type: [hoursSchema], default: undefined },
