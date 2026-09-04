@@ -1026,18 +1026,50 @@ router.put('/platform/shops/:handle/owner', platformAuth, async (req, res) => {
   }
 });
 
-/** GET /barber/health — is this thing wired up? No secrets, just yes or no. */
+/**
+ * GET /barber/health — is this thing wired up?
+ *
+ * Names the variables that are missing rather than reporting a bare false. A
+ * deploy where email silently does not send is the failure this endpoint
+ * exists to shorten, and "email: false" does not tell anybody which of three
+ * variables to go and set. Names only — never a value, never a fragment of one.
+ */
 router.get('/health', async (req, res) => {
-  let shops = null;
-  try { shops = await BarberShop.countDocuments(); } catch (e) { /* db down; say so by omission */ }
+  let shops = null, ownedShops = null, barbers = null;
+  try {
+    shops = await BarberShop.countDocuments();
+    ownedShops = await BarberShop.countDocuments({ ownerUserId: { $ne: null } });
+    barbers = await User.countDocuments({ role: 'barber' });
+  } catch (e) { /* db down; say so by omission */ }
+
+  // Either provider is enough. Only name the SMTP variables when there is no
+  // Resend key either — telling somebody to set SMTP_HOST when their mail is
+  // already going out through Resend is worse than saying nothing.
+  const { emailProvider, fromAddress } = require('../utils/email');
+  const provider = emailProvider();
+  const missing = [];
+  if (provider === 'none') {
+    missing.push('RESEND_API_KEY');
+    for (const k of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS']) if (!process.env[k]) missing.push(k);
+  }
+
   res.json({
     ok: true,
     stripe: !!process.env.STRIPE_SECRET_KEY,
     stripeWebhook: !!process.env.STRIPE_WEBHOOK_SECRET,
-    email: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS),
+    email: provider !== 'none',
+    emailProvider: provider,
+    // The whole point: what to go and set. 'RESEND_API_KEY or all three SMTP.'
+    emailMissing: missing,
+    emailFrom: provider === 'none' ? null : fromAddress(),
+    seedConfigured: !!process.env.BARBER_SEED_PASSWORD,
     defaultHandle: BarberShop.HANDLE,
     feeBps: Number(process.env.BARBER_PLATFORM_FEE_BPS || 500),
-    shops
+    shops,
+    // A shop nobody owns cannot be signed into — the number that says whether
+    // the seed actually ran.
+    ownedShops,
+    barbers
   });
 });
 

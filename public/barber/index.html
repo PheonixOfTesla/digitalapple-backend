@@ -273,34 +273,25 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
         <div id="hoursBox"></div>
       </div>
       <div class="card">
-        <h2>Your account</h2>
-        <p class="sub">How you sign in. This is the platform account, separate from the address your booking alerts go to — though they can be the same.</p>
+        <h2>Your email</h2>
+        <p class="sub">One address: it is how you sign in, and it is where every booking, cancellation and payment receipt lands.</p>
         <div id="acctMsg"></div>
         <form id="emailForm">
-          <div class="two">
-            <div class="field">
-              <label for="a_current">Signed in as</label>
-              <input id="a_current" disabled>
-            </div>
-            <div class="field">
-              <label for="a_newemail">Change it to</label>
-              <input id="a_newemail" type="email" maxlength="160" placeholder="you@yourshop.com" autocomplete="email">
-            </div>
+          <div class="field">
+            <label for="a_newemail">Update email</label>
+            <input id="a_newemail" type="email" maxlength="160" autocomplete="email" placeholder="you@yourshop.com">
           </div>
           <div class="rowacts">
-            <button class="go" type="submit">Change my sign-in email</button>
-            <button class="ghost" type="button" id="resetPass">Email me a password reset</button>
+            <button class="go" type="submit">Update email</button>
+            <button class="ghost" type="button" id="resetPass">Reset my password</button>
           </div>
-          <p class="muted" style="margin:14px 0 0">Changing your email sends a confirmation to the new address — the change only takes effect once you click it, so a typo cannot lock you out.</p>
+          <p class="muted" style="margin:14px 0 0">Receipts move to the new address straight away. Your sign-in moves once you click the confirmation we send there — so a typo cannot lock you out.</p>
         </form>
       </div>
       <div class="card">
         <h2>Shop details</h2>
         <form id="shopForm">
-          <div class="two">
-            <div class="field"><label for="p_name">Shop name</label><input id="p_name" maxlength="80"></div>
-            <div class="field"><label for="p_email">Your email — every booking, cancellation and payment lands here</label><input id="p_email" type="email" maxlength="160"></div>
-          </div>
+          <div class="field"><label for="p_name">Shop name</label><input id="p_name" maxlength="80"></div>
           <div class="field"><label for="p_tagline">Tagline</label><input id="p_tagline" maxlength="160"></div>
           <div class="two">
             <div class="field"><label for="p_address">Address</label><input id="p_address" maxlength="200"></div>
@@ -481,8 +472,8 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
           '<button class="ghost" id="fixEmail" style="margin-left:8px">Add it now</button></div>';
         $('fixEmail').addEventListener('click', function(){
           document.querySelector('.tabs button[data-tab="hours"]').click();
-          $('p_email').focus();
-          $('p_email').scrollIntoView({ behavior:'smooth', block:'center' });
+          $('a_newemail').focus();
+          $('a_newemail').scrollIntoView({ behavior:'smooth', block:'center' });
         });
       }
       fillAccount(); fillShopForm(); fillHours(); fillMenu(); fillServiceSelect();
@@ -725,41 +716,65 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
   function fillShopForm(){
     $('p_name').value = shop.name; $('p_tagline').value = shop.tagline || '';
     $('p_address').value = shop.address || ''; $('p_phone').value = shop.phone || '';
-    $('p_email').value = shop.barberEmail || ''; $('p_tz').value = shop.timezone;
+    $('p_tz').value = shop.timezone;
     $('p_step').value = shop.slotStepMin; $('p_lead').value = shop.leadMinutes;
     $('p_horizon').value = shop.horizonDays; $('p_deposit').value = (shop.depositCents||0)/100;
   }
 
   function fillAccount(){
-    if (!me.account) return;
-    $('a_current').value = me.account.email;
+    // Prefilled with whatever mail actually reaches him today, so the box says
+    // what it is rather than sitting empty.
+    $('a_newemail').value = shop.barberEmail || (me.account ? me.account.email : '');
   }
 
+  /**
+   * One box, two jobs. Receipts are just a notification address, so that moves
+   * now; a sign-in address has to be proved before it moves, or a typo locks
+   * him out of his own shop. Both are reported, so it is never a mystery which
+   * half happened.
+   */
   $('emailForm').addEventListener('submit', function(ev){
     ev.preventDefault();
     var next = $('a_newemail').value.trim();
     if (!next) return;
-    fetch(USER + '/profile/email', {
-      method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer ' + token },
-      body: JSON.stringify({ newEmail: next })
-    }).then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'Could not change it'); return j; }); })
+    var btn = ev.target.querySelector('button.go');
+    btn.disabled = true; btn.textContent = 'Updating…';
+    $('acctMsg').innerHTML = '';
+
+    api(q('/admin/shop'), { method:'PUT', body: JSON.stringify({ handle: scopeHandle || undefined, barberEmail: next }) })
       .then(function(){
-        $('a_newemail').value = '';
-        $('acctMsg').innerHTML = '<div class="ok">Confirmation sent to ' + esc(next) + '. Click the link in it and that becomes your sign-in.</div>';
+        var said = 'Receipts and booking alerts now go to ' + esc(next) + '.';
+        // Only worth confirming a sign-in change when it is actually a change.
+        if (me.account && me.account.email === next) {
+          $('acctMsg').innerHTML = '<div class="ok">' + said + '</div>';
+          return refreshShop();
+        }
+        return fetch(USER + '/profile/email', {
+          method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer ' + token },
+          body: JSON.stringify({ newEmail: next })
+        }).then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
+          .then(function(res){
+            $('acctMsg').innerHTML = res.ok
+              ? '<div class="ok">' + said + ' Check that inbox and click the link to make it your sign-in too.</div>'
+              : '<div class="ok">' + said + ' Your sign-in address is unchanged (' + esc(res.j.error || 'not updated') + ').</div>';
+            return refreshShop();
+          });
       })
-      .catch(function(e){ $('acctMsg').innerHTML = '<div class="err">'+esc(e.message)+'</div>'; });
+      .catch(function(e){ $('acctMsg').innerHTML = '<div class="err">'+esc(e.message)+'</div>'; })
+      .then(function(){ btn.disabled = false; btn.textContent = 'Update email'; });
   });
 
   $('resetPass').addEventListener('click', function(){
     var btn = $('resetPass'); btn.disabled = true; btn.textContent = 'Sending…';
+    var addr = me.account ? me.account.email : '';
     fetch(AUTH + '/forgot-password', {
       method:'POST', headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ email: me.account ? me.account.email : '' })
+      body: JSON.stringify({ email: addr })
     }).then(function(){
-      btn.disabled = false; btn.textContent = 'Email me a password reset';
-      $('acctMsg').innerHTML = '<div class="ok">Reset link sent to ' + esc(me.account ? me.account.email : 'your inbox') + '. It expires in an hour.</div>';
+      btn.disabled = false; btn.textContent = 'Reset my password';
+      $('acctMsg').innerHTML = '<div class="ok">Reset link sent to ' + esc(addr) + '. It expires in an hour.</div>';
     }).catch(function(){
-      btn.disabled = false; btn.textContent = 'Email me a password reset';
+      btn.disabled = false; btn.textContent = 'Reset my password';
       $('acctMsg').innerHTML = '<div class="err">Could not send that just now.</div>';
     });
   });
@@ -769,7 +784,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
     api(q('/admin/shop'), { method:'PUT', body: JSON.stringify({
       handle: scopeHandle || undefined,
       name: $('p_name').value, tagline: $('p_tagline').value, address: $('p_address').value,
-      phone: $('p_phone').value, barberEmail: $('p_email').value, timezone: $('p_tz').value,
+      phone: $('p_phone').value, timezone: $('p_tz').value,
       slotStepMin: $('p_step').value, leadMinutes: $('p_lead').value, horizonDays: $('p_horizon').value,
       depositCents: Math.round((parseFloat($('p_deposit').value)||0)*100)
     })}).then(function(){ flash('Saved.'); return refreshShop(); })
