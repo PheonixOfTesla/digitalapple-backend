@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -186,6 +187,25 @@ app.use('/api/v1/studios', require('./controllers/StudioController'));
 // DPT study engine. The deck is local-first — only card generation (needs the
 // Anthropic key) and .apkg parsing (needs zip + SQLite readers) are server-side.
 app.use('/api/v1/student', require('./controllers/StudentController'));
+
+// Barber booking platform. The API, the barber's admin panel at /book, and the
+// public booking page at /@handle — the link a barber puts in their bio.
+app.use('/api/v1/barber', require('./controllers/BarberController'));
+
+// The panel. Served from this origin so the page and its API share a host and
+// CORS never enters into it.
+app.use('/book', express.static(path.join(__dirname, 'public/barber'), { extensions: ['html'] }));
+
+/**
+ * /@handle — the whole product in one line.
+ *
+ * Anchored and length-capped so it can only ever match a handle, never a path
+ * with a slash in it, and it sits below every /api mount so it cannot shadow
+ * one. The page reads the handle back out of location.pathname.
+ */
+app.get(/^\/@([A-Za-z0-9_.-]{2,30})$/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/barber/book.html'));
+});
 
 // Root
 app.get('/', (req, res) => {

@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test:barber": "node tests/barberBooking.test.js && node tests/barberBooking.e2e.js && node tests/barberStripe.e2e.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
@@ -35,6 +36,7 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
+    "mongodb-memory-server": "^11.2.0",
     "nodemon": "^3.0.2"
   },
   "engines": {
