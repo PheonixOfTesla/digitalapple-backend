@@ -340,6 +340,7 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
       <div class="card">
         <h2>Every shop</h2>
         <p class="sub">Adjust what the platform takes, per shop. 500 = 5%. Capped at 30%.</p>
+        <p class="sub">Your cut is taken by Stripe as it happens and stays in the platform's Stripe balance, which pays out to the bank on that account. Nothing to invoice. A barber with no bank connected is the exception — his whole charge lands in your balance and you owe him his share by hand, which is what the red figure above is.</p>
         <div id="platList"><span class="spin"></span> Loading…</div>
       </div>
       <div class="card">
@@ -571,6 +572,9 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
         ['Yours', usd(j.netCents), 'net'],
         ['Appointments paid', String(j.count), '']
       ];
+      if (j.heldForBarberCents > 0) {
+        cards.push(['Waiting on your bank', usd(j.heldForBarberCents), 'fee']);
+      }
       var html = cards.map(function(c){ return '<div class="stat '+c[2]+'"><small>'+esc(c[0])+'</small><b>'+esc(c[1])+'</b></div>'; }).join('');
       $('stats').innerHTML = html;
       $('splitStats').innerHTML = html;
@@ -800,6 +804,9 @@ table.grid td{padding:12px 10px 12px 0;border-bottom:1px solid var(--line);verti
       $('platStats').innerHTML =
         '<div class="stat"><small>Processed, 30 days</small><b>'+usd(j.totals.grossCents)+'</b></div>' +
         '<div class="stat fee"><small>Your platform revenue</small><b>'+usd(j.totals.platformFeeCents)+'</b></div>' +
+        (j.totals.heldForBarbersCents > 0
+          ? '<div class="stat" style="border-top-color:var(--red)"><small>Held for barbers &mdash; owe out by hand</small><b>'+usd(j.totals.heldForBarbersCents)+'</b></div>'
+          : '') +
         '<div class="stat"><small>Shops</small><b>'+j.shops.length+'</b></div>';
       $('platList').innerHTML = '<table class="grid"><thead><tr><th>Shop</th><th>Paid (30d)</th><th>Your cut</th><th>Rate</th><th></th></tr></thead><tbody>' +
         j.shops.map(function(s){

@@ -140,6 +140,7 @@ const ok = (n, c, x) => c ? (pass++, console.log('  PASS  ' + n)) : (fail++, con
   console.log('\n— what the numbers say afterwards —');
   r = await req('GET', '/api/v1/barber/admin/earnings?days=30', null, bt);
   ok('the barber sees gross, fee and net', r.json.grossCents === 6000 && r.json.platformFeeCents === 300 && r.json.netCents === 5700, r.json);
+  ok('nothing is held back once his bank is connected', r.json.heldForBarberCents === 0, r.json.heldForBarberCents);
 
   await User.create({ email: 'owner@example.com', passwordHash: await bcrypt.hash('owner-pass-9', 10), role: 'admin', firstName: 'Owner' });
   r = await req('POST', '/api/v1/auth/login', { email: 'owner@example.com', password: 'owner-pass-9' });
@@ -156,6 +157,22 @@ const ok = (n, c, x) => c ? (pass++, console.log('  PASS  ' + n)) : (fail++, con
 
   r = await req('POST', `/api/v1/barber/admin/bookings/${bk.id}/bill`, { amountCents: 6000 }, bt);
   ok('a paid appointment cannot be billed twice', r.status === 409, r.json);
+
+  // Money taken before a barber connected a bank sits in the platform's own
+  // balance. It has to be visible, or it quietly becomes a debt nobody knows
+  // about.
+  const Booking2 = require('../models/Booking');
+  await Booking2.create({
+    shopHandle: 'crispincuts', clientName: 'Early Bird', clientEmail: 'early@example.com',
+    serviceName: 'Signature Cut', durationMin: 45, priceCents: 4500,
+    startsAt: new Date(Date.now() - 6 * 86400000), endsAt: new Date(Date.now() - 6 * 86400000 + 2700000),
+    status: 'paid', amountPaidCents: 4500, platformFeeCents: 225,
+    payoutAccountId: null, paidAt: new Date()
+  });
+  r = await req('GET', '/api/v1/barber/admin/earnings?days=30', null, bt);
+  ok('money taken before the bank was connected is counted as held', r.json.heldForBarberCents === 4275, r.json);
+  r = await req('GET', '/api/v1/barber/platform/shops?days=30', null, pt);
+  ok('and the owner is told what is not his', r.json.totals.heldForBarbersCents === 4275, r.json.totals);
 
   console.log(`\nTotal: ${pass} passed, ${fail} failed\n`);
   await server.close(); await mongoose.disconnect(); await mongod.stop();

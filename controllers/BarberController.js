@@ -791,11 +791,24 @@ async function earnings(handle, days) {
   const since = new Date(Date.now() - days * sched.DAY_MS);
   const rows = await Booking.find({
     shopHandle: handle, status: 'paid', paidAt: { $gte: since }
-  }).select('paidAt amountPaidCents platformFeeCents').lean();
+  }).select('paidAt amountPaidCents platformFeeCents payoutAccountId').lean();
 
-  let gross = 0, fees = 0;
-  for (const r of rows) { gross += r.amountPaidCents || 0; fees += r.platformFeeCents || 0; }
-  return { days, count: rows.length, grossCents: gross, platformFeeCents: fees, netCents: gross - fees };
+  let gross = 0, fees = 0, held = 0;
+  for (const r of rows) {
+    gross += r.amountPaidCents || 0;
+    fees += r.platformFeeCents || 0;
+    // Paid before the barber connected a bank: Stripe had nowhere to send his
+    // share, so the whole charge landed in the platform's balance and the
+    // platform is now holding money that is not its own. It is real, it
+    // accumulates silently, and somebody has to pay it out by hand — so it is
+    // counted and shown rather than left to be discovered.
+    if (!r.payoutAccountId) held += (r.amountPaidCents || 0) - (r.platformFeeCents || 0);
+  }
+  return {
+    days, count: rows.length,
+    grossCents: gross, platformFeeCents: fees, netCents: gross - fees,
+    heldForBarberCents: held
+  };
 }
 
 /** GET /barber/admin/earnings?days=30 */
@@ -901,10 +914,10 @@ router.get('/platform/shops', platformAuth, async (req, res) => {
     for (const o of owners) ownerById[String(o._id)] = o.email;
 
     const out = [];
-    let grossAll = 0, feesAll = 0;
+    let grossAll = 0, feesAll = 0, heldAll = 0;
     for (const shop of shops) {
       const e = await earnings(shop.handle, days);
-      grossAll += e.grossCents; feesAll += e.platformFeeCents;
+      grossAll += e.grossCents; feesAll += e.platformFeeCents; heldAll += e.heldForBarberCents;
       out.push({
         handle: shop.handle, name: shop.name, active: shop.active,
         // A shop with no owner cannot be signed into — the panel says so, and
@@ -918,7 +931,10 @@ router.get('/platform/shops', platformAuth, async (req, res) => {
         ...e
       });
     }
-    res.json({ success: true, days, shops: out, totals: { grossCents: grossAll, platformFeeCents: feesAll } });
+    res.json({
+      success: true, days, shops: out,
+      totals: { grossCents: grossAll, platformFeeCents: feesAll, heldForBarbersCents: heldAll }
+    });
   } catch (e) {
     console.error('[barber] platform shops:', e.message);
     res.status(500).json({ error: 'Could not load the platform' });
