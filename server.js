@@ -319,6 +319,17 @@ app.get('/health', (req, res) => {
     cloudinary: isCloudinaryConfigured,
     google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
     ai: !!(process.env.OPENAI_API_KEY || process.env.MOONSHOT_API_KEY),
+    // Whether order receipts can actually be sent. sendEmail falls back to a
+    // console mock and RETURNS SUCCESS when no provider is configured, so a shop
+    // with no mailer looks identical to one that is emailing fine. Names the
+    // provider and the From address only — never a key.
+    email: (() => {
+      try {
+        const e = require('./utils/email');
+        return { provider: e.emailProvider(), from: e.fromAddress(),
+                 configured: e.emailProvider() !== 'none' };
+      } catch (err) { return { provider: 'error', configured: false }; }
+    })(),
     // Study grading picks its own provider, so the `ai` flag above does not answer
     // "is semantic grading on". Reports the provider NAME and a boolean only —
     // never the key, and never whether the key is valid, which costs a request to

@@ -331,16 +331,94 @@ router.get('/session', async (req, res) => {
   }
 });
 
+/** Where order alerts go. Falls back to the founder address the admin seeder uses. */
+const ownerEmail = () => String(process.env.OWNER_EMAIL || process.env.ADMIN_EMAIL
+  || 'digitalappleco@gmail.com').trim();
+
+const money = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
+
+const itemRows = (items) => (items || [])
+  .map(i => `<tr><td style="padding:6px 0">${i.quantity} x ${i.name || i.sku}</td>`
+    + `<td style="padding:6px 0;text-align:right">${money(i.unitAmount * i.quantity)}</td></tr>`)
+  .join('');
+
+/**
+ * The customer's own order confirmation.
+ *
+ * Stripe's receipt proves a CHARGE. This proves an ORDER — what was bought, where
+ * it is going, and that it is being printed. The shop sent neither: it never
+ * imported the mailer at all, and the only acknowledgement was a Stripe receipt
+ * that depended on fulfilment getting far enough to request one.
+ *
+ * Never throws. A failed email must not roll back a paid order.
+ */
+async function emailCustomerReceipt(order, session) {
+  if (!order || !order.email) return;
+  try {
+    const { sendEmail } = require('../utils/email');
+    await sendEmail({
+      to: order.email,
+      subject: `Your Clockwork order — ${money(order.amountTotal)}`,
+      html: `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px">
+        <h2 style="margin:0 0 4px">Order confirmed</h2>
+        <p style="color:#555;margin:0 0 18px">Thanks — this is being printed and will ship in 5-8 business days.</p>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          ${itemRows(order.items)}
+          <tr><td style="padding:10px 0 0;border-top:1px solid #ddd"><b>Total</b></td>
+              <td style="padding:10px 0 0;border-top:1px solid #ddd;text-align:right"><b>${money(order.amountTotal)}</b></td></tr>
+        </table>
+        ${order.recipient ? `<p style="color:#555;font-size:13px;margin:18px 0 0">Shipping to<br>
+          ${[order.recipient.name, order.recipient.address1, order.recipient.address2,
+    [order.recipient.city, order.recipient.state_code, order.recipient.zip].filter(Boolean).join(' '),
+    order.recipient.country_code].filter(Boolean).join('<br>')}</p>` : ''}
+        <p style="color:#888;font-size:12px;margin:22px 0 0">Order ${order._id}</p>
+      </div>`,
+    });
+  } catch (e) {
+    console.error('[shop] customer receipt email failed:', e.message);
+  }
+}
+
+/**
+ * Tell the owner a sale happened.
+ *
+ * `Notification.pushAdmins` writes an in-app bell, which is only seen by someone
+ * who opens the admin console. A sale should reach you where you already are.
+ * Never throws, for the same reason as above.
+ */
+async function emailOwnerOrder(order, subject, note) {
+  try {
+    const { sendEmail } = require('../utils/email');
+    await sendEmail({
+      to: ownerEmail(),
+      replyTo: order && order.email ? order.email : undefined,
+      subject,
+      html: `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px">
+        ${note ? `<p style="color:#b00;font-weight:600;margin:0 0 12px">${note}</p>` : ''}
+        <h2 style="margin:0 0 12px">${money(order && order.amountTotal)} — ${(order && order.email) || 'no email'}</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">${itemRows(order && order.items)}</table>
+        <p style="color:#888;font-size:12px;margin:20px 0 0">Order ${order && order._id}
+          &middot; status ${(order && order.status) || '?'}${order && order.error ? ` &middot; ${order.error}` : ''}</p>
+      </div>`,
+    });
+  } catch (e) {
+    console.error('[shop] owner order email failed:', e.message);
+  }
+}
+
 // Called by the verified Stripe webhook (TokenController) for shop sessions.
 // Idempotent on stripeSessionId; submits the Printful order (prints + ships).
 async function fulfill(session, stripeEventId) {
   const ShopOrder = require('../models/ShopOrder');
   let cart = [];
   try { cart = JSON.parse(session.metadata.cart || '[]'); } catch (e) {}
-  const items = cart.map(c => ({ ...CATALOG[c.s], quantity: c.q }))
-    .filter(i => i && (i.syncVariantId || i.catalogVariantId));
-  if (!items.length) throw new Error('Empty shop cart in session ' + session.id);
 
+  // THE BUYER'S DETAILS AND THEIR RECEIPT COME FIRST, BEFORE ANY WORK THAT CAN
+  // THROW. This used to sit below an `if (!items.length) throw`, so a cart whose
+  // SKUs no longer matched CATALOG took the money, raised, and left the customer
+  // with no receipt, no order record and no notification to anyone. The money is
+  // already captured by the time this function runs; the acknowledgement owes
+  // nothing to whether fulfilment can proceed.
   const ship = session.shipping_details || session.customer_details || {};
   const addr = ship.address || {};
   const email = (session.customer_details && session.customer_details.email) || null;
@@ -361,6 +439,8 @@ async function fulfill(session, stripeEventId) {
       await stripe.paymentIntents.update(session.payment_intent, { receipt_email: email });
     } catch (e) { console.error('[shop] receipt_email set failed:', e.message); }
   }
+  const items = cart.map(c => ({ ...CATALOG[c.s], quantity: c.q }))
+    .filter(i => i && (i.syncVariantId || i.catalogVariantId));
   const lineItems = items.map(i => ({ sku: i.sku, name: i.name, syncVariantId: i.syncVariantId || i.catalogVariantId, quantity: i.quantity, unitAmount: i.unitAmount }));
 
   // Upgrade the 'started' checkout record (or create one if tracking missed it).
@@ -390,6 +470,23 @@ async function fulfill(session, stripeEventId) {
       type: 'admin_order', text: `New order — $${((session.amount_total || 0) / 100).toFixed(2)}${email ? ' · ' + email : ''}`, link: 'admin.html#orders'
     });
   } catch (e) { /* non-fatal */ }
+
+  // Sent HERE, not after Printful: the sale is real and acknowledged the moment the
+  // money lands, and Printful failing is a separate problem that must not also cost
+  // the customer their confirmation.
+  await emailCustomerReceipt(order, session);
+  await emailOwnerOrder(order, `Order ${money(order.amountTotal)} — ${order.email || 'no email'}`);
+
+  // A cart whose SKUs are no longer in CATALOG: paid, acknowledged, and impossible
+  // to print. Flagged loudly rather than thrown, so the webhook is not retried
+  // forever over a catalogue edit.
+  if (!items.length) {
+    order.status = 'draft';
+    order.error = 'cart SKUs not found in CATALOG';
+    await order.save();
+    await alertUnfulfilled(order, 'cart SKUs not found in CATALOG — nothing sent to Printful');
+    return;
+  }
 
   const h = pfHeaders();
   if (!h) {
@@ -448,6 +545,10 @@ async function alertUnfulfilled(order, reason) {
   } catch (e) {
     console.error('[shop] could not raise unfulfilled-order alert:', e.message);
   }
+  // The bell is only seen by someone already looking at the admin console. A paid
+  // order that never reached the printer has to reach you where you are.
+  await emailOwnerOrder(order, `PAID BUT NOT SENT — ${money(order && order.amountTotal)}`,
+    `This order was charged and never reached Printful: ${String(reason || '').slice(0, 200)}`);
 }
 
 module.exports = router;
