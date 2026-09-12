@@ -335,6 +335,15 @@ app.get('/health', (req, res) => {
     // never the key, and never whether the key is valid, which costs a request to
     // learn. Public because it is the one thing you need to check a deploy from
     // outside, and it discloses nothing an attacker gains from.
+    // Whether the shop can actually reach Printful. The token alone is not enough:
+    // this account has more than one store, and a multi-store token with no
+    // X-PF-Store-Id header is refused — so a missing store id looks exactly like a
+    // missing key from the outside. Booleans and the store id only, never the token.
+    printful: {
+      keySet: !!process.env.PRINTFUL_API_KEY,
+      storeId: process.env.PRINTFUL_STORE_ID || null,
+      ready: !!(process.env.PRINTFUL_API_KEY && process.env.PRINTFUL_STORE_ID)
+    },
     studyGrading: (() => {
       try {
         const g = require('./services/studyGrader').graderInfo();
