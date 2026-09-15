@@ -488,4 +488,52 @@ router.post('/profile/email/verify', async (req, res) => {
   }
 });
 
+/**
+ * Register a device for push. Called by the native app on launch and after the
+ * user grants notification permission.
+ *
+ * Upsert on the token itself: a device re-registering updates its owner and
+ * last-seen rather than piling up rows, so a reinstalled app or a phone that
+ * changed hands resolves to exactly one current destination. The push SENDER
+ * (APNs) is a separate service that reads these rows; this endpoint only records
+ * where a user can be reached, which is the half the app needs to exist for the
+ * other half to be built.
+ */
+router.post('/devices', verifyToken, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const token = String(b.token || '').trim();
+    const platform = ['apns', 'fcm', 'webpush'].includes(b.platform) ? b.platform : null;
+    if (!token || !platform) return res.status(400).json({ error: 'token and platform required' });
+
+    const DeviceToken = require('../models/DeviceToken');
+    await DeviceToken.findOneAndUpdate(
+      { token },
+      {
+        userId: req.userId, token, platform,
+        appId: String(b.appId || '').slice(0, 120),
+        environment: b.environment === 'sandbox' ? 'sandbox' : 'production',
+        lastSeen: new Date()
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, registered: true });
+  } catch (e) {
+    console.error('[user] device register error:', e.message);
+    res.status(500).json({ error: 'Could not register device' });
+  }
+});
+
+// Unregister a device (logout, or notifications turned off).
+router.delete('/devices/:token', verifyToken, async (req, res) => {
+  try {
+    const DeviceToken = require('../models/DeviceToken');
+    await DeviceToken.deleteOne({ token: String(req.params.token || ''), userId: req.userId });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[user] device unregister error:', e.message);
+    res.status(500).json({ error: 'Could not unregister device' });
+  }
+});
+
 module.exports = router;
