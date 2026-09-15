@@ -123,6 +123,12 @@ router.post('/conversations', async (req, res) => {
     if (!other) return res.status(404).json({ error: 'No Clockwork Hub found for that person yet.' });
     if (String(other._id) === String(req.userId)) return res.status(400).json({ error: "That's you." });
 
+    // Symmetric block — neither party can open a thread with the other, whoever
+    // set it. Checked at creation so the conversation never exists at all.
+    if (await require('./SafetyController').isBlockedBetween(req.userId, other._id)) {
+      return res.status(403).json({ error: 'This conversation is not available.' });
+    }
+
     const key = Conversation.keyFor(req.userId, other._id);
     let convo = await Conversation.findOne({ participantKey: key });
     if (!convo) {
@@ -516,6 +522,15 @@ router.post('/conversations/:id/messages', async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Bad id' });
     const convo = await Conversation.findOne({ _id: req.params.id, participants: req.userId });
     if (!convo) return res.status(404).json({ error: 'Thread not found' });
+
+    // A block applies to threads that already existed when it was set. For a
+    // two-person thread, refuse the send if either party has blocked the other.
+    if ((convo.participants || []).length === 2) {
+      const otherId = convo.participants.find((p) => String(p) !== String(req.userId));
+      if (otherId && await require('./SafetyController').isBlockedBetween(req.userId, otherId)) {
+        return res.status(403).json({ error: 'This conversation is not available.' });
+      }
+    }
 
     const body = clampStr((req.body || {}).body, 4000);
     const me = await User.findById(req.userId).select('firstName lastName email').lean();

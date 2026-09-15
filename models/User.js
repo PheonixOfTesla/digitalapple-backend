@@ -138,6 +138,25 @@ const userSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  // People this user has blocked. Enforced server-side in the message path: a
+  // block stops conversations and messages in BOTH directions, so neither party
+  // can reach the other regardless of who blocked whom. Never exposed on the
+  // public profile — toPrivateProfile omits it, and only the owner reads their
+  // own list. This is the floor a conversation network needs before it can carry
+  // strangers talking to strangers, and Apple's App Review 1.2 requires it.
+  blocked: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'User',
+    default: []
+  },
+  // People whose posts/notifications this user has muted. Softer than a block:
+  // they can still be messaged, they just stop generating noise. Kept here rather
+  // than in a join table because the list is small and read on nearly every feed.
+  muted: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'User',
+    default: []
+  },
   createdAt: {
     type: Date,
     default: Date.now
